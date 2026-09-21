@@ -17,7 +17,7 @@ Story Intelligence (Source-preserving, beats, candidates, coverage, hallucinatio
       ↓
 Persistent Universe (Character DNA, Location DNA, isolated series memory)
       ↓
-Scene & Shot Direction (Cinematic grammar, ShotContract, shot rhythm)
+Scene & Shot Direction (Cinematic grammar, ShotContract, shot rhythm, DirectorQA)
       ↓
 Character & Asset Resolution (Consistency, deduplication, pose/expression libraries)
       ↓
@@ -72,7 +72,8 @@ ai-animation-studio/
 │   │   │   ├── asset-registry/ # AssetRegistry (dedup, versioning, canon approval)
 │   │   │   ├── cinematic-skills/# Semantic skills (push_in, orbit, etc.)
 │   │   │   ├── universe/       # UniverseManager, WorldStateTracker, UniverseResolver, ProjectManager
-│   │   │   └── story/          # SourceDocumentManager, StoryAnalyzer, Coverage, HallucinationGuard
+│   │   │   ├── story/          # SourceDocumentManager, StoryAnalyzer, Coverage, HallucinationGuard
+│   │   │   └── director/       # ShotPlanner, Sub-directors, CinematicGrammar, DirectorQA
 │   │   └── tests/              # Vitest test suite
 │   └── cli/                    # Studio developer CLI
 │       ├── src/
@@ -127,6 +128,11 @@ npx studio story ingest <projectId> script.txt
 npx studio story analyze <projectId> script.txt [seriesId]
 npx studio story report <projectId> script.txt [seriesId]
 
+# Scene & Shot Director
+npx studio director plan <projectId>
+npx studio director qa <projectId>
+npx studio director list <projectId>
+
 # Validate a JSON artifact against domain schemas
 npx studio inspect ./project.json project
 ```
@@ -141,7 +147,8 @@ npx studio inspect ./project.json project
   * Series namespace isolation, UniverseManager, Immutable CharacterDNA versioning, LocationDNA zones & props, Relationships, WorldStateTracker, StateTransitions, ContinuitySnapshot, UniverseResolver, Local persistence, Universe import/export.
 - [x] **PHASE 2: STORY INTELLIGENCE ENGINE** (`v0.3-story-intelligence`)
   * Lossless source document ingestion, character-offset segmentation, RuleBasedStoryAnalyzer, ProviderStoryAnalyzer, Candidate != Canon extraction, exact source traceability, Source Coverage calculation, Hallucination Guard, Canon conflict detection, StoryIntelligenceStep for DAG pipeline.
-- [ ] **PHASE 3: SCENE & SHOT DIRECTOR** (`v0.4-director`)
+- [x] **PHASE 3: SCENE & SHOT DIRECTOR** (`v0.4-director`)
+  * ShotContract planning, DirectorProfile DNA, specialized sub-directors (Camera, Acting, Composition, Lighting, Motion, Transition), CinematicGrammarEngine (180-degree rule, repetition detection, shot rhythm), ShotDependencyGraph, DirectorQA, DirectorPipelineStep.
 - [ ] **PHASE 4: CHARACTER & ASSET STUDIO** (`v0.5-character-assets`)
 - [ ] **PHASE 5: WORLD & ENVIRONMENT STUDIO** (`v0.6-world-studio`)
 - [ ] **PHASE 6: PRODUCTION ROUTER & ASSET GENERATION** (`v0.7-production-router`)

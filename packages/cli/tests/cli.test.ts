@@ -135,4 +135,31 @@ VICTOR: You cannot stop what has started.`;
     });
     expect(reportCode).toBe(0);
   });
+
+  it('plans shots, runs DirectorQA, and lists shots via CLI', async () => {
+    const projectId = 'proj_cli_director';
+    const scriptFile = 'scripts/scene1.txt';
+    const scriptContent = `INT. DETECTIVE OFFICE - NIGHT
+
+MINH: The evidence is conclusive.
+LAN: Then we move tonight.`;
+
+    await storage.write(scriptFile, scriptContent);
+
+    // Prepare story analysis first
+    await runCli(['story', 'analyze', projectId, scriptFile], { cwd: tempDir, storage });
+
+    // 1. director plan
+    const planCode = await runCli(['director', 'plan', projectId], { cwd: tempDir, storage });
+    expect(planCode).toBe(0);
+    expect(await storage.exists(`.studio/projects/${projectId}/production_scenes.json`)).toBe(true);
+
+    // 2. director qa
+    const qaCode = await runCli(['director', 'qa', projectId], { cwd: tempDir, storage });
+    expect(qaCode).toBe(0);
+
+    // 3. director list
+    const listCode = await runCli(['director', 'list', projectId], { cwd: tempDir, storage });
+    expect(listCode).toBe(0);
+  });
 });

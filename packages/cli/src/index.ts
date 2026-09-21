@@ -15,6 +15,12 @@ import {
   UniverseManager,
   SourceDocumentManager,
   RuleBasedStoryAnalyzer,
+  ShotPlanner,
+  DirectorQA,
+  DEFAULT_DIRECTOR_PROFILE,
+  StoryAnalysis,
+  ProductionScene,
+  ShotDependencyGraph,
 } from '@ai-studio/core';
 
 export interface CliContext {
@@ -204,6 +210,98 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'director': {
+      const subCommand = args[1];
+      const projectId = args[2];
+
+      if (!projectId) {
+        console.error('Error: Project ID is required. Usage: studio director <plan|qa|list> <projectId>');
+        return 1;
+      }
+
+      const analysisPath = `.studio/projects/${projectId}/story_analysis.json`;
+      const scenesPath = `.studio/projects/${projectId}/production_scenes.json`;
+
+      if (subCommand === 'plan') {
+        if (!(await storage.exists(analysisPath))) {
+          console.error(`Error: No story analysis found at "${analysisPath}". Run "studio story analyze" first.`);
+          return 1;
+        }
+
+        const analysis = await storage.readJson<StoryAnalysis>(analysisPath);
+        const planner = new ShotPlanner(DEFAULT_DIRECTOR_PROFILE);
+        const productionScenes: ProductionScene[] = [];
+        const dependencyGraphs: Record<string, ShotDependencyGraph> = {};
+
+        for (const sc of analysis.sceneCandidates) {
+          const { productionScene, dependencyGraph } = planner.planScene(sc, projectId);
+          productionScenes.push(productionScene);
+          dependencyGraphs[productionScene.id] = dependencyGraph;
+        }
+
+        await storage.writeJson(scenesPath, productionScenes);
+        await storage.writeJson(`.studio/projects/${projectId}/dependency_graphs.json`, dependencyGraphs);
+
+        const totalShots = productionScenes.reduce((acc, s) => acc + s.shots.length, 0);
+        console.log(`🎬 Planned ${productionScenes.length} scenes (${totalShots} total shots) for project "${projectId}".`);
+        return 0;
+      }
+
+      if (subCommand === 'qa') {
+        if (!(await storage.exists(scenesPath))) {
+          console.error(`Error: No production scenes found at "${scenesPath}". Run "studio director plan" first.`);
+          return 1;
+        }
+
+        const scenes = await storage.readJson<ProductionScene[]>(scenesPath);
+        const graphs = await storage.readJson<Record<string, ShotDependencyGraph>>(`.studio/projects/${projectId}/dependency_graphs.json`);
+
+        console.log(`🔍 Director QA Report for Project "${projectId}":`);
+        for (const sc of scenes) {
+          const graph = graphs[sc.id] || { sceneId: sc.id, adjacencyList: {}, entryShotIds: [], terminalShotIds: [] };
+          const qa = DirectorQA.evaluateScene(sc, graph, DEFAULT_DIRECTOR_PROFILE);
+
+          console.log(`\nScene ${sc.sceneNumber} (${sc.heading}) — QA Valid: ${qa.isValid ? 'YES ✅' : 'FAIL ❌'}`);
+          console.log(` - Shots: ${sc.shots.length}, Pacing: ${qa.rhythmSummary.pacingCurve}, Avg Duration: ${qa.rhythmSummary.averageShotDurationSeconds}s`);
+          if (qa.jumpCutWarnings.length > 0) {
+            console.log(` - Jump Cut Warnings (${qa.jumpCutWarnings.length}):`);
+            qa.jumpCutWarnings.forEach((w) => console.log(`   ⚠️ ${w.reason}`));
+          }
+          if (qa.eyelineWarnings.length > 0) {
+            console.log(` - Eyeline Warnings (${qa.eyelineWarnings.length}):`);
+            qa.eyelineWarnings.forEach((w) => console.log(`   ⚠️ ${w.reason}`));
+          }
+          if (qa.repetitionWarnings.length > 0) {
+            console.log(` - Repetition Warnings (${qa.repetitionWarnings.length}):`);
+            qa.repetitionWarnings.forEach((w) => console.log(`   ⚠️ ${w.skillOrSize} repeated ${w.consecutiveCount} times`));
+          }
+        }
+        return 0;
+      }
+
+      if (subCommand === 'list') {
+        if (!(await storage.exists(scenesPath))) {
+          console.error(`Error: No production scenes found at "${scenesPath}". Run "studio director plan" first.`);
+          return 1;
+        }
+
+        const scenes = await storage.readJson<ProductionScene[]>(scenesPath);
+        console.log(`📋 Planned Shots for Project "${projectId}":`);
+        for (const sc of scenes) {
+          console.log(`\nScene ${sc.sceneNumber}: ${sc.heading} (${sc.purpose})`);
+          for (const shot of sc.shots) {
+            console.log(
+              ` - [${shot.id}] ${shot.purpose.padEnd(16)} | ${shot.camera.shotSize.padEnd(14)} | ${shot.camera.movement.padEnd(10)} | ${shot.rendererIntent.padEnd(25)} | ${shot.frame.durationSeconds}s`
+            );
+          }
+        }
+        return 0;
+      }
+
+      console.error(`Unknown director subcommand: "${subCommand}". Supported: plan, qa, list`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -233,7 +331,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
     case 'help':
     default: {
       console.log(`
-🎬 AI Animation Studio CLI (v0.3.0)
+🎬 AI Animation Studio CLI (v0.4.0)
 
 Usage:
   studio <command> [options]
@@ -250,6 +348,9 @@ Commands:
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report
+  director plan <projectId>              Plan shots for all scenes in story analysis
+  director qa <projectId>                Run DirectorQA quality analysis on planned shots
+  director list <projectId>              List all planned shots with camera moves and renderer intent
   inspect <json-file> [schema]           Validate a JSON file against domain schemas
   help                                   Show this message
 `);
