@@ -1,0 +1,348 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "name": "ai-animation-studio-skill-os",
+  "version": "1.0.0",
+  "description": "Machine-readable catalog of Antigravity production knowledge and workflow skills for AI Animation Studio.",
+  "skills": [
+    {
+      "id": "studio",
+      "name": "Studio Router",
+      "category": "directing",
+      "version": "1.0.0",
+      "description": "Central Antigravity entry point and skill router for AI Animation Studio. Analyzes requests and routes to specialized domain skills.",
+      "entryPoint": "studio/SKILL.md",
+      "dependencies": [],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "repo-audit",
+      "name": "Repository Audit",
+      "category": "development",
+      "version": "1.0.0",
+      "description": "Inspects repository health, git status, architecture, tests, and dependencies before modifying any code.",
+      "entryPoint": "development/repo-audit/SKILL.md",
+      "dependencies": [],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "architecture-review",
+      "name": "Architecture Review",
+      "category": "development",
+      "version": "1.0.0",
+      "description": "Protects core architectural tenets: provider independence, universe persistence, candidate!=canon, source preservation, determinism.",
+      "entryPoint": "development/architecture-review/SKILL.md",
+      "dependencies": ["repo-audit"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "implementation",
+      "name": "Implementation Discipline",
+      "category": "development",
+      "version": "1.0.0",
+      "description": "Governs controlled feature implementation using the 8-step cycle: READ -> PLAN -> IMPLEMENT -> TEST -> REVIEW -> FIX -> VALIDATE -> REPORT.",
+      "entryPoint": "development/implementation/SKILL.md",
+      "dependencies": ["architecture-review"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "testing",
+      "name": "Testing Strategy",
+      "category": "development",
+      "version": "1.0.0",
+      "description": "Defines mandatory testing gates: typecheck, lint, unit tests, integration tests, build, and regression suites.",
+      "entryPoint": "development/testing/SKILL.md",
+      "dependencies": [],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "debugging",
+      "name": "Root-Cause Debugging",
+      "category": "development",
+      "version": "1.0.0",
+      "description": "Disciplined debugging workflow: reproduce -> isolate -> root-cause -> regression test -> fix -> verify.",
+      "entryPoint": "development/debugging/SKILL.md",
+      "dependencies": ["testing"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "phase-gate",
+      "name": "Phase Gate Audit",
+      "category": "development",
+      "version": "1.0.0",
+      "description": "Mandatory readiness checkpoint before concluding any development phase. Outputs COMPLETE or NOT COMPLETE.",
+      "entryPoint": "development/phase-gate/SKILL.md",
+      "dependencies": ["testing", "architecture-review"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "story-analyze",
+      "name": "Story Analysis",
+      "category": "story",
+      "version": "1.0.0",
+      "description": "Extracts narrative beats, characters, dialogue, locations, and emotional arcs from raw text while preserving original text.",
+      "entryPoint": "story/story-analyze/SKILL.md",
+      "dependencies": ["source-preservation"],
+      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "source-preservation",
+      "name": "Source Preservation",
+      "category": "story",
+      "version": "1.0.0",
+      "description": "Enforces user source text immutability and bidirectional source-offset traceability.",
+      "entryPoint": "story/source-preservation/SKILL.md",
+      "dependencies": [],
+      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "story-coverage",
+      "name": "Story Coverage & Hallucination Guard",
+      "category": "story",
+      "version": "1.0.0",
+      "description": "Audits narrative coverage against source text to prevent dropped plot beats and hallucinated content.",
+      "entryPoint": "story/story-coverage/SKILL.md",
+      "dependencies": ["source-preservation"],
+      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "canon-conflict",
+      "name": "Canon Conflict Detection",
+      "category": "story",
+      "version": "1.0.0",
+      "description": "Identifies contradictions between story candidate claims and persistent canonical universe facts.",
+      "entryPoint": "story/canon-conflict/SKILL.md",
+      "dependencies": ["universe-resolve"],
+      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "universe-resolve",
+      "name": "Universe Resolution",
+      "category": "universe",
+      "version": "1.0.0",
+      "description": "Resolves narrative entities against canonical persistent series universe models while respecting namespace boundaries.",
+      "entryPoint": "universe/universe-resolve/SKILL.md",
+      "dependencies": [],
+      "applicablePhases": ["Phase 1", "Phase 2", "Phase 3", "Phase 3.5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "character-resolve",
+      "name": "Character Resolution",
+      "category": "universe",
+      "version": "1.0.0",
+      "description": "Resolves character mentions to persistent canonical character entities, managing versioning and aliases.",
+      "entryPoint": "universe/character-resolve/SKILL.md",
+      "dependencies": ["universe-resolve"],
+      "applicablePhases": ["Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "world-state-check",
+      "name": "World State & Continuity",
+      "category": "universe",
+      "version": "1.0.0",
+      "description": "Tracks mutable universe conditions (time of day, weather, damage) and validates continuity across narrative beats.",
+      "entryPoint": "universe/world-state-check/SKILL.md",
+      "dependencies": ["universe-resolve"],
+      "applicablePhases": ["Phase 1", "Phase 3", "Phase 3.5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "scene-direct",
+      "name": "Scene Directing",
+      "category": "directing",
+      "version": "1.0.0",
+      "description": "Translates narrative beats into scene-level directing strategies, shot breakdowns, and cinematic pacing.",
+      "entryPoint": "directing/scene-direct/SKILL.md",
+      "dependencies": ["story-analyze", "cinematography"],
+      "applicablePhases": ["Phase 3", "Phase 3.5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "shot-plan",
+      "name": "Shot Planning",
+      "category": "directing",
+      "version": "1.0.0",
+      "description": "Deconstructs a directed scene beat into a coherent sequence of provider-neutral ShotContracts.",
+      "entryPoint": "directing/shot-plan/SKILL.md",
+      "dependencies": ["scene-direct", "cinematography"],
+      "applicablePhases": ["Phase 3", "Phase 3.5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "cinematography",
+      "name": "Master Cinematography",
+      "category": "cinematic",
+      "version": "1.0.0",
+      "description": "Master cinematography knowledge translating narrative intent into semantic camera, framing, composition, motion, and transitions.",
+      "entryPoint": "directing/cinematography/SKILL.md",
+      "dependencies": [],
+      "applicablePhases": ["Phase 3", "Phase 3.5", "Phase 4", "Phase 5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "character-consistency",
+      "name": "Character Consistency",
+      "category": "character",
+      "version": "1.0.0",
+      "description": "Rules and workflows for maintaining visual identity, facial features, proportions, and outfit continuity across shots.",
+      "entryPoint": "character/character-consistency/SKILL.md",
+      "dependencies": ["character-resolve"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "identity-qa",
+      "name": "Identity QA",
+      "category": "character",
+      "version": "1.0.0",
+      "description": "Quality assurance protocol for verifying visual character fidelity, detecting identity drift, and costume discrepancies.",
+      "entryPoint": "character/identity-qa/SKILL.md",
+      "dependencies": ["character-consistency"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "environment-resolve",
+      "name": "Environment Resolution",
+      "category": "world",
+      "version": "1.0.0",
+      "description": "Resolves environment, architectural layout, spatial geometry, and lighting states from canonical location DNA.",
+      "entryPoint": "world/environment-resolve/SKILL.md",
+      "dependencies": ["universe-resolve", "world-state-check"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "production-route",
+      "name": "Production Routing",
+      "category": "production",
+      "version": "1.0.0",
+      "description": "Evaluates ShotContract specifications and chooses optimal execution paths (Deterministic HyperFrames vs Generative Video).",
+      "entryPoint": "production/production-route/SKILL.md",
+      "dependencies": ["shot-plan", "cinematography"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "hyperframes-production",
+      "name": "HyperFrames Production Strategy",
+      "category": "production",
+      "version": "1.0.0",
+      "description": "Instructs agents when and how AI Animation Studio delegates deterministic shot execution to HyperFrames compositions.",
+      "entryPoint": "production/hyperframes-production/SKILL.md",
+      "dependencies": ["production-route"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "reference-binding",
+      "name": "Reference Role Binding",
+      "category": "production",
+      "version": "1.0.0",
+      "description": "Discipline for binding multimodal reference assets to explicit semantic roles (identity, pose, outfit, environment, motion).",
+      "entryPoint": "production/reference-binding/SKILL.md",
+      "dependencies": ["character-consistency", "environment-resolve"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "continuation",
+      "name": "Shot Continuation",
+      "category": "production",
+      "version": "1.0.0",
+      "description": "Chains consecutive shots across cut boundaries, extracting terminal states from shot N to seed shot N+1.",
+      "entryPoint": "production/continuation/SKILL.md",
+      "dependencies": ["reference-binding", "world-state-check"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "retake",
+      "name": "Retake Protocol",
+      "category": "production",
+      "version": "1.0.0",
+      "description": "Root-cause diagnostic and surgical re-generation protocol for failing shots, isolating and modifying only responsible variables.",
+      "entryPoint": "production/retake/SKILL.md",
+      "dependencies": ["production-route"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "continuity-qa",
+      "name": "Continuity QA",
+      "category": "qa",
+      "version": "1.0.0",
+      "description": "Comprehensive continuity verification across character identities, outfits, props, screen direction, lighting, and timeline.",
+      "entryPoint": "qa/continuity-qa/SKILL.md",
+      "dependencies": ["universe-resolve", "world-state-check"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "visual-qa",
+      "name": "Visual QA",
+      "category": "qa",
+      "version": "1.0.0",
+      "description": "Inspection criteria for rendered video frames and animations, detecting artifacts, anatomical flaws, and layer clipping.",
+      "entryPoint": "qa/visual-qa/SKILL.md",
+      "dependencies": ["identity-qa"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "director-qa",
+      "name": "Director QA",
+      "category": "qa",
+      "version": "1.0.0",
+      "description": "Audits directed shot sequences and ShotContracts against narrative intent, director profile, and cinematic grammar.",
+      "entryPoint": "qa/director-qa/SKILL.md",
+      "dependencies": ["shot-plan", "cinematography"],
+      "applicablePhases": ["Phase 3", "Phase 3.5", "Phase 4"],
+      "status": "ACTIVE"
+    }
+  ],
+  "externalSkills": [
+    {
+      "id": "hyperframes",
+      "name": "HyperFrames Root",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "hyperframes/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "Root official HyperFrames skill for declarative motion design and camera choreography."
+    },
+    {
+      "id": "hyperframes-core",
+      "name": "HyperFrames Core",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "hyperframes-core/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "Core composition primitives, audio, and asset specs for HyperFrames."
+    },
+    {
+      "id": "hyperframes-animation",
+      "name": "HyperFrames Animation",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "hyperframes-animation/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "Animation syntax, easing, camera movements, and layer transforms in HyperFrames."
+    }
+  ]
+}

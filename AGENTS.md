@@ -44,10 +44,14 @@ Welcome to the **AI Animation Studio** repository. This document defines the eng
 
 ```
 ai-animation-studio/
+├── .agents/                    # Antigravity agent configuration & skills
+│   └── skills/                 # Project-native Skill OS & external production skills
 ├── .github/workflows/          # CI pipelines
-├── docs/architecture/          # System design documents
+├── docs/                       # Architecture and skill documentation
+│   ├── architecture/
+│   └── skills/                 # Skill OS reference & guide
 ├── packages/
-│   ├── core/                   # Domain models, schemas, pipeline, storage, providers, checkpoints
+│   ├── core/                   # Domain models, schemas, pipeline, storage, providers, checkpoints, skill-os
 │   │   ├── src/
 │   │   │   ├── domain/         # Zod schemas & TypeScript types
 │   │   │   ├── errors/         # StudioError hierarchy
@@ -60,9 +64,10 @@ ai-animation-studio/
 │   │   │   ├── asset-registry/ # AssetRegistry (dedup, versioning, canon)
 │   │   │   ├── director/       # ShotContract & Director abstractions
 │   │   │   ├── cinematic-skills/# Semantic cinematic skills registry
+│   │   │   ├── skill-os/       # Skill OS registry, validator, and router
 │   │   │   └── index.ts        # Public exports
 │   │   └── tests/              # Vitest test suite
-│   └── cli/                    # Studio CLI (doctor, checkpoint, inspect)
+│   └── cli/                    # Studio CLI (doctor, checkpoint, inspect, skills)
 │       ├── src/
 │       └── tests/
 ├── AGENTS.md                   # This guideline file
@@ -80,3 +85,19 @@ ai-animation-studio/
 - **Command Line on Windows**: When running npm in Windows PowerShell, use `npm.cmd` if script execution policies block `npm.ps1`.
 - **Testing**: Unit test every new component using Vitest. Run `npm.cmd run test` and `npm.cmd run typecheck` before concluding tasks.
 - **Semantic Commit Messages**: Use conventional commits (`feat:`, `chore:`, `fix:`, `docs:`, `test:`).
+
+---
+
+## 4. Antigravity Skill OS & Production Knowledge
+
+1. **Inspect Relevant Skills First**:
+   - Before undertaking specialized tasks, inspect relevant skills in `.agents/skills/`.
+   - Use the Studio Router (`.agents/skills/studio/SKILL.md` or `studio skills route <query>`) to identify domain skills.
+2. **External vs Internal Skills**:
+   - Official HyperFrames skills (`/hyperframes`, `/hyperframes-core`, `/hyperframes-animation`) are installed as external skills and are authoritative on HyperFrames syntax.
+   - Do NOT duplicate external skills into our custom skills. Use `hyperframes-production` to define Studio-to-HyperFrames compilation.
+3. **Architecture Authority**:
+   - Skills provide **knowledge** and **workflow discipline**, but application code and Zod schemas remain **authoritative**.
+   - A skill must never override core architectural tenets or schema constraints.
+4. **Skill Security**:
+   - Skills must never exfiltrate secrets, print API keys, or recommend destructive commands without approval.

@@ -162,4 +162,28 @@ LAN: Then we move tonight.`;
     const listCode = await runCli(['director', 'list', projectId], { cwd: tempDir, storage });
     expect(listCode).toBe(0);
   });
+
+  it('runs skills check, list, and route via CLI', async () => {
+    const repoRoot = path.resolve(__dirname, '../../..');
+    const rootStorage = new FileSystemStorage(repoRoot);
+
+    // 1. skills check
+    const checkCode = await runCli(['skills', 'check'], { cwd: repoRoot, storage: rootStorage });
+    expect(checkCode).toBe(0);
+
+    // 2. skills list
+    const listCode = await runCli(['skills', 'list'], { cwd: repoRoot, storage: rootStorage });
+    expect(listCode).toBe(0);
+
+    // 3. skills list with category filter
+    const listDevCode = await runCli(['skills', 'list', 'development'], { cwd: repoRoot, storage: rootStorage });
+    expect(listDevCode).toBe(0);
+
+    // 4. skills route
+    const routeCode = await runCli(
+      ['skills', 'route', 'Check whether Minh stays visually consistent.'],
+      { cwd: repoRoot, storage: rootStorage }
+    );
+    expect(routeCode).toBe(0);
+  });
 });

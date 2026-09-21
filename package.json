@@ -12,6 +12,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --build --verbose",
+    "skills:check": "tsx packages/cli/src/index.ts skills check",
+    "skills:list": "tsx packages/cli/src/index.ts skills list",
     "clean": "npm run --workspaces --if-present clean"
   },
   "devDependencies": {

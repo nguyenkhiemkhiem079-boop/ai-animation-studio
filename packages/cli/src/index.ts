@@ -21,7 +21,11 @@ import {
   StoryAnalysis,
   ProductionScene,
   ShotDependencyGraph,
+  SkillRegistry,
+  SkillRouter,
+  AgentSkillCategory,
 } from '@ai-studio/core';
+import * as path from 'node:path';
 
 export interface CliContext {
   cwd: string;
@@ -302,6 +306,83 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'skills': {
+      const subCommand = args[1] || 'list';
+      const skillsDir = path.resolve(cwd, '.agents/skills');
+      const registryPath = path.resolve(skillsDir, 'registry.json');
+
+      if (!(await storage.exists(registryPath))) {
+        console.error(`Error: Skill registry not found at "${registryPath}".`);
+        return 1;
+      }
+
+      const registry = await SkillRegistry.fromFile(registryPath);
+
+      if (subCommand === 'check') {
+        console.log('🔍 Validating Antigravity Skill OS Registry...');
+        const result = await registry.validate(skillsDir);
+        const manifest = registry.getManifest();
+
+        console.log(` - Custom Skills: ${manifest.skills.length} registered`);
+        console.log(` - External Skills: ${manifest.externalSkills.length} registered`);
+
+        if (!result.valid) {
+          console.error(`❌ Validation Failed with ${result.errors.length} error(s):`);
+          for (const err of result.errors) {
+            console.error(`   - [${err.code}] ${err.message}`);
+          }
+          return 1;
+        }
+
+        console.log('✅ Skill OS Registry is valid! All dependencies and entrypoints resolved.');
+        return 0;
+      }
+
+      if (subCommand === 'list') {
+        const categoryFilter = args[2] as AgentSkillCategory | undefined;
+        const skills = registry.listSkills(categoryFilter);
+        const external = registry.listExternalSkills();
+
+        console.log(`🧠 AI Animation Studio Skill OS (${skills.length + external.length} total skills):`);
+        console.log('\n--- CUSTOM DOMAIN SKILLS ---');
+        for (const s of skills) {
+          console.log(` • [${s.category.toUpperCase()}] ${s.id.padEnd(24)} v${s.version.padEnd(6)} | ${s.description}`);
+        }
+
+        if (!categoryFilter) {
+          console.log('\n--- EXTERNAL PRODUCTION SKILLS ---');
+          for (const ext of external) {
+            console.log(` • [EXTERNAL] ${ext.id.padEnd(24)} (${ext.source}) | ${ext.description}`);
+          }
+        }
+        return 0;
+      }
+
+      if (subCommand === 'route') {
+        const query = args.slice(2).join(' ');
+        if (!query) {
+          console.error('Error: Query text required for skill routing. Usage: studio skills route <query>');
+          return 1;
+        }
+
+        const router = new SkillRouter(registry);
+        const match = router.route(query);
+
+        console.log(`🎯 Skill Route for query: "${query}"`);
+        console.log(` - Primary Category: ${match.primaryCategory ?? 'General'}`);
+        console.log(` - Matched Keywords: ${match.matchedKeywords.join(', ') || 'None'}`);
+        console.log(` - Recommended Skills: ${match.recommendedSkills.map((s) => s.id).join(', ') || 'None'}`);
+        if (match.externalSkills.length > 0) {
+          console.log(` - External Skills: ${match.externalSkills.map((s) => s.id).join(', ')}`);
+        }
+        console.log(` - Reasoning: ${match.reasoning}`);
+        return 0;
+      }
+
+      console.error(`Unknown skills subcommand: "${subCommand}". Supported: check, list, route`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -351,6 +432,9 @@ Commands:
   director plan <projectId>              Plan shots for all scenes in story analysis
   director qa <projectId>                Run DirectorQA quality analysis on planned shots
   director list <projectId>              List all planned shots with camera moves and renderer intent
+  skills check                           Validate Antigravity Skill OS registry and dependencies
+  skills list [category]                 List all custom and external skills in Skill OS
+  skills route <query>                   Test routing of a query to specialized skills
   inspect <json-file> [schema]           Validate a JSON file against domain schemas
   help                                   Show this message
 `);
@@ -360,7 +444,7 @@ Commands:
 }
 
 // Auto-run if executed directly
-if (process.argv[1] && process.argv[1].endsWith('index.js')) {
+if (process.argv[1] && (process.argv[1].endsWith('index.js') || process.argv[1].endsWith('index.ts') || process.argv[1].endsWith('studio.js') || process.argv[1].endsWith('studio.ts'))) {
   runCli(process.argv.slice(2)).then((code) => {
     if (code !== 0) process.exit(code);
   });
