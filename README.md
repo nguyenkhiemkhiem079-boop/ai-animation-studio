@@ -203,4 +203,9 @@ npx studio inspect ./project.json project
   * Generative Video Provider Adapters (`VeoVideoAdapter`, `SeedanceVideoAdapter`, `ComfyUIVideoAdapter`, `MockVideoProvider`), Reference conditioning binding (turnaround images, start frames, environment plates), ContinuationEngine extracting terminal frames (`FRAME_TERMINAL_<shotId>`) and binding `START_FRAME` across cut boundaries, SurgicalRetakeEngine for targeted single-variable adjustments (lighting, acting, camera speed, seed variation) with lineage tracking, GenerativeVideoPipelineStep for DAG pipeline, Studio CLI video commands.
 - [x] **PHASE 10: VOICE, MUSIC & SFX AUDIO STUDIO** (`v0.11-audio-studio`)
   * Domain models (`CharacterVoiceProfile`, `AudioDialogueTrack`, `MusicTrack`, `SfxCue`, `AudioMixContract`), Audio Provider Adapters (`ElevenLabsVoiceAdapter`, `MusicGenAdapter`, `FoleySfxAdapter`, `MockAudioProvider`), VoiceStudio managing character vocal identity and syncing with LipSyncEngine, ScoreComposer for background musical themes and scene pacing, FoleyMixer for shot-level sound effects, AudioMixEngine with automatic dialogue ducking (-6dB) and Web Audio API export, AudioProductionPipelineStep for DAG pipeline, Studio CLI audio commands.
-- [ ] **PHASE 11: TIMELINE, EDITING & FINAL RENDER**
+- [x] **PHASE 11: TIMELINE, EDITING & MULTI-TRACK ASSEMBLY** (`v0.12-timeline-assembly`)
+  * Domain models (`TimelineTrack`, `TimelineClip`, `TimelineTransition`, `TimelineSequence`, `SubtitleItem`), `SubtitleGenerator` generating .srt and .vtt WebVTT formats, `CutTransitionEngine` validating temporal overlap and generating CSS keyframe mix curves, `TimelineAssembler` compiling video, dialogue, score, SFX, and subtitle tracks, `TimelineEditingPipelineStep` for DAG pipeline, Studio CLI timeline commands (`assemble`, `inspect`, `subtitles`).
+- [ ] **PHASE 12: CONTINUITY QA & AUTO-REPAIR** (`v0.13-continuity-qa`)
+- [ ] **PHASE 13: MASTER RENDER, HTML5 PLAYER & NLE INTERCHANGE** (`v0.14-master-render`)
+- [ ] **PHASE 14: END-TO-END PIPELINE DAG ORCHESTRATOR** (`v0.15-end-to-end`)
+- [ ] **PHASE 15: INTERACTIVE STUDIO PLAYER & PRODUCTION WEB APP** (`v1.0-studio-complete`)

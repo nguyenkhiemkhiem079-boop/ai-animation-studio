@@ -10,3 +10,4 @@ export * from './hyperframes.js';
 export * from './character-animation.js';
 export * from './generative-video.js';
 export * from './audio.js';
+export * from './timeline.js';

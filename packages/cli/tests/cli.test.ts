@@ -380,6 +380,26 @@ LAN: Then we move tonight.`;
     const mixCode = await runCli(['audio', 'mix', projectId], { cwd: tempDir, storage });
     expect(mixCode).toBe(0);
   });
+
+  it('manages multi-track timeline assembly, inspection, and subtitles via CLI', async () => {
+    const projectId = 'proj_cli_timeline_test';
+
+    // 1. timeline assemble
+    const assembleCode = await runCli(['timeline', 'assemble', projectId], { cwd: tempDir, storage });
+    expect(assembleCode).toBe(0);
+
+    // 2. timeline inspect
+    const inspectCode = await runCli(['timeline', 'inspect', projectId], { cwd: tempDir, storage });
+    expect(inspectCode).toBe(0);
+
+    // 3. timeline subtitles (SRT)
+    const srtCode = await runCli(['timeline', 'subtitles', projectId, '--format', 'srt'], { cwd: tempDir, storage });
+    expect(srtCode).toBe(0);
+
+    // 4. timeline subtitles (VTT)
+    const vttCode = await runCli(['timeline', 'subtitles', projectId, '--format', 'vtt'], { cwd: tempDir, storage });
+    expect(vttCode).toBe(0);
+  });
 });
 
 

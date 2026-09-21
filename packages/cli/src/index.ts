@@ -54,6 +54,9 @@ import {
   ElevenLabsVoiceAdapter,
   MusicGenAdapter,
   FoleySfxAdapter,
+  TimelineAssembler,
+  CutTransitionEngine,
+  SubtitleGenerator,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -1495,6 +1498,180 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'timeline': {
+      const subCommand = args[1];
+      const projectId = args[2];
+
+      if (!projectId) {
+        console.error('Error: Project ID is required. Usage: studio timeline <assemble|inspect|subtitles> <projectId>');
+        return 1;
+      }
+
+      if (subCommand === 'assemble') {
+        const sceneId = args[3];
+        const scenesPath = `.studio/director/${projectId}_scenes.json`;
+        let shots: ShotContract[] = [];
+
+        if (await storage.exists(scenesPath)) {
+          const scenes = await storage.readJson<ProductionScene[]>(scenesPath);
+          const targetScene = sceneId ? scenes.find((s) => s.id === sceneId) : scenes[0];
+          if (targetScene && targetScene.shots) {
+            shots = targetScene.shots;
+          }
+        }
+
+        if (shots.length === 0) {
+          shots = [
+            {
+              id: 'SHOT_TL_01',
+              purpose: 'establishing',
+              camera: { movement: 'pan_right', shotSize: 'wide' },
+              transition: { type: 'dissolve', durationSeconds: 0.5 },
+              frame: { durationSeconds: 3.5, aspectRatio: '16:9', targetFps: 24 },
+            } as unknown as ShotContract,
+            {
+              id: 'SHOT_TL_02',
+              purpose: 'dialogue_coverage',
+              camera: { movement: 'static', shotSize: 'medium_close_up' },
+              transition: { type: 'cut', durationSeconds: 0 },
+              frame: { durationSeconds: 4.0, aspectRatio: '16:9', targetFps: 24 },
+            } as unknown as ShotContract,
+          ];
+        }
+
+        const audioMix = {
+          projectId,
+          seriesId: 'default_series',
+          totalDurationSeconds: 7.5,
+          masterVolume: 1.0,
+          dialogueVolume: 1.0,
+          musicVolume: 0.7,
+          sfxVolume: 0.8,
+          ducking: {
+            enabled: true,
+            duckMusicOnDialogueDb: -6,
+            duckSfxOnDialogueDb: -3,
+            attackMs: 100,
+            releaseMs: 300,
+          },
+          dialogueTracks: [
+            {
+              id: 'line_tl_01',
+              characterId: 'char_kaito',
+              shotId: shots[0].id,
+              text: 'System core operational.',
+              emotion: 'heroic',
+              startTimeSeconds: 1.0,
+              durationSeconds: 2.0,
+              loudnessDb: -14.0,
+              audioAssetId: 'ASSET_AUDIO_DIAL_01',
+            },
+          ],
+          musicTracks: [
+            {
+              id: 'music_tl_01',
+              sceneId: 'SCENE_01',
+              title: 'Main Theme',
+              genre: 'cinematic_orchestral',
+              mood: 'heroic',
+              tempoBpm: 110,
+              startTimeSeconds: 0,
+              durationSeconds: 7.5,
+              volume: 0.7,
+              fadeInSeconds: 1,
+              fadeOutSeconds: 1,
+              audioAssetId: 'ASSET_AUDIO_MUSIC_01',
+            },
+          ],
+          sfxCues: [
+            {
+              id: 'sfx_tl_01',
+              shotId: shots[0].id,
+              name: 'warp_charge',
+              category: 'electronic' as const,
+              timestampSeconds: 0.5,
+              durationSeconds: 1.5,
+              volume: 0.8,
+              audioAssetId: 'ASSET_AUDIO_SFX_01',
+            },
+          ],
+          compiledAt: new Date().toISOString(),
+        };
+
+        const sequence = TimelineAssembler.assemble({
+          projectId,
+          sceneId,
+          shots,
+          audioMix,
+        });
+
+        const timelinePath = `.studio/timelines/${projectId}_sequence.json`;
+        await storage.writeJson(timelinePath, sequence);
+
+        console.log(`🎞️ Multi-Track Timeline Assembled for Project "${projectId}":`);
+        console.log(` - Sequence ID      : ${sequence.sequenceId}`);
+        console.log(` - Total Duration   : ${sequence.totalDuration.toFixed(2)}s (${(sequence.totalDuration * sequence.fps).toFixed(0)} frames @ ${sequence.fps}fps)`);
+        console.log(` - Resolution       : ${sequence.resolution.width}x${sequence.resolution.height}`);
+        console.log(` - Total Tracks     : ${sequence.tracks.length} track(s)`);
+        for (const t of sequence.tracks) {
+          console.log(`   • [${t.trackType.toUpperCase().padEnd(14)}] "${t.name}" -> ${t.clips.length} clip(s)`);
+        }
+        console.log(` - Transitions      : ${sequence.transitions.length} transition(s)`);
+        for (const tr of sequence.transitions) {
+          console.log(`   • [${tr.type.toUpperCase()}] "${tr.fromClipId}" -> "${tr.toClipId}" (${tr.duration}s)`);
+        }
+        console.log(` - Subtitle Lines   : ${sequence.subtitles.length} line(s)`);
+        return 0;
+      }
+
+      if (subCommand === 'inspect') {
+        const timelinePath = `.studio/timelines/${projectId}_sequence.json`;
+        if (!(await storage.exists(timelinePath))) {
+          console.error(`Error: No timeline sequence found for "${projectId}". Run "studio timeline assemble ${projectId}" first.`);
+          return 1;
+        }
+
+        const sequence = await storage.readJson<any>(timelinePath);
+        console.log(`🔍 Inspecting Timeline Sequence for Project "${projectId}":`);
+        console.log(` - Sequence Name    : ${sequence.name}`);
+        console.log(` - Total Duration   : ${sequence.totalDuration}s`);
+        console.log(` - FPS / Resolution : ${sequence.fps}fps | ${sequence.resolution.width}x${sequence.resolution.height}`);
+        console.log('\nTrack Breakdown:');
+        for (const t of sequence.tracks) {
+          console.log(`\n📁 Track: [${t.trackType.toUpperCase()}] "${t.name}" (Vol: ${(t.volume * 100).toFixed(0)}%)`);
+          for (const c of t.clips) {
+            console.log(`   └─ Clip "${c.name}" [${c.startTime.toFixed(2)}s -> ${(c.startTime + c.duration).toFixed(2)}s] (${c.duration.toFixed(2)}s)`);
+          }
+        }
+        return 0;
+      }
+
+      if (subCommand === 'subtitles') {
+        const format = args.includes('--format') ? args[args.indexOf('--format') + 1] : 'srt';
+        const timelinePath = `.studio/timelines/${projectId}_sequence.json`;
+        let subtitles: any[] = [];
+
+        if (await storage.exists(timelinePath)) {
+          const sequence = await storage.readJson<any>(timelinePath);
+          subtitles = sequence.subtitles || [];
+        } else {
+          subtitles = [
+            { id: 'sub_1', startTime: 1.0, endTime: 3.0, speaker: 'kaito', text: 'System core operational.' },
+          ];
+        }
+
+        if (format === 'vtt') {
+          console.log(SubtitleGenerator.generateVtt(subtitles));
+        } else {
+          console.log(SubtitleGenerator.generateSrt(subtitles));
+        }
+        return 0;
+      }
+
+      console.error(`Unknown timeline subcommand: "${subCommand}". Supported: assemble, inspect, subtitles`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -1564,6 +1741,9 @@ Commands:
   audio score <projId> [sceneId]         Compose background score for a scene
   audio sfx <projId> [shotId]            Generate/retrieve timed sound effect cues
   audio mix [projId]                     Compile master audio mix contract with automatic ducking
+  timeline assemble <projId> [sceneId]   Assemble multi-track timeline (video, audio, sfx, subs)
+  timeline inspect <projId>              Inspect multi-track timeline tracks, clips, and transitions
+  timeline subtitles <projId> [--format] Generate and display SRT or WebVTT subtitles
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report

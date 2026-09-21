@@ -18,6 +18,8 @@ export const AssetTypeSchema = z.enum([
   'audio_music',
   'audio_sfx',
   'video_clip',
+  'timeline_sequence',
+  'subtitle_file',
 ]);
 export type AssetType = z.infer<typeof AssetTypeSchema>;
 
