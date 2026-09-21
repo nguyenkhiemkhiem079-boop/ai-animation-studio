@@ -7,6 +7,8 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "npm run dev --workspace=@ai-studio/studio-ui",
+    "ui": "npm run dev --workspace=@ai-studio/studio-ui",
     "build": "npm run --workspaces --if-present build",
     "test": "vitest run",
     "test:watch": "vitest",

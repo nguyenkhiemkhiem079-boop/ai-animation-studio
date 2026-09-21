@@ -457,6 +457,11 @@ Then you know it was necessary.`;
     const statusCode = await runCli(['status', projectId], { cwd: tempDir, storage });
     expect(statusCode).toBe(0);
   });
+
+  it('launches production web suite via studio ui', async () => {
+    const uiCode = await runCli(['ui', '--port', '3000'], { cwd: tempDir, storage });
+    expect(uiCode).toBe(0);
+  });
 });
 
 

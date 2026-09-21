@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Animation Studio — Production Suite & Dual-Mode Player</title>
+  <meta name="description" content="AI Animation Studio: Series-aware, character-consistent production environment with Deterministic Animation First architecture, multi-track timeline, and dual-mode player." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body class="studio-dark-theme">
+  <!-- Top Navigation Bar -->
+  <header class="studio-header" id="main-header">
+    <div class="header-left">
+      <div class="brand-badge">
+        <div class="brand-pulse"></div>
+        <span class="brand-title">AI ANIMATION STUDIO</span>
+        <span class="version-tag">v1.0 CANON</span>
+      </div>
+      <div class="project-selector-wrapper">
+        <label for="project-select" class="visually-hidden">Active Project</label>
+        <select id="project-select" class="studio-select" aria-label="Select Active Project">
+          <option value="proj_cyber_01">Cyberpunk: Neon Horizon (Ep. 1)</option>
+          <option value="proj_elena_02">Elena's Gambit: The Breach</option>
+          <option value="proj_quantum_03">Quantum Paradox: Zero Point</option>
+        </select>
+        <span class="series-pill" id="series-badge">SERIES: NEO-TOKYO 2088</span>
+      </div>
+    </div>
+
+    <div class="header-center">
+      <div class="pipeline-flow" id="pipeline-stepper">
+        <div class="step-chip completed" data-step="story"><span>1</span> Story</div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip completed" data-step="director"><span>2</span> Director</div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip completed" data-step="character"><span>3</span> Assets</div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip completed" data-step="production"><span>4</span> Routing</div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip active" data-step="timeline"><span>5</span> Timeline</div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip completed" data-step="qa"><span>6</span> QA</div>
+        <div class="step-arrow">→</div>
+        <div class="step-chip completed" data-step="export"><span>7</span> Master</div>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div class="savings-badge" id="savings-badge" title="Deterministic Animation First Architecture Savings">
+        <span class="savings-icon">⚡</span>
+        <span class="savings-text">SAVED <strong>75.4%</strong> ($2.50)</span>
+      </div>
+      <button class="btn btn-primary" id="btn-run-dag">
+        <span class="btn-icon">▶</span> Run Full DAG
+      </button>
+      <button class="btn btn-secondary" id="btn-master-export">
+        <span class="btn-icon">⬇</span> Export All
+      </button>
+    </div>
+  </header>
+
+  <!-- Workspace Navigation Tabs -->
+  <nav class="studio-nav-tabs" aria-label="Studio Modules">
+    <button class="nav-tab active" id="tab-btn-player" data-target="panel-player">
+      <span class="tab-icon">🎬</span> Dual-Mode Player & Timeline
+    </button>
+    <button class="nav-tab" id="tab-btn-story" data-target="panel-story">
+      <span class="tab-icon">📜</span> Script & Story Intelligence
+    </button>
+    <button class="nav-tab" id="tab-btn-director" data-target="panel-director">
+      <span class="tab-icon">🎯</span> Director Board & Shots
+    </button>
+    <button class="nav-tab" id="tab-btn-universe" data-target="panel-universe">
+      <span class="tab-icon">🌌</span> Universe & Turnarounds
+    </button>
+    <button class="nav-tab" id="tab-btn-cost" data-target="panel-cost">
+      <span class="tab-icon">💰</span> Cost & Route Monitor
+    </button>
+    <button class="nav-tab" id="tab-btn-export" data-target="panel-export">
+      <span class="tab-icon">📦</span> Deliverables & NLE
+    </button>
+  </nav>
+
+  <!-- Main Workspace Panels -->
+  <main class="studio-main-container">
+
+    <!-- PANEL 1: Dual-Mode Player & Timeline (Default Active) -->
+    <section class="studio-panel active" id="panel-player" aria-labelledby="tab-btn-player">
+      <div class="player-workspace-layout">
+        
+        <!-- Upper Screen Stage -->
+        <div class="viewport-stage-container">
+          <div class="viewport-header">
+            <div class="viewport-mode-toggle">
+              <button class="mode-toggle-btn active" id="mode-hyperframes" data-mode="hyperframes">
+                ⚡ Deterministic HyperFrames DOM ($0.00)
+              </button>
+              <button class="mode-toggle-btn" id="mode-master-video" data-mode="video">
+                🎬 Master Video Compositor (1080p)
+              </button>
+            </div>
+            <div class="viewport-meta">
+              <span class="meta-pill" id="current-shot-indicator">SHOT: SC01_SH01 (Establishing)</span>
+              <span class="meta-pill fps-pill">24 FPS</span>
+              <span class="meta-pill res-pill">1920x1080 (16:9)</span>
+            </div>
+          </div>
+
+          <!-- Video / HyperFrames Stage Canvas -->
+          <div class="viewport-screen" id="viewport-screen">
+            <!-- Simulated 2.5D Parallax Layers -->
+            <div class="hyperframes-stage" id="hf-stage">
+              <div class="hf-layer bg-layer" id="hf-layer-bg">
+                <div class="bg-gradient-city"></div>
+                <div class="bg-stars"></div>
+                <div class="bg-skyline"></div>
+              </div>
+              <div class="hf-layer mid-layer" id="hf-layer-mid">
+                <div class="neon-sign neon-blue">CYBER NOIR</div>
+                <div class="neon-sign neon-pink">SECTOR 04</div>
+                <div class="rain-overlay"></div>
+              </div>
+              <div class="hf-layer fg-layer" id="hf-layer-fg">
+                <div class="character-silhouette" id="char-actor">
+                  <div class="char-aura"></div>
+                  <div class="char-details">
+                    <span class="char-name-tag">KAITO [Front View]</span>
+                  </div>
+                </div>
+              </div>
+              <!-- Active Subtitle Caption Overlay -->
+              <div class="viewport-subtitles" id="viewport-subtitles">
+                <p id="active-subtitle-text">Sensors confirm the breach. Prepare defensive countermeasures.</p>
+              </div>
+              <!-- Camera Push-In Frame Overlay -->
+              <div class="camera-reticle" id="camera-reticle">
+                <div class="reticle-corner tl"></div>
+                <div class="reticle-corner tr"></div>
+                <div class="reticle-corner bl"></div>
+                <div class="reticle-corner br"></div>
+                <div class="reticle-info">PUSH-IN 35mm | EYE-LEVEL</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Transport Control Bar -->
+          <div class="player-controls-bar">
+            <div class="transport-buttons">
+              <button class="ctrl-btn" id="btn-step-prev" title="Step Back 1 Frame">⏮</button>
+              <button class="ctrl-btn play-btn" id="btn-play-pause" title="Play / Pause">▶</button>
+              <button class="ctrl-btn" id="btn-step-next" title="Step Forward 1 Frame">⏭</button>
+              <button class="ctrl-btn" id="btn-stop" title="Stop & Return to Start">⏹</button>
+            </div>
+
+            <div class="timecode-display" id="timecode-display">
+              <span class="time-current" id="time-current">00:00:01.12</span>
+              <span class="time-divider">/</span>
+              <span class="time-total" id="time-total">00:00:07.50</span>
+              <span class="frame-counter" id="frame-counter">FRAME 36 / 180</span>
+            </div>
+
+            <div class="speed-selector">
+              <label for="speed-select" class="visually-hidden">Playback Speed</label>
+              <select id="speed-select" class="studio-select-sm" aria-label="Playback Speed">
+                <option value="0.5">0.5x</option>
+                <option value="1.0" selected>1.0x</option>
+                <option value="1.5">1.5x</option>
+                <option value="2.0">2.0x</option>
+              </select>
+            </div>
+
+            <div class="audio-stems-quick">
+              <div class="stem-slider-group">
+                <span class="stem-label" title="Dialogue Volume">🗣️ A1</span>
+                <input type="range" id="vol-a1" min="0" max="100" value="100" class="stem-range" aria-label="Dialogue Volume" />
+              </div>
+              <div class="stem-slider-group">
+                <span class="stem-label" title="Music Volume">🎵 A2</span>
+                <input type="range" id="vol-a2" min="0" max="100" value="70" class="stem-range" aria-label="Music Volume" />
+              </div>
+              <div class="stem-slider-group">
+                <span class="stem-label" title="SFX Volume">💥 A3</span>
+                <input type="range" id="vol-a3" min="0" max="100" value="85" class="stem-range" aria-label="SFX Volume" />
+              </div>
+              <button class="caption-toggle-btn active" id="btn-toggle-captions" title="Toggle Captions">CC</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Multi-Track Timeline Editor -->
+        <div class="timeline-editor-container" id="timeline-container">
+          <div class="timeline-toolbar">
+            <div class="timeline-tools-left">
+              <span class="timeline-title">MULTI-TRACK TIMELINE</span>
+              <span class="timeline-badge">5 TRACKS • 180 FRAMES</span>
+            </div>
+            <div class="timeline-tools-right">
+              <label for="zoom-slider" class="zoom-label">Zoom:</label>
+              <input type="range" id="zoom-slider" min="50" max="200" value="100" class="stem-range" aria-label="Timeline Zoom" />
+              <button class="btn-tool" id="btn-fit-timeline" title="Fit Timeline to Window">Fit</button>
+              <button class="btn-tool" id="btn-snap-toggle" title="Toggle Snapping">Snap: ON</button>
+            </div>
+          </div>
+
+          <div class="timeline-workspace">
+            <!-- Track Headers Column -->
+            <div class="track-headers-column">
+              <div class="timeline-ruler-header">Tracks</div>
+              <div class="track-header-item">
+                <span class="track-tag video-tag">V1</span>
+                <span class="track-name">Video Master</span>
+                <span class="track-status">24fps</span>
+              </div>
+              <div class="track-header-item">
+                <span class="track-tag audio-dial-tag">A1</span>
+                <span class="track-name">Dialogue</span>
+                <span class="track-status">Ducked</span>
+              </div>
+              <div class="track-header-item">
+                <span class="track-tag audio-music-tag">A2</span>
+                <span class="track-name">Score</span>
+                <span class="track-status">-6dB</span>
+              </div>
+              <div class="track-header-item">
+                <span class="track-tag audio-sfx-tag">A3</span>
+                <span class="track-name">Foley / SFX</span>
+                <span class="track-status">Cues (2)</span>
+              </div>
+              <div class="track-header-item">
+                <span class="track-tag sub-tag">S1</span>
+                <span class="track-name">Subtitles</span>
+                <span class="track-status">SRT/VTT</span>
+              </div>
+            </div>
+
+            <!-- Scrollable Timeline Lanes Area -->
+            <div class="timeline-lanes-scroll" id="timeline-lanes-scroll">
+              <!-- Interactive Playhead Needle -->
+              <div class="timeline-playhead" id="timeline-playhead" style="left: 120px;">
+                <div class="playhead-head"></div>
+                <div class="playhead-line"></div>
+              </div>
+
+              <!-- Time Ruler Header -->
+              <div class="timeline-time-ruler" id="time-ruler">
+                <div class="ruler-tick" style="left: 0px;"><span>00:00</span></div>
+                <div class="ruler-tick" style="left: 100px;"><span>00:01</span></div>
+                <div class="ruler-tick" style="left: 200px;"><span>00:02</span></div>
+                <div class="ruler-tick" style="left: 300px;"><span>00:03</span></div>
+                <div class="ruler-tick" style="left: 400px;"><span>00:04</span></div>
+                <div class="ruler-tick" style="left: 500px;"><span>00:05</span></div>
+                <div class="ruler-tick" style="left: 600px;"><span>00:06</span></div>
+                <div class="ruler-tick" style="left: 700px;"><span>00:07</span></div>
+                <div class="ruler-tick" style="left: 800px;"><span>00:08</span></div>
+              </div>
+
+              <!-- Track V1: Video Clips -->
+              <div class="timeline-lane lane-video" id="lane-v1">
+                <div class="timeline-clip clip-video deterministic" id="clip-shot-1" style="left: 0px; width: 350px;">
+                  <div class="clip-badge">⚡ HF (0.00$)</div>
+                  <div class="clip-content">
+                    <span class="clip-title">SHOT_01: Command Deck (Establishing)</span>
+                    <span class="clip-meta">3.50s • Push-in • 35mm</span>
+                  </div>
+                  <div class="clip-transition-badge">CUT</div>
+                </div>
+                <div class="timeline-clip clip-video generative" id="clip-shot-2" style="left: 350px; width: 400px;">
+                  <div class="clip-badge">🎬 VEO 2 ($0.50)</div>
+                  <div class="clip-content">
+                    <span class="clip-title">SHOT_02: Elena Tactical Reaction</span>
+                    <span class="clip-meta">4.00s • Orbit • 50mm</span>
+                  </div>
+                  <div class="clip-transition-badge dissolve">DISSOLVE 0.5s</div>
+                </div>
+              </div>
+
+              <!-- Track A1: Dialogue Lines -->
+              <div class="timeline-lane lane-audio" id="lane-a1">
+                <div class="timeline-clip clip-dialogue" style="left: 50px; width: 250px;">
+                  <div class="clip-wave-icon">🗣️</div>
+                  <div class="clip-content">
+                    <span class="clip-title">KAITO: "Sensors confirm the breach..."</span>
+                    <span class="clip-meta">Serious • 2.50s</span>
+                  </div>
+                </div>
+                <div class="timeline-clip clip-dialogue" style="left: 400px; width: 280px;">
+                  <div class="clip-wave-icon">🗣️</div>
+                  <div class="clip-content">
+                    <span class="clip-title">ELENA: "Shields holding at seventy..."</span>
+                    <span class="clip-meta">Composed • 2.80s</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Track A2: Score & Music -->
+              <div class="timeline-lane lane-audio" id="lane-a2">
+                <div class="timeline-clip clip-music" style="left: 0px; width: 750px;">
+                  <div class="clip-wave-icon">🎵</div>
+                  <div class="clip-content">
+                    <span class="clip-title">Cyber Noir Theme: "Neon Tension" (110 BPM, D-Minor)</span>
+                    <span class="clip-meta">Automatic Dialogue Ducking Applied (-6dB)</span>
+                  </div>
+                  <div class="ducking-curve"></div>
+                </div>
+              </div>
+
+              <!-- Track A3: Foley & SFX -->
+              <div class="timeline-lane lane-audio" id="lane-a3">
+                <div class="timeline-clip clip-sfx" style="left: 10px; width: 120px;">
+                  <span class="clip-title">💥 alarm_klaxon</span>
+                </div>
+                <div class="timeline-clip clip-sfx" style="left: 360px; width: 140px;">
+                  <span class="clip-title">⚡ sidearm_charge</span>
+                </div>
+              </div>
+
+              <!-- Track S1: Subtitles -->
+              <div class="timeline-lane lane-subtitles" id="lane-s1">
+                <div class="timeline-clip clip-sub" style="left: 50px; width: 250px;">
+                  <span class="clip-title">KAITO: Sensors confirm the breach.</span>
+                </div>
+                <div class="timeline-clip clip-sub" style="left: 400px; width: 280px;">
+                  <span class="clip-title">ELENA: Shields holding at seventy percent.</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- PANEL 2: Script & Story Intelligence -->
+    <section class="studio-panel" id="panel-story" aria-labelledby="tab-btn-story">
+      <div class="story-workspace-grid">
+        <div class="script-editor-card">
+          <div class="card-header">
+            <h3>SCREENPLAY SOURCE (LOSSLESS INGESTION)</h3>
+            <span class="hash-tag">SHA-256: 9f8a3b...c721</span>
+          </div>
+          <div class="screenplay-content" id="screenplay-viewer">
+            <div class="sp-slugline"><span class="sp-num">1</span> SCENE 1 - COMMAND DECK - NIGHT</div>
+            <p class="sp-action">Commander <mark class="char-highlight" data-char="kaito">Kaito</mark> stands at the tactical console, eyes fixed on the sensor readout. Rain hammers against the reinforced viewport.</p>
+            <div class="sp-dialogue-block">
+              <div class="sp-character">KAITO</div>
+              <p class="sp-speech">Sensors confirm the breach. Prepare defensive countermeasures.</p>
+            </div>
+            <p class="sp-action">Lieutenant <mark class="char-highlight" data-char="elena">Elena</mark> checks her sidearm and nods calmly.</p>
+            <div class="sp-dialogue-block">
+              <div class="sp-character">ELENA</div>
+              <p class="sp-speech">Shields holding at seventy percent.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="story-intelligence-sidebar">
+          <div class="intel-card">
+            <h4>NARRATIVE BEATS & PACING</h4>
+            <div class="beat-item">
+              <span class="beat-index">BEAT 01</span>
+              <p>Tactical alert: sensor breach confirmed.</p>
+              <span class="beat-meta">Coverage: 100% • Fast Pacing</span>
+            </div>
+            <div class="beat-item">
+              <span class="beat-index">BEAT 02</span>
+              <p>Defensive preparation: shields holding at 70%.</p>
+              <span class="beat-meta">Coverage: 100% • Suspense</span>
+            </div>
+          </div>
+
+          <div class="intel-card">
+            <h4>CANON INTEGRITY & COVERAGE</h4>
+            <div class="metric-row">
+              <span>Source Text Coverage:</span>
+              <strong class="text-emerald">100.0%</strong>
+            </div>
+            <div class="metric-row">
+              <span>Hallucination Guard:</span>
+              <strong class="text-emerald">PASSED (0 drift)</strong>
+            </div>
+            <div class="metric-row">
+              <span>Canon Conflicts:</span>
+              <strong class="text-emerald">0 detected</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL 3: Director Board & Shots -->
+    <section class="studio-panel" id="panel-director" aria-labelledby="tab-btn-director">
+      <div class="director-workspace">
+        <div class="director-toolbar">
+          <h2>Scene 1: Tactical Command Deck</h2>
+          <div class="director-actions">
+            <button class="btn btn-secondary btn-sm" id="btn-add-shot">+ Add Shot Contract</button>
+            <button class="btn btn-primary btn-sm" id="btn-re-evaluate-qa">Re-Audit Director QA</button>
+          </div>
+        </div>
+
+        <div class="shot-cards-grid" id="shot-cards-grid">
+          <!-- Shot Card 1 -->
+          <div class="shot-card deterministic-border" data-shot-id="SHOT_01">
+            <div class="shot-card-header">
+              <span class="shot-id-badge">SHOT 01</span>
+              <span class="shot-route-badge deterministic">⚡ HYPERFRAMES ($0.00)</span>
+            </div>
+            <div class="shot-preview-thumbnail bg-deck">
+              <div class="shot-camera-pill">35mm • Wide • Push-In</div>
+            </div>
+            <div class="shot-details">
+              <h4>Tactical Console Establishing</h4>
+              <p>Commander Kaito gazes at the glowing sensor screen.</p>
+              <div class="shot-tags">
+                <span class="tag">Rule of Thirds</span>
+                <span class="tag">Cool 4500K</span>
+                <span class="tag">Noir Suspense</span>
+              </div>
+            </div>
+            <div class="shot-card-footer">
+              <span class="duration-text">Duration: 3.5s (84 frames)</span>
+              <button class="btn-icon-sm" title="Lock Shot Parameters">🔒</button>
+            </div>
+          </div>
+
+          <!-- Shot Card 2 -->
+          <div class="shot-card generative-border" data-shot-id="SHOT_02">
+            <div class="shot-card-header">
+              <span class="shot-id-badge">SHOT 02</span>
+              <span class="shot-route-badge generative">🎬 VEO 2 ($0.50)</span>
+            </div>
+            <div class="shot-preview-thumbnail bg-elena">
+              <div class="shot-camera-pill">50mm • Medium • Orbit</div>
+            </div>
+            <div class="shot-details">
+              <h4>Elena Tactical Reaction</h4>
+              <p>Elena checks sidearm, determined expression.</p>
+              <div class="shot-tags">
+                <span class="tag">Chained Frame</span>
+                <span class="tag">Warm Rim 3200K</span>
+                <span class="tag">Dynamic Action</span>
+              </div>
+            </div>
+            <div class="shot-card-footer">
+              <span class="duration-text">Duration: 4.0s (96 frames)</span>
+              <button class="btn-icon-sm" title="Lock Shot Parameters">🔒</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL 4: Universe & Character Studio -->
+    <section class="studio-panel" id="panel-universe" aria-labelledby="tab-btn-universe">
+      <div class="universe-workspace-grid">
+        <div class="character-inspector-card">
+          <div class="card-header">
+            <h3>CANONICAL CHARACTER TURNAROUND (6-VIEW IDENTITY LOCK)</h3>
+            <span class="status-badge approved">APPROVED CANON</span>
+          </div>
+
+          <div class="turnaround-viewport">
+            <div class="turnaround-display" id="turnaround-display">
+              <div class="char-turnaround-model" id="char-model-view">
+                <div class="model-angle-badge" id="angle-badge">FRONT VIEW</div>
+                <div class="char-wireframe">
+                  <div class="head"></div>
+                  <div class="torso"></div>
+                  <div class="limbs"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="turnaround-angle-selector">
+              <button class="angle-btn active" data-angle="front">Front</button>
+              <button class="angle-btn" data-angle="three_quarter_left">¾ Left</button>
+              <button class="angle-btn" data-angle="profile_left">Profile L</button>
+              <button class="angle-btn" data-angle="three_quarter_right">¾ Right</button>
+              <button class="angle-btn" data-angle="profile_right">Profile R</button>
+              <button class="angle-btn" data-angle="back">Back</button>
+            </div>
+          </div>
+
+          <div class="identity-qa-scores">
+            <div class="qa-score-item">
+              <span>Similarity Score:</span>
+              <strong class="text-emerald">96.8%</strong>
+            </div>
+            <div class="qa-score-item">
+              <span>Facial Drift:</span>
+              <strong class="text-emerald">0.01% (Safe)</strong>
+            </div>
+            <div class="qa-score-item">
+              <span>Palette Adherence:</span>
+              <strong class="text-emerald">99.2%</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="universe-meta-sidebar">
+          <div class="intel-card">
+            <h4>CANONICAL PROFILE</h4>
+            <p><strong>Name:</strong> Commander Kaito</p>
+            <p><strong>Series:</strong> Neo-Tokyo 2088</p>
+            <p><strong>Current Version:</strong> v1.0 (Immutable)</p>
+            <p><strong>Voice Profile:</strong> Baritone Tactical (ID: voice_kaito_01)</p>
+          </div>
+          <div class="intel-card">
+            <h4>REGISTERED OUTFITS</h4>
+            <div class="outfit-chip active">Command Deck Uniform</div>
+            <div class="outfit-chip">Stealth Exosuit</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL 5: Cost & Production Route Monitor -->
+    <section class="studio-panel" id="panel-cost" aria-labelledby="tab-btn-cost">
+      <div class="cost-monitor-grid">
+        <div class="savings-meter-card">
+          <h3>DETERMINISTIC ANIMATION FIRST METER</h3>
+          <div class="gauge-container">
+            <div class="donut-chart" style="--percent: 75.4;">
+              <div class="donut-inner">
+                <span class="donut-val">75.4%</span>
+                <span class="donut-sub">COST SAVED</span>
+              </div>
+            </div>
+          </div>
+          <div class="cost-comparison-row">
+            <div class="cost-box actual">
+              <span class="cost-label">Actual Pipeline Cost:</span>
+              <span class="cost-amount">$0.75 USD</span>
+            </div>
+            <div class="cost-box generative">
+              <span class="cost-label">Pure Generative Benchmark:</span>
+              <span class="cost-amount">$3.25 USD</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="provider-benchmark-card">
+          <h3>PROVIDER BENCHMARK & LATENCY</h3>
+          <table class="benchmark-table">
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>Type</th>
+                <th>Avg Latency</th>
+                <th>Cost / Shot</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>HyperFrames</strong></td>
+                <td>Deterministic</td>
+                <td>22 ms</td>
+                <td>$0.00</td>
+                <td><span class="badge-online">LOCAL ✅</span></td>
+              </tr>
+              <tr>
+                <td><strong>Google Veo 2</strong></td>
+                <td>Generative Video</td>
+                <td>3,400 ms</td>
+                <td>$0.50</td>
+                <td><span class="badge-online">ONLINE ✅</span></td>
+              </tr>
+              <tr>
+                <td><strong>Seedance</strong></td>
+                <td>Generative Video</td>
+                <td>4,200 ms</td>
+                <td>$0.45</td>
+                <td><span class="badge-online">ONLINE ✅</span></td>
+              </tr>
+              <tr>
+                <td><strong>ElevenLabs</strong></td>
+                <td>Voice Synthesis</td>
+                <td>240 ms</td>
+                <td>$0.05</td>
+                <td><span class="badge-online">ONLINE ✅</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL 6: Deliverables & NLE Interchange -->
+    <section class="studio-panel" id="panel-export" aria-labelledby="tab-btn-export">
+      <div class="deliverables-grid">
+        <div class="deliverable-card">
+          <div class="deliverable-icon">🌐</div>
+          <h3>Standalone HTML5 Interactive Player</h3>
+          <p>Scrubbable timeline, Web Audio stems, Subtitle captions, Dark Mode UI.</p>
+          <button class="btn btn-primary" id="btn-dl-html5">Download HTML5 Bundle</button>
+        </div>
+
+        <div class="deliverable-card">
+          <div class="deliverable-icon">📋</div>
+          <h3>OpenTimelineIO Sequence (.otio)</h3>
+          <p>Industry-standard OTIO schema for DaVinci Resolve, Premiere, and Final Cut.</p>
+          <button class="btn btn-secondary" id="btn-dl-otio">Download .otio</button>
+        </div>
+
+        <div class="deliverable-card">
+          <div class="deliverable-icon">✂️</div>
+          <h3>CMX 3600 Edit Decision List (.edl)</h3>
+          <p>Frame-accurate cut transitions and timecodes for high-end NLE finishing.</p>
+          <button class="btn btn-secondary" id="btn-dl-edl">Download .edl</button>
+        </div>
+
+        <div class="deliverable-card">
+          <div class="deliverable-icon">🎬</div>
+          <h3>Master Video Render Manifest</h3>
+          <p>MP4 (H.264/AAC) & WebM (VP9/Opus) master render specification.</p>
+          <button class="btn btn-secondary" id="btn-dl-manifest">Download Manifest</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="studio-footer">
+    <span>AI Animation Studio • Deterministic Animation First • Series-Aware Canon Engine</span>
+    <span id="footer-status">System Online • 205 Tests Passing • 0 Warnings</span>
+  </footer>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>

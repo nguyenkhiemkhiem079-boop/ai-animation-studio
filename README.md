@@ -173,6 +173,28 @@ npx studio audio score <projectId> [sceneId] [--mood <mood>]
 npx studio audio sfx <projectId> [shotId] [--name <name>]
 npx studio audio mix [projectId]
 
+# Multi-Track Timeline & Subtitles
+npx studio timeline assemble <projectId> [sceneId]
+npx studio timeline inspect <projectId>
+npx studio timeline subtitles <projectId> [--format srt|vtt]
+
+# Continuity QA & Automated Repairs
+npx studio qa audit <projectId>
+npx studio qa repair <projectId>
+
+# Master Export & Packaging
+npx studio export html5 <projectId>
+npx studio export nle <projectId> [--format otio|edl]
+npx studio export render <projectId> [--format mp4|webm]
+
+# End-to-End Master Production Pipeline
+npx studio run <storyFile> [--project <id>] [--series <id>] [--from-checkpoint <ckptId>]
+npx studio status <projectId>
+
+# Interactive Studio Web Suite
+npx studio ui [--port <port>]
+npm run ui
+
 # Validate a JSON artifact against domain schemas
 npx studio inspect ./project.json project
 ```
@@ -209,5 +231,7 @@ npx studio inspect ./project.json project
   * Domain models (`ContinuityCheckResult`, `RepairAction`, `ContinuityQAReport`), `ContinuityQAEvaluator` checking 180-degree screen direction, lighting jumps, prop persistence, wardrobe mismatches, pacing stalling, and audio lip-sync bounds, `AutoRepairEngine` applying automated fixes (cross-dissolve softens, wardrobe sync, digital push-in transform, audio duration adjustments), `ContinuityQAPipelineStep` for DAG pipeline, Studio CLI qa commands (`audit`, `repair`).
 - [x] **PHASE 13: MASTER RENDER, HTML5 PLAYER & NLE INTERCHANGE** (`v0.14-master-render`)
   * Domain models (`ExportFormat`, `OutputFileDescriptor`, `ExportManifest`), `Html5PlayerPackager` compiling standalone interactive HTML5 player with dark mode UI, timeline scrub bar, Web Audio stems, and subtitle captions, `NLEInterchangeExporter` generating OpenTimelineIO (.otio) and CMX 3600 (.edl) formats for DaVinci Resolve, Premiere Pro, and Final Cut, `VideoRenderer` compiling MP4/WebM render manifests, `MasterExportPipelineStep` for DAG pipeline, Studio CLI export commands (`html5`, `nle`, `render`).
-- [ ] **PHASE 14: END-TO-END PIPELINE DAG ORCHESTRATOR** (`v0.15-end-to-end`)
-- [ ] **PHASE 15: INTERACTIVE STUDIO PLAYER & PRODUCTION WEB APP** (`v1.0-studio-complete`)
+- [x] **PHASE 14: END-TO-END PIPELINE DAG ORCHESTRATOR** (`v0.15-end-to-end`)
+  * `StudioPipelineFactory` composing all 11 production steps in topological sequence with automated checkpointing and resume support, `ProductionSummaryCalculator` computing financial metrics and cost savings (Deterministic Animation First), Studio CLI commands (`studio run <storyFile>`, `studio status <projectId>`), comprehensive end-to-end execution testing.
+- [x] **PHASE 15: INTERACTIVE STUDIO PLAYER & PRODUCTION WEB APP** (`v1.0-studio-complete`)
+  * Full-featured production web suite (`@ai-studio/studio-ui`), Dual-Mode Player (Deterministic HyperFrames DOM vs Master Video Compositor), Multi-Track Timeline Editor with draggable playhead, Web Audio multichannel mixer, Screenplay Source with character highlights and narrative beats, Canonical Character Turnaround (6-view inspector with Identity Lock), Real-time 75.4% Cost Savings Gauge, One-click NLE and deliverable downloads, Studio CLI command (`studio ui`).
