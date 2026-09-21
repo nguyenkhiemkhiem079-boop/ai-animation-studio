@@ -15,10 +15,12 @@ import { GenerativeVideoPipelineStep } from '../video-providers/generative-video
 import { AudioProductionPipelineStep } from '../audio/audio-pipeline-step.js';
 import { TimelineEditingPipelineStep } from '../timeline/timeline-pipeline-step.js';
 import { ContinuityQAPipelineStep } from '../qa/continuity-qa-pipeline-step.js';
+import { VisualSemanticQAPipelineStep } from '../qa/visual-qa-pipeline-step.js';
 import { MasterExportPipelineStep } from '../export/master-export-pipeline-step.js';
 import { UniverseManager } from '../universe/index.js';
 import { CharacterStudio } from '../character/character-studio.js';
 import { WorldStudio } from '../world/world-studio.js';
+import { LLMProvider } from '../llm/llm-provider.js';
 
 export interface StudioPipelineOptions {
   storage: IStorageProvider;
@@ -26,11 +28,12 @@ export interface StudioPipelineOptions {
   events?: StudioEventBus;
   logger?: Logger;
   autoRepairContinuity?: boolean;
+  llm?: LLMProvider;
 }
 
 export class StudioPipelineFactory {
   /**
-   * Creates the complete end-to-end 11-step DAG production pipeline for AI Animation Studio.
+   * Creates the complete end-to-end 12-step DAG production pipeline for AI Animation Studio.
    */
   public static createPipeline(options: StudioPipelineOptions): Pipeline {
     const {
@@ -39,6 +42,7 @@ export class StudioPipelineFactory {
       events = defaultEventBus,
       logger = defaultLogger,
       autoRepairContinuity = true,
+      llm,
     } = options;
 
     const universeManager = new UniverseManager(storage);
@@ -67,16 +71,19 @@ export class StudioPipelineFactory {
       // 7. Generative Video Providers & Continuation Chaining (id: 'generative_video_step')
       new GenerativeVideoPipelineStep(undefined, undefined, assetRegistry),
 
-      // 8. Voice, Music & SFX Audio Production with Ducking (id: 'audio_production_step')
+      // 8. Visual Semantic QA & Multimodal Continuity (id: 'visual_semantic_qa_step')
+      new VisualSemanticQAPipelineStep(llm, assetRegistry),
+
+      // 9. Voice, Music & SFX Audio Production with Ducking (id: 'audio_production_step')
       new AudioProductionPipelineStep(undefined, undefined, undefined, undefined, undefined, assetRegistry),
 
-      // 9. Multi-Track Timeline & Subtitle Assembly (id: 'timeline_editing_step')
+      // 10. Multi-Track Timeline & Subtitle Assembly (id: 'timeline_editing_step')
       new TimelineEditingPipelineStep(assetRegistry),
 
-      // 10. Continuity QA & Automated Defect Repair (id: 'continuity_qa_step')
+      // 11. Continuity QA & Automated Defect Repair (id: 'continuity_qa_step')
       new ContinuityQAPipelineStep(autoRepairContinuity, assetRegistry),
 
-      // 11. Final Master Export (HTML5, MP4/WebM, OTIO & EDL) (id: 'master_export_step')
+      // 12. Final Master Export (HTML5, MP4/WebM, OTIO & EDL) (id: 'master_export_step')
       new MasterExportPipelineStep(assetRegistry),
     ];
 

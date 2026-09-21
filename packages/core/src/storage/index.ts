@@ -148,12 +148,34 @@ export class FileSystemStorage implements IStorageProvider {
   public async write(uri: string, data: string | Buffer): Promise<void> {
     const target = this.resolvePath(uri);
     const parent = path.dirname(target);
+    const tempPath = `${target}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
     try {
       await fs.mkdir(parent, { recursive: true });
-      const tempPath = `${target}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
       await fs.writeFile(tempPath, data);
-      await fs.rename(tempPath, target);
+
+      let renamed = false;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          await fs.rename(tempPath, target);
+          renamed = true;
+          break;
+        } catch (renameErr: any) {
+          if (attempt === 4 || (renameErr.code !== 'EPERM' && renameErr.code !== 'EBUSY')) {
+            // Fallback for Windows OneDrive / anti-virus handle locks
+            try {
+              await fs.copyFile(tempPath, target);
+              await fs.unlink(tempPath).catch(() => {});
+              renamed = true;
+              break;
+            } catch {
+              throw renameErr;
+            }
+          }
+          await new Promise((r) => setTimeout(r, 30 * (attempt + 1)));
+        }
+      }
     } catch (err: any) {
+      await fs.unlink(tempPath).catch(() => {});
       throw new StorageError(`Failed to write file ${uri}: ${err.message}`, { path: target });
     }
   }

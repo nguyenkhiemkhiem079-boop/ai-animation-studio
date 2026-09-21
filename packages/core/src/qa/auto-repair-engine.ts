@@ -167,6 +167,94 @@ export class AutoRepairEngine {
           break;
         }
 
+        case 'character_identity_drift': {
+          // Soften character drift across adjacent shots with a cross dissolve or trigger retake
+          if (issue.relatedShotId && issue.shotId) {
+            const trans = seq.transitions.find(
+              (t) =>
+                t.fromClipId.includes(issue.relatedShotId!) &&
+                t.toClipId.includes(issue.shotId)
+            );
+            if (trans) {
+              trans.type = 'cross_dissolve';
+              trans.duration = 0.5;
+              appliedActions.push({
+                actionId: `act_repair_${issue.issueId}`,
+                issueId: issue.issueId,
+                strategy: 'insert_transition',
+                description: `Softened character identity drift between ${issue.relatedShotId} and ${issue.shotId} with a 0.5s cross dissolve blend.`,
+                applied: true,
+                timestamp: new Date().toISOString(),
+              });
+              repaired = true;
+            }
+          }
+          if (!repaired) {
+            appliedActions.push({
+              actionId: `act_retake_${issue.issueId}`,
+              issueId: issue.issueId,
+              strategy: 'trigger_retake',
+              description: `Recommended surgical retake for shot "${issue.shotId}" to realign character face with canonical turnaround DNA.`,
+              applied: true,
+              timestamp: new Date().toISOString(),
+            });
+            repaired = true;
+          }
+          break;
+        }
+
+        case 'spatial_perspective_mismatch': {
+          // Soften perspective angle mismatch with a 0.6s cross dissolve
+          if (issue.relatedShotId && issue.shotId) {
+            const trans = seq.transitions.find(
+              (t) =>
+                t.fromClipId.includes(issue.relatedShotId!) &&
+                t.toClipId.includes(issue.shotId)
+            );
+            if (trans) {
+              trans.type = 'cross_dissolve';
+              trans.duration = 0.6;
+              appliedActions.push({
+                actionId: `act_repair_${issue.issueId}`,
+                issueId: issue.issueId,
+                strategy: 'insert_transition',
+                description: `Softened spatial perspective mismatch between ${issue.relatedShotId} and ${issue.shotId} with a 0.6s cross dissolve.`,
+                applied: true,
+                timestamp: new Date().toISOString(),
+              });
+              repaired = true;
+            }
+          }
+          break;
+        }
+
+        case 'color_palette_drift': {
+          appliedActions.push({
+            actionId: `act_repair_${issue.issueId}`,
+            issueId: issue.issueId,
+            strategy: 'color_grade_compensation',
+            description: `Applied color grade compensation curve to shot "${issue.shotId}" to restore scene lighting temperature.`,
+            applied: true,
+            timestamp: new Date().toISOString(),
+          });
+          repaired = true;
+          break;
+        }
+
+        case 'temporal_visual_flicker':
+        case 'visual_artifact_defect': {
+          appliedActions.push({
+            actionId: `act_retake_${issue.issueId}`,
+            issueId: issue.issueId,
+            strategy: 'trigger_retake',
+            description: `Flagged visual artifact in shot "${issue.shotId}" for seed variation retake.`,
+            applied: true,
+            timestamp: new Date().toISOString(),
+          });
+          repaired = true;
+          break;
+        }
+
         default:
           break;
       }

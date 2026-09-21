@@ -8,6 +8,11 @@ export const ContinuityIssueTypeSchema = z.enum([
   'lip_sync_desync',
   'audio_clipping',
   'pacing_stalling',
+  'character_identity_drift',
+  'spatial_perspective_mismatch',
+  'temporal_visual_flicker',
+  'visual_artifact_defect',
+  'color_palette_drift',
 ]);
 export type ContinuityIssueType = z.infer<typeof ContinuityIssueTypeSchema>;
 
@@ -33,6 +38,8 @@ export const RepairStrategySchema = z.enum([
   'adjust_audio_duck',
   'match_lighting',
   'trigger_retake',
+  'adjust_prompt',
+  'color_grade_compensation',
 ]);
 export type RepairStrategy = z.infer<typeof RepairStrategySchema>;
 

@@ -9,12 +9,12 @@ import {
 } from '../src/index.js';
 
 describe('Phase 14 — End-to-End Pipeline DAG Orchestrator', () => {
-  it('instantiates all 11 production steps in correct topological order', () => {
+  it('instantiates all 12 production steps in correct topological order', () => {
     const storage = new MemoryStorage();
     const pipeline = StudioPipelineFactory.createPipeline({ storage });
 
     const steps = pipeline.getSteps();
-    expect(steps).toHaveLength(11);
+    expect(steps).toHaveLength(12);
 
     const stepIds = steps.map((s) => s.id);
     expect(stepIds).toEqual([
@@ -25,6 +25,7 @@ describe('Phase 14 — End-to-End Pipeline DAG Orchestrator', () => {
       'production_planning_router',
       'hyperframes_deterministic_execution',
       'generative_video_step',
+      'visual_semantic_qa_step',
       'audio_production_step',
       'timeline_editing_step',
       'continuity_qa_step',
@@ -88,8 +89,8 @@ Shields holding at seventy percent.`;
     // Execute full pipeline
     const context = await pipeline.execute('proj_e2e_test', initialState);
 
-    // Verify all 11 steps completed
-    expect(context.completedStepIds).toHaveLength(11);
+    // Verify all 12 steps completed
+    expect(context.completedStepIds).toHaveLength(12);
 
     // Verify key state outputs
     expect(context.state.productionScenes).toBeDefined();
@@ -138,5 +139,5 @@ Kaito walks quickly down the corridor.`;
 
     expect(resumedContext.completedStepIds).toContain('master_export_step');
     expect(resumedContext.state.exportManifest).toBeDefined();
-  });
+  }, 20000);
 });

@@ -86,6 +86,7 @@ import {
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
+import * as syncFs from 'node:fs';
 
 export interface CliContext {
   cwd: string;
@@ -140,8 +141,12 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const { runFlowSmoke } = await import('./smoke/flow-smoke.js');
         await runFlowSmoke();
         return 0;
+      } else if (subCommand === 'visual-qa' || subCommand === 'visual') {
+        const { runVisualQASmoke } = await import('./smoke/visual-qa-smoke.js');
+        await runVisualQASmoke();
+        return 0;
       } else {
-        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow`);
+        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow, visual-qa`);
         return 1;
       }
     }
@@ -2127,6 +2132,40 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
             ],
           } as unknown as ShotContract,
         ];
+      }
+
+      if (subCommand === 'visual') {
+        const shotId = args[3];
+        console.log(`👁️ Multimodal Visual Semantic QA for Project "${projectId}"${shotId ? ` (Shot: ${shotId})` : ''}:`);
+        const reportsDir = path.resolve('.studio', 'qa', 'visual');
+        if (syncFs.existsSync(reportsDir)) {
+          const files = syncFs.readdirSync(reportsDir).filter((f) => f.endsWith('.json'));
+          console.log(` - Persisted Reports: ${files.length} report(s) found in ${reportsDir}`);
+          for (const f of files) {
+            const rep = JSON.parse(syncFs.readFileSync(path.join(reportsDir, f), 'utf-8'));
+            if (!shotId || rep.shotId === shotId) {
+              console.log(`\n 📄 [${rep.reportId}] Shot: "${rep.shotId}" | Status: ${rep.passed ? 'PASSED ✅' : 'DEFECTS DETECTED ⚠️'}`);
+              console.log(`   • Mechanism     : ${rep.evaluationMechanism}`);
+              console.log(`   • Identity Score: ${(rep.identityConsistencyScore * 100).toFixed(1)}%`);
+              console.log(`   • Spatial Score : ${(rep.spatialPerspectiveScore * 100).toFixed(1)}%`);
+              console.log(`   • Defect Score  : ${(rep.visualDefectScore * 100).toFixed(1)}%`);
+              console.log(`   • Overall Score : ${(rep.overallVisualContinuityScore * 100).toFixed(1)}%`);
+              console.log(`   • Defects Found : ${rep.defects?.length ?? 0}`);
+              for (const d of rep.defects || []) {
+                console.log(`     - [${d.severity?.toUpperCase()}] ${d.region}: ${d.description} (Fix: ${d.suggestedFix})`);
+              }
+              if (rep.retakeRecommendations?.length > 0) {
+                console.log(`   • Retake Recommendations: ${rep.retakeRecommendations.length}`);
+                for (const r of rep.retakeRecommendations) {
+                  console.log(`     - [${r.strategy}] Priority: ${r.priority} | ${r.rationale}`);
+                }
+              }
+            }
+          }
+        } else {
+          console.log(`No visual QA reports found at ${reportsDir}. Run a pipeline with visual_semantic_qa_step or "studio smoke visual-qa".`);
+        }
+        return 0;
       }
 
       if (subCommand === 'audit') {

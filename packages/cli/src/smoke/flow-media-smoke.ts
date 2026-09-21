@@ -58,8 +58,10 @@ export async function runFlowMediaSmoke(): Promise<void> {
 
   // 4. Initialize storage and persistent FlowJobManager
   const storage = new FileSystemStorage('.');
-  const repo = new StorageFlowJobRepository(storage, '.studio/flow/smoke_jobs');
-  const assetRegistry = new FileSystemAssetRegistry(storage);
+  const smokeJobsPath = path.join(baseDir, 'jobs');
+  const smokeManifestPath = path.join(baseDir, 'asset_manifest.json');
+  const repo = new StorageFlowJobRepository(storage, smokeJobsPath);
+  const assetRegistry = new FileSystemAssetRegistry(storage, smokeManifestPath);
   const manager = new FlowJobManager(assetRegistry, undefined, undefined, undefined, repo);
 
   const testShot: ShotContract = {
@@ -153,7 +155,7 @@ export async function runFlowMediaSmoke(): Promise<void> {
   console.log(`- Candidate Approved: Status=${approvedJob.status}, Decision=${approvedJob.decision}`);
 
   // 8. Process Restart Recovery: Instantiate a NEW manager and repository
-  const freshRepo = new StorageFlowJobRepository(storage, '.studio/flow/smoke_jobs');
+  const freshRepo = new StorageFlowJobRepository(storage, smokeJobsPath);
   const restartManager = new FlowJobManager(assetRegistry, undefined, undefined, undefined, freshRepo);
   const reloadedJob = await restartManager.findJob(job.jobId);
 

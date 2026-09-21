@@ -56,6 +56,32 @@ export class ContinuityQAPipelineStep implements PipelineStep {
       timelineSequence,
     });
 
+    // Merge in any defects from Visual Semantic QA step if present
+    const visualQAReports = state.visualQAReports as any[] | undefined;
+    if (visualQAReports && visualQAReports.length > 0) {
+      for (const vReport of visualQAReports) {
+        if (vReport.defects && Array.isArray(vReport.defects)) {
+          for (const defect of vReport.defects) {
+            report.issues.push({
+              issueId: defect.defectId,
+              shotId: vReport.shotId,
+              type: defect.issueType,
+              severity: defect.severity,
+              message: `[Visual Semantic QA] ${defect.description}`,
+              suggestedFix: defect.suggestedFix,
+              autoRepairable: true,
+              metadata: {
+                region: defect.region,
+                confidence: defect.confidence,
+                frameIndex: defect.frameIndex,
+                timestampSeconds: defect.timestampSeconds,
+              },
+            });
+          }
+        }
+      }
+    }
+
     logger.info(`Continuity QA found ${report.issues.length} issue(s).`, {
       issuesCount: report.issues.length,
       overallPassed: report.overallPassed,

@@ -224,11 +224,11 @@ export class FlowResultImporter {
     }
 
     return {
-      candidateAssetId,
+      candidateAssetId: registeredAsset.id,
       asset: registeredAsset,
       provenance,
       storedFilePath,
-      version,
+      version: registeredAsset.version ?? version,
     };
   }
 }
