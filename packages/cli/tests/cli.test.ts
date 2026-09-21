@@ -186,4 +186,52 @@ LAN: Then we move tonight.`;
     );
     expect(routeCode).toBe(0);
   });
+
+  it('manages character turnaround sheets, asset resolution, QA, and approval via CLI', async () => {
+    const universeManager = new UniverseManager(storage);
+    const seriesId = 'series_cli_char_test';
+    const charId = 'CHAR_CLI_02';
+
+    // 1. Seed character
+    await universeManager.addCharacter(seriesId, {
+      id: charId,
+      seriesId,
+      name: 'Elena Rostova',
+      description: 'Master tactician',
+      visualAnchorPrompt: 'Female, 28, silver hair, cybernetic monocle',
+      traits: ['tactical', 'composed'],
+    });
+
+    // 2. character sheet
+    const sheetCode = await runCli(['character', 'sheet', seriesId, charId], { cwd: tempDir, storage });
+    expect(sheetCode).toBe(0);
+
+    // 3. character resolve view
+    const resolveViewCode = await runCli(
+      ['character', 'resolve', seriesId, charId, 'front'],
+      { cwd: tempDir, storage }
+    );
+    expect(resolveViewCode).toBe(0);
+
+    // 4. character resolve expression
+    const resolveExprCode = await runCli(
+      ['character', 'resolve', seriesId, charId, 'afraid'],
+      { cwd: tempDir, storage }
+    );
+    expect(resolveExprCode).toBe(0);
+
+    // 5. character qa
+    const qaCode = await runCli(
+      ['character', 'qa', seriesId, charId, `ASSET_TURN_${charId}_FRONT_V1`],
+      { cwd: tempDir, storage }
+    );
+    expect(qaCode).toBe(0);
+
+    // 6. asset approve
+    const approveCode = await runCli(
+      ['asset', 'approve', `ASSET_TURN_${charId}_FRONT_V1`],
+      { cwd: tempDir, storage }
+    );
+    expect(approveCode).toBe(0);
+  });
 });

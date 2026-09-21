@@ -62,3 +62,10 @@ export class ContinuityError extends StudioError {
     this.name = 'ContinuityError';
   }
 }
+
+export class NotFoundError extends StudioError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, 'NOT_FOUND_ERROR', details);
+    this.name = 'NotFoundError';
+  }
+}

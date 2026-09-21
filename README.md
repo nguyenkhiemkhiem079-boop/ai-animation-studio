@@ -149,7 +149,8 @@ npx studio inspect ./project.json project
   * Lossless source document ingestion, character-offset segmentation, RuleBasedStoryAnalyzer, ProviderStoryAnalyzer, Candidate != Canon extraction, exact source traceability, Source Coverage calculation, Hallucination Guard, Canon conflict detection, StoryIntelligenceStep for DAG pipeline.
 - [x] **PHASE 3: SCENE & SHOT DIRECTOR** (`v0.4-director`)
   * ShotContract planning, DirectorProfile DNA, specialized sub-directors (Camera, Acting, Composition, Lighting, Motion, Transition), CinematicGrammarEngine (180-degree rule, repetition detection, shot rhythm), ShotDependencyGraph, DirectorQA, DirectorPipelineStep.
-- [ ] **PHASE 4: CHARACTER & ASSET STUDIO** (`v0.5-character-assets`)
+- [x] **PHASE 4: CHARACTER & ASSET STUDIO** (`v0.5-character-assets`)
+  * Character Studio, Canonical Character Sheet (6 turnaround views), ExpressionLibrary, PoseLibrary, OutfitLibrary, CharacterAssetFactory, AssetResolver & AssetReuseEngine, CharacterReferenceResolver, IdentityLock & IdentityQAEvaluator, CharacterAssetPipelineStep for DAG pipeline.
 - [ ] **PHASE 5: WORLD & ENVIRONMENT STUDIO** (`v0.6-world-studio`)
 - [ ] **PHASE 6: PRODUCTION ROUTER & ASSET GENERATION** (`v0.7-production-router`)
 - [ ] **PHASE 7: HYPERFRAMES & DETERMINISTIC ANIMATION** (`v0.8-hyperframes`)

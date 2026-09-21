@@ -24,6 +24,9 @@ import {
   SkillRegistry,
   SkillRouter,
   AgentSkillCategory,
+  CharacterStudio,
+  FileSystemAssetRegistry,
+  TurnaroundView,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -142,10 +145,13 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
     case 'character': {
       const subCommand = args[1];
       const seriesId = args[2];
+      const characterId = args[3];
       const universeManager = new UniverseManager(storage);
+      const assetRegistry = new FileSystemAssetRegistry(storage);
+      const studio = new CharacterStudio(universeManager, assetRegistry);
 
       if (!seriesId) {
-        console.error('Error: Series ID is required. Usage: studio character list <seriesId>');
+        console.error('Error: Series ID is required. Usage: studio character <list|sheet|resolve|qa> <seriesId> [characterId]');
         return 1;
       }
 
@@ -159,7 +165,100 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return 0;
       }
 
-      console.error(`Unknown character subcommand: "${subCommand}". Supported: list`);
+      if (subCommand === 'sheet') {
+        if (!characterId) {
+          console.error('Error: Character ID is required. Usage: studio character sheet <seriesId> <characterId>');
+          return 1;
+        }
+        const sheet = await studio.getOrCreateCharacterSheet(seriesId, characterId);
+        console.log(`📐 Canonical Character Sheet for "${characterId}" (v${sheet.version}):`);
+        console.log(` - Complete: ${sheet.isComplete() ? 'YES ✅' : 'PARTIAL ⚠️'}`);
+        console.log(` - Neutral Portrait: ${sheet.neutralPortraitAssetId || 'None'}`);
+        console.log(' - Turnaround Views:');
+        for (const [view, assetId] of Object.entries(sheet.views)) {
+          console.log(`   • ${view.padEnd(20)}: ${assetId}`);
+        }
+        const missing = sheet.getMissingViews();
+        if (missing.length > 0) {
+          console.log(` - Missing Views: ${missing.join(', ')}`);
+        }
+        return 0;
+      }
+
+      if (subCommand === 'resolve') {
+        if (!characterId) {
+          console.error('Error: Character ID is required. Usage: studio character resolve <seriesId> <characterId> [view|expression|pose]');
+          return 1;
+        }
+        const universe = await universeManager.getOrCreateUniverse(seriesId);
+        const character = universe.characters[characterId];
+        if (!character) {
+          console.error(`Error: Character "${characterId}" not found in series "${seriesId}".`);
+          return 1;
+        }
+        const typeOrValue = args[4] || 'front';
+        const result = await studio.resolveCharacterAsset({
+          character,
+          view: ['front', 'three_quarter_left', 'three_quarter_right', 'profile_left', 'profile_right', 'back'].includes(typeOrValue)
+            ? (typeOrValue as TurnaroundView)
+            : undefined,
+          expression: !['front', 'three_quarter_left', 'three_quarter_right', 'profile_left', 'profile_right', 'back'].includes(typeOrValue)
+            ? typeOrValue
+            : undefined,
+        });
+
+        console.log(`🎨 Resolved Asset for "${character.name}" (${typeOrValue}):`);
+        console.log(` - Source: ${result.source}`);
+        console.log(` - Asset ID: ${result.asset.id}`);
+        console.log(` - Status: ${result.asset.status}`);
+        console.log(` - Storage URI: ${result.asset.storageUri}`);
+        console.log(` - Tags: [${result.asset.tags.join(', ')}]`);
+        if (result.qaResult) {
+          console.log(` - Identity QA: ${result.qaResult.passed ? 'PASSED ✅' : 'FAILED ❌'} (Score: ${result.qaResult.similarityScore.toFixed(2)})`);
+        }
+        return 0;
+      }
+
+      if (subCommand === 'qa') {
+        const assetId = args[4];
+        if (!characterId || !assetId) {
+          console.error('Error: Character ID and Asset ID are required. Usage: studio character qa <seriesId> <characterId> <assetId>');
+          return 1;
+        }
+        const qaResult = await studio.runIdentityQA(seriesId, characterId, assetId);
+        console.log(`🔍 Identity QA Audit for Character "${characterId}" Asset "${assetId}":`);
+        console.log(` - QA Result: ${qaResult.passed ? 'PASSED ✅' : 'FAILED ❌'}`);
+        console.log(` - Similarity Score: ${(qaResult.similarityScore * 100).toFixed(1)}% (Threshold: ${(qaResult.confidenceThreshold * 100).toFixed(1)}%)`);
+        console.log(` - Facial Drift: ${qaResult.facialDriftDetected ? 'DETECTED ⚠️' : 'NONE ✅'}`);
+        console.log(` - Anatomy Check: ${qaResult.anatomyCheckPassed ? 'PASSED ✅' : 'DEFECTS DETECTED ❌'}`);
+        console.log(` - Palette Score: ${(qaResult.paletteAdherenceScore * 100).toFixed(1)}%`);
+        if (qaResult.critique.length > 0) {
+          console.log(' - Critique:');
+          qaResult.critique.forEach((c) => console.log(`   ⚠️ ${c}`));
+        }
+        return 0;
+      }
+
+      console.error(`Unknown character subcommand: "${subCommand}". Supported: list, sheet, resolve, qa`);
+      return 1;
+    }
+
+    case 'asset': {
+      const subCommand = args[1];
+      const assetId = args[2];
+      const assetRegistry = new FileSystemAssetRegistry(storage);
+
+      if (subCommand === 'approve') {
+        if (!assetId) {
+          console.error('Error: Asset ID is required. Usage: studio asset approve <assetId>');
+          return 1;
+        }
+        const approved = await assetRegistry.approveCanon(assetId);
+        console.log(`✅ Asset "${approved.id}" successfully promoted to Canon (approved_canon)!`);
+        return 0;
+      }
+
+      console.error(`Unknown asset subcommand: "${subCommand}". Supported: approve`);
       return 1;
     }
 
@@ -426,6 +525,10 @@ Commands:
   universe export <seriesId> [file]      Export series universe bundle
   universe import <seriesId> <file>      Import series universe bundle
   character list <seriesId>              List all canonical characters and active versions
+  character sheet <seriesId> <charId>    View or generate canonical character turnaround sheet
+  character resolve <seriesId> <charId>  Resolve or reuse character asset (view/expression/pose)
+  character qa <seriesId> <charId> <id>  Run Identity QA audit on candidate asset
+  asset approve <assetId>                Promote candidate asset to approved canon
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report

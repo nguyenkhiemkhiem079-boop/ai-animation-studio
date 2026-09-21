@@ -87,6 +87,10 @@ export class InMemoryAssetRegistry implements IAssetRegistry {
     this.assetsByHashSeries.set(`${asset.seriesId}:${asset.contentHash}`, updated);
     return updated;
   }
+
+  public getAll(): AssetDescriptor[] {
+    return Array.from(this.assetsById.values());
+  }
 }
 
 export class FileSystemAssetRegistry implements IAssetRegistry {
@@ -117,8 +121,7 @@ export class FileSystemAssetRegistry implements IAssetRegistry {
   }
 
   private async persist(): Promise<void> {
-    const all = await this.inMemory.query({ seriesId: '*' }); // query all
-    // To get all assets from inMemory:
+    const all = this.inMemory.getAll();
     await this.storage.writeJson(this.manifestPath, all);
   }
 
@@ -151,10 +154,12 @@ export class FileSystemAssetRegistry implements IAssetRegistry {
     return updated;
   }
 
+  public getAll(): AssetDescriptor[] {
+    return this.inMemory.getAll();
+  }
+
   private async saveCurrentState(): Promise<void> {
-    // Collect all assets
-    const all = await this.inMemory.query({ seriesId: '' }); // or retrieve via list
-    // Write manifest
+    const all = this.inMemory.getAll();
     await this.storage.writeJson(this.manifestPath, all);
   }
 }
