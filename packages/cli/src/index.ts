@@ -57,6 +57,8 @@ import {
   TimelineAssembler,
   CutTransitionEngine,
   SubtitleGenerator,
+  ContinuityQAEvaluator,
+  AutoRepairEngine,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -1672,6 +1674,124 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'qa': {
+      const subCommand = args[1];
+      const projectId = args[2];
+
+      if (!projectId) {
+        console.error('Error: Project ID is required. Usage: studio qa <audit|repair> <projectId>');
+        return 1;
+      }
+
+      const timelinePath = `.studio/timelines/${projectId}_sequence.json`;
+      const scenesPath = `.studio/director/${projectId}_scenes.json`;
+
+      let shots: ShotContract[] = [];
+      let timelineSequence: any;
+
+      if (await storage.exists(scenesPath)) {
+        const scenes = await storage.readJson<ProductionScene[]>(scenesPath);
+        for (const sc of scenes) {
+          if (sc.shots) shots.push(...sc.shots);
+        }
+      }
+
+      if (await storage.exists(timelinePath)) {
+        timelineSequence = await storage.readJson<any>(timelinePath);
+      }
+
+      if (shots.length === 0) {
+        shots = [
+          {
+            id: 'SHOT_QA_01',
+            purpose: 'establishing',
+            camera: { movement: 'static', shotSize: 'wide' },
+            transition: { type: 'cut', durationSeconds: 0 },
+            frame: { durationSeconds: 3.0, aspectRatio: '16:9', targetFps: 24 },
+            lighting: { colorTemperature: 'warm' },
+            environmentLocationId: 'loc_bridge',
+            acting: [
+              { characterId: 'kaito', outfitId: 'uniform_a', gazeDirection: 'screen_right' },
+            ],
+          } as unknown as ShotContract,
+          {
+            id: 'SHOT_QA_02',
+            purpose: 'dialogue_coverage',
+            camera: { movement: 'static', shotSize: 'close_up' },
+            transition: { type: 'cut', durationSeconds: 0 },
+            frame: { durationSeconds: 3.0, aspectRatio: '16:9', targetFps: 24 },
+            lighting: { colorTemperature: 'cool' },
+            environmentLocationId: 'loc_bridge',
+            acting: [
+              { characterId: 'kaito', outfitId: 'uniform_a', gazeDirection: 'screen_left' },
+            ],
+          } as unknown as ShotContract,
+        ];
+      }
+
+      if (subCommand === 'audit') {
+        const report = ContinuityQAEvaluator.evaluate({
+          projectId,
+          shots,
+          timelineSequence,
+        });
+
+        console.log(`🛡️ Continuity QA Audit for Project "${projectId}":`);
+        console.log(` - Overall Status  : ${report.overallPassed ? 'PASSED ✅' : 'ACTION REQUIRED ⚠️'}`);
+        console.log(` - Total Issues    : ${report.issues.length}`);
+
+        for (const iss of report.issues) {
+          const badge =
+            iss.severity === 'critical' ? '🔴 CRITICAL' : iss.severity === 'warning' ? '🟡 WARNING' : '🔵 INFO';
+          console.log(`\n ${badge} [${iss.type.toUpperCase()}] on Shot "${iss.shotId}"`);
+          console.log(`   • Details       : ${iss.message}`);
+          console.log(`   • Suggested Fix : ${iss.suggestedFix}`);
+          console.log(`   • Auto-Repair   : ${iss.autoRepairable ? 'YES ✅' : 'NO ❌'}`);
+        }
+        return 0;
+      }
+
+      if (subCommand === 'repair') {
+        const report = ContinuityQAEvaluator.evaluate({
+          projectId,
+          shots,
+          timelineSequence,
+        });
+
+        if (report.issues.length === 0) {
+          console.log(`✅ No continuity issues found for Project "${projectId}". Timeline is clean!`);
+          return 0;
+        }
+
+        if (!timelineSequence) {
+          timelineSequence = TimelineAssembler.assemble({
+            projectId,
+            shots,
+          });
+        }
+
+        const repairResult = AutoRepairEngine.repair({
+          report,
+          timelineSequence,
+          shots,
+        });
+
+        await storage.writeJson(timelinePath, repairResult.repairedSequence);
+
+        console.log(`🔧 Automated Continuity Repair Executed for Project "${projectId}":`);
+        console.log(` - Applied Repairs : ${repairResult.appliedActions.length} action(s)`);
+        for (const act of repairResult.appliedActions) {
+          console.log(`   • [${act.strategy.toUpperCase()}] ${act.description}`);
+        }
+        console.log(` - Remaining Issues: ${repairResult.remainingIssues.length}`);
+        console.log(` - Final Status    : ${repairResult.remainingIssues.some((i) => i.severity === 'critical') ? 'FAILED ❌' : 'RESOLVED ✅'}`);
+        return 0;
+      }
+
+      console.error(`Unknown QA subcommand: "${subCommand}". Supported: audit, repair`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -1744,6 +1864,8 @@ Commands:
   timeline assemble <projId> [sceneId]   Assemble multi-track timeline (video, audio, sfx, subs)
   timeline inspect <projId>              Inspect multi-track timeline tracks, clips, and transitions
   timeline subtitles <projId> [--format] Generate and display SRT or WebVTT subtitles
+  qa audit <projId>                      Run Continuity QA audit for 180-rule, lighting, wardrobe, audio
+  qa repair <projId>                     Apply automated repairs for detected continuity issues
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report

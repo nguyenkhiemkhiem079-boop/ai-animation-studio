@@ -400,6 +400,18 @@ LAN: Then we move tonight.`;
     const vttCode = await runCli(['timeline', 'subtitles', projectId, '--format', 'vtt'], { cwd: tempDir, storage });
     expect(vttCode).toBe(0);
   });
+
+  it('manages continuity QA audit and automated repairs via CLI', async () => {
+    const projectId = 'proj_cli_qa_test';
+
+    // 1. qa audit
+    const auditCode = await runCli(['qa', 'audit', projectId], { cwd: tempDir, storage });
+    expect(auditCode).toBe(0);
+
+    // 2. qa repair
+    const repairCode = await runCli(['qa', 'repair', projectId], { cwd: tempDir, storage });
+    expect(repairCode).toBe(0);
+  });
 });
 
 

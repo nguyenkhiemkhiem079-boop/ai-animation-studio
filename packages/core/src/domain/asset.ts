@@ -20,6 +20,8 @@ export const AssetTypeSchema = z.enum([
   'video_clip',
   'timeline_sequence',
   'subtitle_file',
+  'qa_report',
+  'export_manifest',
 ]);
 export type AssetType = z.infer<typeof AssetTypeSchema>;
 
