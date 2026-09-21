@@ -1,5 +1,5 @@
 /**
- * Domain models and schemas for Universe, Character DNA, Location DNA, and Canon.
+ * Domain models and schemas for Universe, Character DNA, Location DNA, Canon, World State, and Export Bundles.
  */
 
 import { z } from 'zod';
@@ -17,6 +17,7 @@ export const CharacterVersionSchema = z.object({
   version: z.number().int().positive(),
   summary: z.string(),
   visualChanges: z.string().optional(),
+  visualAnchorPrompt: z.string().optional(),
   canonicalAssetIds: z.array(z.string()).default([]),
   createdAt: z.string().datetime(),
 });
@@ -26,6 +27,7 @@ export const CharacterDNASchema = z.object({
   id: z.string().min(1), // e.g. CHAR_MINH_001
   seriesId: z.string().min(1),
   name: z.string().min(1),
+  aliases: z.array(z.string()).default([]),
   archetype: z.string().optional(),
   description: z.string(),
   visualAnchorPrompt: z.string(),
@@ -53,6 +55,7 @@ export const LocationDNASchema = z.object({
   id: z.string().min(1), // e.g. LOC_OLD_HOUSE_001
   seriesId: z.string().min(1),
   name: z.string().min(1),
+  aliases: z.array(z.string()).default([]),
   description: z.string(),
   zones: z.array(LocationZoneSchema).default([]),
   atmospherePrompt: z.string().optional(),
@@ -67,6 +70,7 @@ export const PropDNASchema = z.object({
   id: z.string().min(1), // e.g. PROP_ANCIENT_AMULET_001
   seriesId: z.string().min(1),
   name: z.string().min(1),
+  aliases: z.array(z.string()).default([]),
   description: z.string(),
   visualPrompt: z.string(),
   isCanonical: z.boolean().default(true),
@@ -93,12 +97,57 @@ export const CanonStateSchema = z.object({
 });
 export type CanonState = z.infer<typeof CanonStateSchema>;
 
+export const WorldStateSchema = z.object({
+  timestamp: z.string().datetime(),
+  episodeId: z.string().optional(),
+  sceneId: z.string().optional(),
+  characterLocations: z.record(
+    z.object({
+      locationId: z.string(),
+      zoneId: z.string().optional(),
+      status: z.string().optional(), // e.g. "active", "injured", "hidden"
+    })
+  ).default({}),
+  propHolders: z.record(z.string()).default({}), // propId -> characterId or locationId
+  worldFacts: z.array(z.string()).default([]),
+});
+export type WorldState = z.infer<typeof WorldStateSchema>;
+
+export const StateTransitionSchema = z.object({
+  id: z.string().min(1),
+  timestamp: z.string().datetime(),
+  trigger: z.string(), // e.g. "Minh enters the living room and picks up the amulet"
+  episodeId: z.string().optional(),
+  sceneId: z.string().optional(),
+  changes: z.object({
+    characterMovements: z.array(
+      z.object({
+        characterId: z.string(),
+        fromLocationId: z.string().optional(),
+        toLocationId: z.string(),
+        toZoneId: z.string().optional(),
+      })
+    ).default([]),
+    propTransfers: z.array(
+      z.object({
+        propId: z.string(),
+        fromHolder: z.string().optional(),
+        toHolder: z.string(),
+      })
+    ).default([]),
+    factsAdded: z.array(z.string()).default([]),
+    factsRemoved: z.array(z.string()).default([]),
+  }),
+});
+export type StateTransition = z.infer<typeof StateTransitionSchema>;
+
 export const ContinuitySnapshotSchema = z.object({
   id: z.string().min(1),
   seriesId: z.string().min(1),
   timestamp: z.string().datetime(),
-  characterStates: z.record(z.record(z.unknown())),
-  locationStates: z.record(z.record(z.unknown())),
+  episodeId: z.string().optional(),
+  sceneId: z.string().optional(),
+  worldState: WorldStateSchema,
   notes: z.string().optional(),
 });
 export type ContinuitySnapshot = z.infer<typeof ContinuitySnapshotSchema>;
@@ -116,8 +165,24 @@ export const UniverseSchema = z.object({
     worldFacts: [],
     updatedAt: new Date(0).toISOString(),
   }),
+  currentWorldState: WorldStateSchema.default({
+    timestamp: new Date(0).toISOString(),
+    characterLocations: {},
+    propHolders: {},
+    worldFacts: [],
+  }),
+  transitions: z.array(StateTransitionSchema).default([]),
   history: z.array(ContinuitySnapshotSchema).default([]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
 export type Universe = z.infer<typeof UniverseSchema>;
+
+export const UniverseExportBundleSchema = z.object({
+  schemaVersion: z.string().default('1.0.0'),
+  seriesId: z.string().min(1),
+  exportedAt: z.string().datetime(),
+  checksum: z.string().min(1),
+  universe: UniverseSchema,
+});
+export type UniverseExportBundle = z.infer<typeof UniverseExportBundleSchema>;

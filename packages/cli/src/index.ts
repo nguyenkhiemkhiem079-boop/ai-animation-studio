@@ -12,6 +12,7 @@ import {
   ProjectSchema,
   CharacterDNASchema,
   ShotContractSchema,
+  UniverseManager,
 } from '@ai-studio/core';
 
 export interface CliContext {
@@ -81,6 +82,75 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'universe': {
+      const subCommand = args[1];
+      const seriesId = args[2];
+      const universeManager = new UniverseManager(storage);
+
+      if (!seriesId) {
+        console.error('Error: Series ID is required. Usage: studio universe <show|export|import> <seriesId> [file]');
+        return 1;
+      }
+
+      if (subCommand === 'show') {
+        const universe = await universeManager.getOrCreateUniverse(seriesId);
+        console.log(`🌌 Universe Overview for Series "${seriesId}":`);
+        console.log(` - Characters (${Object.keys(universe.characters).length}):`, Object.keys(universe.characters).join(', ') || 'None');
+        console.log(` - Locations (${Object.keys(universe.locations).length}):`, Object.keys(universe.locations).join(', ') || 'None');
+        console.log(` - Props (${Object.keys(universe.props).length}):`, Object.keys(universe.props).join(', ') || 'None');
+        console.log(` - Locked Canon Characters:`, universe.canonState.lockedCharacterIds.join(', ') || 'None');
+        console.log(` - World Facts: ${universe.canonState.worldFacts.length} registered`);
+        return 0;
+      }
+
+      if (subCommand === 'export') {
+        const outputFile = args[3] || `.studio/universes/${seriesId}/export_bundle.json`;
+        const bundle = await universeManager.exportUniverse(seriesId);
+        await storage.writeJson(outputFile, bundle);
+        console.log(`✅ Universe for series "${seriesId}" exported to "${outputFile}". Checksum: ${bundle.checksum}`);
+        return 0;
+      }
+
+      if (subCommand === 'import') {
+        const inputFile = args[3];
+        if (!inputFile) {
+          console.error('Error: Input file required for universe import.');
+          return 1;
+        }
+        const bundle = await storage.readJson<any>(inputFile);
+        await universeManager.importUniverse(seriesId, bundle);
+        console.log(`✅ Universe bundle imported successfully into series "${seriesId}".`);
+        return 0;
+      }
+
+      console.error(`Unknown universe subcommand: "${subCommand}". Supported: show, export, import`);
+      return 1;
+    }
+
+    case 'character': {
+      const subCommand = args[1];
+      const seriesId = args[2];
+      const universeManager = new UniverseManager(storage);
+
+      if (!seriesId) {
+        console.error('Error: Series ID is required. Usage: studio character list <seriesId>');
+        return 1;
+      }
+
+      if (subCommand === 'list') {
+        const universe = await universeManager.getOrCreateUniverse(seriesId);
+        const characters = Object.values(universe.characters);
+        console.log(`🎭 Characters in Series "${seriesId}" (${characters.length} total):`);
+        for (const char of characters) {
+          console.log(` - [${char.id}] ${char.name} (v${char.currentVersion}) — Outfits: ${char.outfits.length}, Traits: [${char.traits.join(', ')}]`);
+        }
+        return 0;
+      }
+
+      console.error(`Unknown character subcommand: "${subCommand}". Supported: list`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -110,7 +180,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
     case 'help':
     default: {
       console.log(`
-🎬 AI Animation Studio CLI (v0.1.0)
+🎬 AI Animation Studio CLI (v0.2.0)
 
 Usage:
   studio <command> [options]
@@ -120,6 +190,10 @@ Commands:
   checkpoint list <projectId>            List all checkpoints for a project
   checkpoint create <projectId> <ckptId> Create a checkpoint snapshot
   checkpoint restore <projectId> <ckptId>Restore and verify a checkpoint
+  universe show <seriesId>               Show characters, locations, and canon in series universe
+  universe export <seriesId> [file]      Export series universe bundle
+  universe import <seriesId> <file>      Import series universe bundle
+  character list <seriesId>              List all canonical characters and active versions
   inspect <json-file> [schema]           Validate a JSON file against domain schemas
   help                                   Show this message
 `);

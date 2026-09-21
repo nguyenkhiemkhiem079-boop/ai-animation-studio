@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { runCli } from '../src/index.js';
-import { FileSystemStorage } from '@ai-studio/core';
+import { FileSystemStorage, UniverseManager } from '@ai-studio/core';
 
 describe('CLI Commands', () => {
   let tempDir: string;
@@ -66,5 +66,38 @@ describe('CLI Commands', () => {
       storage,
     });
     expect(code).toBe(0);
+  });
+
+  it('manages universe display, export, import, and character listing via CLI', async () => {
+    const universeManager = new UniverseManager(storage);
+    const seriesId = 'series_cli_test';
+
+    // Seed a character
+    await universeManager.addCharacter(seriesId, {
+      id: 'CHAR_CLI_01',
+      seriesId,
+      name: 'Agent Zero',
+      description: 'Undercover detective',
+      visualAnchorPrompt: 'Black suit, sunglasses',
+      traits: ['calm'],
+    });
+
+    // 1. universe show
+    const showCode = await runCli(['universe', 'show', seriesId], { cwd: tempDir, storage });
+    expect(showCode).toBe(0);
+
+    // 2. character list
+    const charListCode = await runCli(['character', 'list', seriesId], { cwd: tempDir, storage });
+    expect(charListCode).toBe(0);
+
+    // 3. universe export
+    const exportFile = 'exports/test_universe.json';
+    const exportCode = await runCli(['universe', 'export', seriesId, exportFile], { cwd: tempDir, storage });
+    expect(exportCode).toBe(0);
+    expect(await storage.exists(exportFile)).toBe(true);
+
+    // 4. universe import into backup series
+    const importCode = await runCli(['universe', 'import', 'series_cli_backup', exportFile], { cwd: tempDir, storage });
+    expect(importCode).toBe(0);
   });
 });

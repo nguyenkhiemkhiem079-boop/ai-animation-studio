@@ -70,7 +70,8 @@ ai-animation-studio/
 │   │   │   ├── pipeline/       # Pipeline execution engine
 │   │   │   ├── providers/      # IProvider, ProviderRegistry, MockProvider
 │   │   │   ├── asset-registry/ # AssetRegistry (dedup, versioning, canon approval)
-│   │   │   └── cinematic-skills/# Semantic skills (push_in, orbit, etc.)
+│   │   │   ├── cinematic-skills/# Semantic skills (push_in, orbit, etc.)
+│   │   │   └── universe/       # UniverseManager, WorldStateTracker, UniverseResolver, ProjectManager
 │   │   └── tests/              # Vitest test suite
 │   └── cli/                    # Studio developer CLI
 │       ├── src/
@@ -109,12 +110,16 @@ npm run test
 # Check studio environment health
 npx studio doctor
 
-# List checkpoints for a project
+# Checkpoints
 npx studio checkpoint list <projectId>
-
-# Create or restore checkpoint
 npx studio checkpoint create <projectId> v0.1-foundation
 npx studio checkpoint restore <projectId> v0.1-foundation
+
+# Universe & Characters
+npx studio universe show <seriesId>
+npx studio character list <seriesId>
+npx studio universe export <seriesId> backup.json
+npx studio universe import <seriesId> backup.json
 
 # Validate a JSON artifact against domain schemas
 npx studio inspect ./project.json project
@@ -126,7 +131,8 @@ npx studio inspect ./project.json project
 
 - [x] **PHASE 0: FOUNDATION** (`v0.1-foundation`)
   * Monorepo skeleton, Core domain, Zod schemas, Provider abstraction, Pipeline engine, Checkpoint system, Asset Registry, ShotContract, CinematicSkill foundation, Storage abstraction, Errors, Logging, Events, Vitest test suite, CI workflow, AGENTS.md, Architecture documentation.
-- [ ] **PHASE 1: PROJECT + SERIES + UNIVERSE CORE** (`v0.2-universe`)
+- [x] **PHASE 1: PROJECT + SERIES + UNIVERSE CORE** (`v0.2-universe`)
+  * Series namespace isolation, UniverseManager, Immutable CharacterDNA versioning, LocationDNA zones & props, Relationships, WorldStateTracker, StateTransitions, ContinuitySnapshot, UniverseResolver, Local persistence, Universe import/export.
 - [ ] **PHASE 2: STORY INTELLIGENCE ENGINE** (`v0.3-story-intelligence`)
 - [ ] **PHASE 3: SCENE & SHOT DIRECTOR** (`v0.4-director`)
 - [ ] **PHASE 4: CHARACTER & ASSET STUDIO** (`v0.5-character-assets`)
