@@ -27,6 +27,7 @@ import {
   CharacterStudio,
   FileSystemAssetRegistry,
   TurnaroundView,
+  WorldStudio,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -259,6 +260,83 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       }
 
       console.error(`Unknown asset subcommand: "${subCommand}". Supported: approve`);
+      return 1;
+    }
+
+    case 'world': {
+      const subCommand = args[1];
+      const seriesId = args[2];
+      const locationId = args[3];
+      const zoneId = args[4] || 'main_room';
+      const universeManager = new UniverseManager(storage);
+      const assetRegistry = new FileSystemAssetRegistry(storage);
+      const worldStudio = new WorldStudio(universeManager, assetRegistry);
+
+      if (!seriesId || !locationId) {
+        console.error('Error: Series ID and Location ID are required. Usage: studio world <show|staging|resolve|props> <seriesId> <locationId> [zoneId]');
+        return 1;
+      }
+
+      if (subCommand === 'show') {
+        const universe = await universeManager.getOrCreateUniverse(seriesId);
+        const location = universe.locations[locationId];
+        if (!location) {
+          console.error(`Error: Location "${locationId}" not found in series "${seriesId}".`);
+          return 1;
+        }
+        console.log(`🏰 Location Overview: "${location.name}" [${location.id}]`);
+        console.log(` - Description: ${location.description}`);
+        console.log(` - Zones (${location.zones.length}):`);
+        for (const zone of location.zones) {
+          console.log(`   • [${zone.id}] ${zone.name} — Props: [${zone.keyProps.join(', ')}]`);
+        }
+        const refSet = await worldStudio.getLocationReferenceSet(seriesId, locationId, zoneId);
+        console.log(` - Active Reference Set for zone "${zoneId}":`);
+        console.log(`   • Establishing Backdrop: ${refSet.wideEstablishingAssetId || 'None registered'}`);
+        console.log(`   • Depth Layers: ${refSet.layers.length} registered`);
+        console.log(`   • Lighting Presets: ${Object.keys(refSet.lightingPresets).length} available`);
+        console.log(`   • Atmosphere Presets: ${Object.keys(refSet.atmospherePresets).length} available`);
+        return 0;
+      }
+
+      if (subCommand === 'staging') {
+        const sceneMap = await worldStudio.getOrCreateSceneMap(seriesId, locationId, zoneId);
+        console.log(`📐 Spatial Staging & Scene Map for "${locationId}" Zone "${zoneId}":`);
+        console.log(` - Dimensions: ${sceneMap.dimensions.widthMeters}m x ${sceneMap.dimensions.lengthMeters}m x ${sceneMap.dimensions.heightMeters}m (W x L x H)`);
+        console.log(` - Spatial Anchors (${sceneMap.anchors.length}):`);
+        for (const anchor of sceneMap.anchors) {
+          console.log(
+            `   • [${anchor.id}] ${anchor.name.padEnd(20)} | Pos: (${anchor.position.x}, ${anchor.position.y}, ${anchor.position.z}) | Facing: ${anchor.facingAngleDeg}° | Props: [${anchor.associatedProps.join(', ')}]`
+          );
+        }
+        return 0;
+      }
+
+      if (subCommand === 'resolve') {
+        const refSet = await worldStudio.getLocationReferenceSet(seriesId, locationId, zoneId);
+        console.log(`🌍 Environment Resolution for "${locationId}" Zone "${zoneId}":`);
+        console.log(` - Establishing Backdrop Asset: ${refSet.wideEstablishingAssetId || 'None'}`);
+        console.log(` - Multi-Plane Layers (${refSet.layers.length}):`);
+        for (const layer of refSet.layers) {
+          console.log(
+            `   • [${layer.type.toUpperCase().padEnd(11)}] ${layer.name.padEnd(25)} (Order: ${layer.depthOrder}, Parallax: ${layer.parallaxFactor}x) -> Asset: ${layer.assetId}`
+          );
+        }
+        return 0;
+      }
+
+      if (subCommand === 'props') {
+        const props = worldStudio.getPropTracker().getProps(seriesId, locationId, zoneId);
+        console.log(`📦 Prop Placements for "${locationId}" Zone "${zoneId}" (${props.length} total):`);
+        for (const prop of props) {
+          console.log(
+            ` - [${prop.propId}] ${prop.propName.padEnd(20)} | Anchor: ${prop.anchorId.padEnd(16)} | State: ${prop.state.toUpperCase()}`
+          );
+        }
+        return 0;
+      }
+
+      console.error(`Unknown world subcommand: "${subCommand}". Supported: show, staging, resolve, props`);
       return 1;
     }
 
@@ -529,6 +607,10 @@ Commands:
   character resolve <seriesId> <charId>  Resolve or reuse character asset (view/expression/pose)
   character qa <seriesId> <charId> <id>  Run Identity QA audit on candidate asset
   asset approve <assetId>                Promote candidate asset to approved canon
+  world show <seriesId> <locId> [zoneId] Show location zones, landmarks, layers, and presets
+  world staging <seriesId> <locId> <zId> Show 3D/2D spatial layout and landmark anchors
+  world resolve <seriesId> <locId> <zId> Resolve environmental backdrop and depth layers
+  world props <seriesId> <locId> <zId>   List props and mutable states in zone
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report

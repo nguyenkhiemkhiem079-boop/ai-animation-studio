@@ -18,3 +18,4 @@ export * from './story/index.js';
 export * from './director/index.js';
 export * from './skill-os/index.js';
 export * from './character/index.js';
+export * from './world/index.js';

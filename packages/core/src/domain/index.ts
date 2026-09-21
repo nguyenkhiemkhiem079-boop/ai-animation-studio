@@ -4,3 +4,4 @@ export * from './story.js';
 export * from './director.js';
 export * from './asset.js';
 export * from './cinematic.js';
+export * from './world.js';

@@ -234,4 +234,43 @@ LAN: Then we move tonight.`;
     );
     expect(approveCode).toBe(0);
   });
+
+  it('manages world location staging, scene maps, resolve, and props via CLI', async () => {
+    const universeManager = new UniverseManager(storage);
+    const seriesId = 'series_cli_world_test';
+    const locId = 'LOC_CLI_01';
+
+    // 1. Seed location in universe
+    await universeManager.addLocation(seriesId, {
+      id: locId,
+      seriesId,
+      name: 'Old Observatory',
+      aliases: ['The Tower'],
+      description: 'Mountain top dome observatory with brass telescope.',
+      zones: [
+        {
+          id: 'dome_room',
+          name: 'Telescope Dome Room',
+          description: 'Circular room with revolving dome slit.',
+          keyProps: ['brass_telescope', 'star_chart_table'],
+        },
+      ],
+    });
+
+    // 2. world show
+    const showCode = await runCli(['world', 'show', seriesId, locId, 'dome_room'], { cwd: tempDir, storage });
+    expect(showCode).toBe(0);
+
+    // 3. world staging
+    const stagingCode = await runCli(['world', 'staging', seriesId, locId, 'dome_room'], { cwd: tempDir, storage });
+    expect(stagingCode).toBe(0);
+
+    // 4. world resolve
+    const resolveCode = await runCli(['world', 'resolve', seriesId, locId, 'dome_room'], { cwd: tempDir, storage });
+    expect(resolveCode).toBe(0);
+
+    // 5. world props
+    const propsCode = await runCli(['world', 'props', seriesId, locId, 'dome_room'], { cwd: tempDir, storage });
+    expect(propsCode).toBe(0);
+  });
 });
