@@ -6,3 +6,4 @@ export * from './asset.js';
 export * from './cinematic.js';
 export * from './world.js';
 export * from './production.js';
+export * from './hyperframes.js';

@@ -293,5 +293,22 @@ LAN: Then we move tonight.`;
     const setCapCode = await runCli(['production', 'budget', projectId, '--set-cap', '75.50'], { cwd: tempDir, storage });
     expect(setCapCode).toBe(0);
   });
+
+  it('manages hyperframes compilation, preview, and deterministic render via CLI', async () => {
+    const projectId = 'proj_cli_hf_test';
+
+    // 1. hyperframes compile
+    const compileCode = await runCli(['hyperframes', 'compile', projectId, 'SHOT_HF_01'], { cwd: tempDir, storage });
+    expect(compileCode).toBe(0);
+
+    // 2. hyperframes preview
+    const previewCode = await runCli(['hyperframes', 'preview', projectId, 'SHOT_HF_01'], { cwd: tempDir, storage });
+    expect(previewCode).toBe(0);
+
+    // 3. hyperframes render
+    const renderCode = await runCli(['hyperframes', 'render', projectId, 'SHOT_HF_01'], { cwd: tempDir, storage });
+    expect(renderCode).toBe(0);
+  });
 });
+
 

@@ -34,6 +34,8 @@ import {
   BudgetController,
   ProviderRegistry,
   ShotContract,
+  HyperFramesCompositionCompiler,
+  HyperFramesAdapter,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -783,6 +785,135 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'hyperframes': {
+      const subCommand = args[1];
+      const projectId = args[2];
+      const shotId = args[3] || 'SHOT_01';
+
+      if (!projectId) {
+        console.error('Error: Project ID is required. Usage: studio hyperframes <compile|preview|render> <projectId> [shotId]');
+        return 1;
+      }
+
+      // Try loading shot or create a standard representative deterministic shot
+      const scenesPath = `.studio/director/${projectId}_scenes.json`;
+      let targetShot: ShotContract | undefined;
+      if (await storage.exists(scenesPath)) {
+        const scenes = await storage.readJson<ProductionScene[]>(scenesPath);
+        for (const s of scenes) {
+          const found = s.shots.find((sh) => sh.id === shotId);
+          if (found) {
+            targetShot = found;
+            break;
+          }
+        }
+      }
+
+      if (!targetShot) {
+        targetShot = {
+          id: shotId,
+          sceneId: 'SCENE_01',
+          shotNumber: 1,
+          purpose: 'establishing',
+          complexity: 'simple_transform',
+          rendererIntent: 'deterministic_hyperframes',
+          frame: { durationSeconds: 3.5, targetFps: 24, aspectRatio: '16:9' },
+          camera: {
+            focalLength: '35mm',
+            shotSize: 'wide',
+            angle: 'eye_level',
+            movement: 'push_in',
+            semanticSkills: ['pushin'],
+          },
+          lighting: {
+            keyLightDirection: 'left',
+            mood: 'noir_suspense',
+            colorTemperature: 'cool',
+            fogAtmosphere: false,
+          },
+          composition: {
+            rule: 'rule_of_thirds',
+            subjectPlacement: 'center',
+            depthLayers: { foreground: [], midground: [], background: [] },
+          },
+          acting: [
+            {
+              characterId: 'char_main',
+              pose: 'standing_watchful',
+              expression: 'serious',
+              gazeDirection: 'screen_right',
+              dialogueLine: 'We must move before dawn.',
+            },
+          ],
+          transition: { type: 'cut', durationSeconds: 0 },
+          environmentLocationId: 'loc_observatory',
+          environmentZoneId: 'dome_room',
+          audioCue: { sfx: [] },
+          requiredAssetIds: ['ASSET_CHAR_MAIN'],
+          dependsOnShotIds: [],
+          directorLocks: {
+            isCameraLocked: false,
+            isFramingLocked: false,
+            isRendererLocked: false,
+            isActingLocked: false,
+          },
+          provenance: { decidedAt: new Date().toISOString() },
+        };
+      }
+
+      const compiler = new HyperFramesCompositionCompiler();
+      const adapter = new HyperFramesAdapter(compiler, storage);
+
+      if (subCommand === 'compile') {
+        const composition = compiler.compile(targetShot);
+        const outPath = `.studio/hyperframes/${composition.compositionId}.html`;
+        await storage.write(outPath, composition.html);
+
+        console.log(`🎬 HyperFrames Composition Compiled for Shot "${shotId}":`);
+        console.log(` - Composition ID : ${composition.compositionId}`);
+        console.log(` - Canvas Size    : ${composition.width}x${composition.height} @ ${composition.fps}fps`);
+        console.log(` - Duration       : ${composition.durationSeconds}s`);
+        console.log(` - Layers Count   : ${composition.layers.length}`);
+        console.log(` - Semantic Skills: ${composition.semanticSkills.join(', ') || 'None'}`);
+        console.log(` - Output File    : ${outPath} ✅`);
+        return 0;
+      }
+
+      if (subCommand === 'preview') {
+        const composition = compiler.compile(targetShot);
+        console.log(`👁️ HyperFrames Timeline Preview for Shot "${shotId}":`);
+        console.log(` - Composition ID: ${composition.compositionId} (${composition.durationSeconds}s, ${composition.fps}fps)`);
+        console.log(` - Layers (${composition.layers.length}):`);
+        for (const l of composition.layers) {
+          console.log(`   • [${l.type.toUpperCase()}] "${l.name}" (id: ${l.id}, zIndex: ${l.zIndex}, parallax: ${l.parallaxFactor})`);
+        }
+        console.log(` - Semantic Skills Applied: ${composition.semanticSkills.join(', ') || 'None'}`);
+        console.log(` - Camera Movement: ${targetShot.camera.movement}`);
+        return 0;
+      }
+
+      if (subCommand === 'render') {
+        const res = await adapter.execute({
+          taskType: 'deterministic_anim',
+          input: { shot: targetShot },
+        });
+        const out = res.output as any;
+        console.log(`🚀 HyperFrames Deterministic Render for Shot "${shotId}":`);
+        console.log(` - Status       : COMPLETED ✅`);
+        console.log(` - Output Asset : ${out.assetId}`);
+        console.log(` - Format       : ${out.renderResult.format}`);
+        console.log(` - Duration     : ${res.durationMs}ms`);
+        console.log(` - Actual Cost  : $${res.actualCostUsd.toFixed(4)} USD (100% Deterministic)`);
+        if (out.renderResult.htmlPath) {
+          console.log(` - Stored File  : ${out.renderResult.htmlPath}`);
+        }
+        return 0;
+      }
+
+      console.error(`Unknown hyperframes subcommand: "${subCommand}". Supported: compile, preview, render`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -837,6 +968,9 @@ Commands:
   production route <projId> <shotId>     Evaluate production route (Deterministic vs Generative)
   production plan <projId> [seriesId]    Plan production, breakdown, cost & latency for all shots
   production budget <projId> [--set-cap] View or configure project budget and headroom
+  hyperframes compile <projId> <shotId>  Compile shot into standalone HyperFrames HTML composition
+  hyperframes preview <projId> <shotId>  Preview composition layers and timeline animation
+  hyperframes render <projId> <shotId>   Execute deterministic render via HyperFrames adapter (0 cost)
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report

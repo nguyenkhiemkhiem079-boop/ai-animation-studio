@@ -150,6 +150,11 @@ npx studio production route <projectId> <shotId>
 npx studio production plan <projectId> [seriesId]
 npx studio production budget <projectId> [--set-cap <usd>]
 
+# HyperFrames & Deterministic Animation
+npx studio hyperframes compile <projectId> <shotId>
+npx studio hyperframes preview <projectId> <shotId>
+npx studio hyperframes render <projectId> <shotId>
+
 # Validate a JSON artifact against domain schemas
 npx studio inspect ./project.json project
 ```
@@ -172,6 +177,7 @@ npx studio inspect ./project.json project
   * SpatialMemory & 2D/3D SceneMap staging, Multi-plane depth layer management (foreground, midground, background, depth_map), Parallax displacement computation (pan, truck, push_in), Lighting presets (noir, golden hour, high noon, etc.), Atmosphere presets (dense fog, blizzard, dust motes, etc.), PropPlacementTracker & mutable prop state tracking, LocationReferenceResolver, WorldStudio coordinator, WorldEnvironmentPipelineStep for DAG pipeline.
 - [x] **PHASE 6: PRODUCTION ROUTER & ASSET GENERATION** (`v0.7-production-router`)
   * ProductionRouter implementing Deterministic Animation First rules, PromptCompiler implementing reference-binding discipline and anti-bleed rules, BudgetController for monitoring and enforcing financial caps, RenderCache for deterministic SHA-256 deduplication and zero-cost re-runs, ProviderBenchmarkTracker for performance, cost, and quality statistics, JobOrchestrator with automatic retries and fallback providers, ProductionPlanningPipelineStep for DAG pipeline.
-- [ ] **PHASE 7: HYPERFRAMES & DETERMINISTIC ANIMATION** (`v0.8-hyperframes`)
+- [x] **PHASE 7: HYPERFRAMES & DETERMINISTIC ANIMATION** (`v0.8-hyperframes`)
+  * HyperFramesCompositionCompiler compiling ShotContracts and layer hierarchies into standalone HTML compositions, ParallaxEngine computing differential motion vectors for multi-plane depth, HyperFramesLayerSystem structuring foreground/midground/backdrop/subtitle layers, CinematicSkillCompiler translating semantic skills (push_in, pull_out, pan_left, orbit, handheld, vintagefilm, motionblur, slowmo) into seekable GSAP timelines, HyperFramesAdapter (IProvider) rendering deterministic animations at $0.00 cost, HyperFramesExecutionPipelineStep for DAG pipeline.
 - [ ] **PHASE 8: CHARACTER ANIMATION SYSTEM** (`v0.9-character-animation`)
 - [ ] **PHASE 9: GENERATIVE VIDEO PROVIDERS**
