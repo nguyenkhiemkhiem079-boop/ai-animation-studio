@@ -1,8 +1,10 @@
+import * as path from 'node:path';
 import { PipelineContext, PipelineStep } from '../pipeline/index.js';
 import { ProductionScene, ShotContract } from '../domain/director.js';
 import { ProductionPlan } from '../domain/production.js';
 import { HyperFramesRenderResult } from '../domain/hyperframes.js';
 import { HyperFramesAdapter } from './hyperframes-adapter.js';
+import { HyperFramesVideoBridge } from './hyperframes-video-bridge.js';
 import { ShotEnvironmentReferencePacket } from '../world/location-reference-resolver.js';
 import { ValidationError } from '../errors/index.js';
 
@@ -72,6 +74,9 @@ export class HyperFramesExecutionPipelineStep implements PipelineStep {
     );
 
     const renderedCompositions: Record<string, HyperFramesRenderResult> = {};
+    const executionMode = (state.executionMode as string) || 'MOCK';
+    const shotVideoMap: Record<string, string> = { ...((state.shotVideoMap as Record<string, string>) || {}) };
+    const projectId = (state.projectId as string) || 'default_project';
 
     for (const shot of allShots) {
       if (deterministicShotIds.has(shot.id)) {
@@ -86,6 +91,15 @@ export class HyperFramesExecutionPipelineStep implements PipelineStep {
         logger.info(
           `Rendered HyperFrames composition for shot "${shot.id}" (asset: ${output.assetId}, 0.00 USD)`
         );
+
+        if ((executionMode === 'LOCAL' || executionMode === 'PRODUCTION') && output.composition) {
+          const videoDir = path.join('.studio', 'renders', projectId);
+          const videoPath = path.join(videoDir, `${shot.id}.mp4`);
+          logger.info(`Rendering HyperFrames MP4 video for shot "${shot.id}" via headless bridge...`);
+          await HyperFramesVideoBridge.renderToMp4(output.composition, videoPath);
+          shotVideoMap[shot.id] = videoPath;
+          shotVideoMap[output.assetId] = videoPath;
+        }
       }
     }
 
@@ -103,6 +117,7 @@ export class HyperFramesExecutionPipelineStep implements PipelineStep {
     return {
       renderedHyperFramesCompositions: renderedCompositions,
       hyperFramesExecutionSummary: summary,
+      shotVideoMap,
     };
   }
 }

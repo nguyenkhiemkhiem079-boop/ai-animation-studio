@@ -31,11 +31,29 @@ export class RenderCache {
   }
 
   public get(cacheKey: string): GenerationResult | undefined {
-    return this.cache.get(cacheKey);
+    const cached = this.cache.get(cacheKey);
+    if (!cached) return undefined;
+
+    // Physical cache validity check: If mediaUri/storageUri points to a file, verify it physically exists and is non-empty
+    const uri = cached.mediaUri || (cached as any).storageUri;
+    if (uri && typeof uri === 'string' && !uri.startsWith('http')) {
+      try {
+        const fs = require('node:fs');
+        if (!fs.existsSync(uri) || fs.statSync(uri).size === 0) {
+          this.cache.delete(cacheKey);
+          return undefined;
+        }
+      } catch {
+        this.cache.delete(cacheKey);
+        return undefined;
+      }
+    }
+
+    return cached;
   }
 
   public has(cacheKey: string): boolean {
-    return this.cache.has(cacheKey);
+    return this.get(cacheKey) !== undefined;
   }
 
   public set(cacheKey: string, result: GenerationResult): void {

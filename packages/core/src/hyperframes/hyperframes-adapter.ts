@@ -9,6 +9,7 @@ import { ShotContract } from '../domain/director.js';
 import { ShotEnvironmentReferencePacket } from '../world/location-reference-resolver.js';
 import { HyperFramesCompositionCompiler } from './composition-compiler.js';
 import { HyperFramesRenderResult } from '../domain/hyperframes.js';
+import { MediaToolchainDoctor } from '../media/toolchain-doctor.js';
 
 export class HyperFramesAdapter implements IProvider {
   public readonly metadata: ProviderMetadata = {
@@ -27,7 +28,8 @@ export class HyperFramesAdapter implements IProvider {
   ) {}
 
   public async healthCheck(): Promise<boolean> {
-    return true;
+    const diag = MediaToolchainDoctor.diagnose();
+    return diag.browser.available && diag.ffmpeg.available;
   }
 
   public async execute<TInput = unknown, TOutput = unknown>(

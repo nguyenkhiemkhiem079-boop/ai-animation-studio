@@ -43,8 +43,24 @@ export class MasterExportPipelineStep implements PipelineStep {
     const otioContent = NLEInterchangeExporter.exportOtio(sequence);
     const edlContent = NLEInterchangeExporter.exportEdl(sequence);
 
-    // 3. Compile Video Render Manifest
-    const videoManifest = VideoRenderer.compileRenderManifest({ sequence, format: 'mp4_manifest' });
+    // 3. Compile or Render Master Video
+    const executionMode = (state.executionMode as string) || 'MOCK';
+    let videoManifest: ExportManifest;
+    let masterVideoPath: string | undefined;
+
+    if ((executionMode === 'LOCAL' || executionMode === 'PRODUCTION') && state.shotVideoMap) {
+      logger.info('Executing real video rendering with FFmpeg in LOCAL/PRODUCTION mode...');
+      const renderResult = await VideoRenderer.render({
+        sequence,
+        shotVideoMap: state.shotVideoMap as any,
+        masterAudioPath: state.masterAudioPath as string | undefined,
+      });
+      videoManifest = renderResult.manifest;
+      masterVideoPath = renderResult.outputPath;
+      state.masterVideoPath = masterVideoPath;
+    } else {
+      videoManifest = VideoRenderer.compileRenderManifest({ sequence, format: 'mp4_manifest' });
+    }
 
     // 4. Register Assets in AssetRegistry if available
     if (this.assetRegistry) {

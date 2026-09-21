@@ -3,6 +3,8 @@
  */
 
 import { AssetDescriptor, AssetDescriptorSchema, AssetStatus, AssetType } from '../domain/asset.js';
+import { ArtifactState, ArtifactVerificationResult } from '../domain/execution-mode.js';
+import { ArtifactVerifier } from '../media/artifact-verifier.js';
 import { ValidationError } from '../errors/index.js';
 import type { IStorageProvider } from '../storage/index.js';
 
@@ -15,20 +17,27 @@ export interface AssetQueryFilter {
   version?: number;
 }
 
+export type RegisterAssetInput = Omit<AssetDescriptor, 'createdAt' | 'artifactState'> & {
+  artifactState?: ArtifactState;
+};
+
 export interface IAssetRegistry {
-  register(asset: Omit<AssetDescriptor, 'createdAt'>): Promise<AssetDescriptor>;
+  register(asset: RegisterAssetInput): Promise<AssetDescriptor>;
   findById(id: string): Promise<AssetDescriptor | null>;
   findByHash(seriesId: string, contentHash: string): Promise<AssetDescriptor | null>;
   query(filter: AssetQueryFilter): Promise<AssetDescriptor[]>;
   approveCanon(assetId: string): Promise<AssetDescriptor>;
+  updateArtifactState(assetId: string, state: ArtifactState): Promise<AssetDescriptor>;
+  verifyPhysicalArtifact(assetId: string): Promise<ArtifactVerificationResult>;
 }
 
 export class InMemoryAssetRegistry implements IAssetRegistry {
   private assetsById = new Map<string, AssetDescriptor>();
   private assetsByHashSeries = new Map<string, AssetDescriptor>(); // key: `${seriesId}:${contentHash}`
 
-  public async register(assetData: Omit<AssetDescriptor, 'createdAt'>): Promise<AssetDescriptor> {
-    const fullAsset: AssetDescriptor = {
+  public async register(assetData: RegisterAssetInput): Promise<AssetDescriptor> {
+    const fullAsset = {
+      artifactState: 'DECLARED' as const,
       ...assetData,
       createdAt: new Date().toISOString(),
     };
@@ -88,6 +97,33 @@ export class InMemoryAssetRegistry implements IAssetRegistry {
     return updated;
   }
 
+  public async updateArtifactState(assetId: string, state: ArtifactState): Promise<AssetDescriptor> {
+    const asset = this.assetsById.get(assetId);
+    if (!asset) {
+      throw new ValidationError(`Asset "${assetId}" not found for state update`);
+    }
+
+    const updated: AssetDescriptor = {
+      ...asset,
+      artifactState: state,
+    };
+    this.assetsById.set(assetId, updated);
+    this.assetsByHashSeries.set(`${asset.seriesId}:${asset.contentHash}`, updated);
+    return updated;
+  }
+
+  public async verifyPhysicalArtifact(assetId: string): Promise<ArtifactVerificationResult> {
+    const asset = this.assetsById.get(assetId);
+    if (!asset) {
+      throw new ValidationError(`Asset "${assetId}" not found for physical verification`);
+    }
+
+    const verification = await ArtifactVerifier.verify(asset.storageUri);
+    const newState: ArtifactState = (verification.exists && verification.nonEmpty) ? 'VERIFIED' : 'MISSING';
+    await this.updateArtifactState(assetId, newState);
+    return verification;
+  }
+
   public getAll(): AssetDescriptor[] {
     return Array.from(this.assetsById.values());
   }
@@ -125,7 +161,7 @@ export class FileSystemAssetRegistry implements IAssetRegistry {
     await this.storage.writeJson(this.manifestPath, all);
   }
 
-  public async register(assetData: Omit<AssetDescriptor, 'createdAt'>): Promise<AssetDescriptor> {
+  public async register(assetData: RegisterAssetInput): Promise<AssetDescriptor> {
     await this.ensureInitialized();
     const result = await this.inMemory.register(assetData);
     await this.saveCurrentState();
@@ -152,6 +188,20 @@ export class FileSystemAssetRegistry implements IAssetRegistry {
     const updated = await this.inMemory.approveCanon(assetId);
     await this.saveCurrentState();
     return updated;
+  }
+
+  public async updateArtifactState(assetId: string, state: ArtifactState): Promise<AssetDescriptor> {
+    await this.ensureInitialized();
+    const updated = await this.inMemory.updateArtifactState(assetId, state);
+    await this.saveCurrentState();
+    return updated;
+  }
+
+  public async verifyPhysicalArtifact(assetId: string): Promise<ArtifactVerificationResult> {
+    await this.ensureInitialized();
+    const result = await this.inMemory.verifyPhysicalArtifact(assetId);
+    await this.saveCurrentState();
+    return result;
   }
 
   public getAll(): AssetDescriptor[] {

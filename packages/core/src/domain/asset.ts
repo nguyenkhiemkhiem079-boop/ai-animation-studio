@@ -113,11 +113,21 @@ export const IdentityLockSchema = z.object({
 });
 export type IdentityLock = z.infer<typeof IdentityLockSchema>;
 
+export const ArtifactStateSchema = z.enum([
+  'DECLARED',
+  'GENERATING',
+  'GENERATED',
+  'VERIFIED',
+  'MISSING',
+  'CORRUPT',
+]);
+
 export const AssetDescriptorSchema = z.object({
   id: z.string().min(1),
   seriesId: z.string().min(1),
   type: AssetTypeSchema,
   status: AssetStatusSchema.default('candidate'),
+  artifactState: ArtifactStateSchema.optional(),
   name: z.string().min(1),
   contentHash: z.string().min(1), // SHA-256 of file/data for deduplication
   storageUri: z.string().min(1),

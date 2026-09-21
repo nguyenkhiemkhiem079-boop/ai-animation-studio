@@ -61,7 +61,10 @@ export class ProductionPlanningPipelineStep implements PipelineStep {
     );
 
     // 3. Plan production across all shots
-    const productionPlan: ProductionPlan = router.planProduction(projectId, seriesId, allShots);
+    const executionMode = (state.executionMode as any) || 'MOCK';
+    const productionPlan: ProductionPlan = router.planProduction(projectId, seriesId, allShots, {
+      executionMode,
+    });
 
     // 4. Budget check if controller present
     let budgetStatus;

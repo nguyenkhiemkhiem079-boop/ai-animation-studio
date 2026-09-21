@@ -64,6 +64,7 @@ import {
   VideoRenderer,
   StudioPipelineFactory,
   ProductionSummaryCalculator,
+  MediaToolchainDoctor,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -87,8 +88,36 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log(`- Registered Semantic Skills: ${STANDARD_CINEMATIC_SKILLS.length} skills loaded`);
       const hasGit = await storage.exists('.git');
       console.log(`- Git Repository: ${hasGit ? 'Detected ✅' : 'Missing ⚠️'}`);
-      console.log('System is healthy and ready for animation pipelines! 🚀');
-      return 0;
+
+      const toolchain = MediaToolchainDoctor.diagnose(true);
+      console.log('\n🎞️  Media Production Toolchain:');
+      console.log(`- FFmpeg : ${toolchain.ffmpeg.available ? 'Ready ✅' : 'Missing ❌'} (${toolchain.ffmpeg.path ?? 'N/A'}) - ${toolchain.ffmpeg.details ?? ''}`);
+      console.log(`- FFprobe: ${toolchain.ffprobe.available ? 'Ready ✅' : 'Missing ❌'} (${toolchain.ffprobe.path ?? 'N/A'}) - ${toolchain.ffprobe.details ?? ''}`);
+      console.log(`- Browser: ${toolchain.browser.available ? 'Ready ✅' : 'Missing ❌'} (${toolchain.browser.path ?? 'N/A'}) - ${toolchain.browser.details ?? ''}`);
+
+      if (toolchain.allReady) {
+        console.log('\nSystem is 100% healthy and ready for real production media rendering! 🚀');
+        return 0;
+      } else {
+        console.log('\n⚠️ Toolchain is missing one or more media rendering components.');
+        return 1;
+      }
+    }
+
+    case 'smoke': {
+      const subCommand = args[1] || 'golden';
+      if (subCommand === 'media') {
+        const { runMediaSmoke } = await import('./smoke/media-smoke.js');
+        await runMediaSmoke();
+        return 0;
+      } else if (subCommand === 'golden') {
+        const { runGoldenSmoke } = await import('./smoke/golden-smoke.js');
+        await runGoldenSmoke();
+        return 0;
+      } else {
+        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media`);
+        return 1;
+      }
     }
 
     case 'checkpoint': {
@@ -2048,6 +2077,8 @@ Usage:
 
 Commands:
   doctor                                 Check environment, node version, and system health
+  smoke golden                           Run end-to-end golden smoke test (Minh & White Butterfly -> master.mp4)
+  smoke media                            Run media toolchain smoke test (FFmpeg, FFprobe, Browser, real audio & video)
   checkpoint list <projectId>            List all checkpoints for a project
   checkpoint create <projectId> <ckptId> Create a checkpoint snapshot
   checkpoint restore <projectId> <ckptId>Restore and verify a checkpoint

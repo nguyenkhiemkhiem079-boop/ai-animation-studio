@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { PipelineContext, PipelineStep } from '../pipeline/index.js';
 import { ProductionScene } from '../domain/director.js';
 import {
@@ -12,6 +13,8 @@ import { ScoreComposer } from './score-composer.js';
 import { FoleyMixer } from './foley-mixer.js';
 import { AudioMixEngine } from './audio-mix-engine.js';
 import { MockAudioProvider } from './mock-audio-provider.js';
+import { LocalAudioGenerator } from './local-audio-generator.js';
+import { RealAudioMixer } from './real-audio-mixer.js';
 import { IAssetRegistry } from '../asset-registry/index.js';
 import { ValidationError } from '../errors/index.js';
 import { TimedViseme } from '../character-animation/lip-sync.js';
@@ -194,9 +197,39 @@ export class AudioProductionPipelineStep implements PipelineStep {
       totalDurationSeconds: Number(timeCursorSeconds.toFixed(2)),
     };
 
-    logger.info(
-      `Audio Production complete. Dialogue: ${summary.totalDialogueLines}, Music: ${summary.totalMusicTracks}, SFX: ${summary.totalSfxCues}. Cost: $${summary.totalAudioCostUsd}, Duration: ${summary.totalDurationSeconds}s`
-    );
+    // 3. Real Audio Mix Execution in LOCAL / PRODUCTION mode
+    let masterAudioPath: string | undefined;
+    const executionMode = (state.executionMode as string) || 'MOCK';
+    if (executionMode === 'LOCAL' || executionMode === 'PRODUCTION') {
+      const audioDir = path.join('.studio', 'audio', projectId);
+      const musicWav = path.join(audioDir, 'scene_music.wav');
+      const sfxWav = path.join(audioDir, 'scene_sfx.wav');
+
+      await LocalAudioGenerator.generate({
+        outputPath: musicWav,
+        durationSeconds: Math.max(0.5, timeCursorSeconds),
+        type: 'music',
+      });
+
+      await LocalAudioGenerator.generate({
+        outputPath: sfxWav,
+        durationSeconds: Math.max(0.5, timeCursorSeconds * 0.5),
+        type: 'sfx',
+      });
+
+      const mixResult = await RealAudioMixer.mix({
+        projectId,
+        outputDir: audioDir,
+        totalDurationSeconds: Math.max(0.5, timeCursorSeconds),
+        stems: [
+          { filePath: musicWav, startTimeSeconds: 0, volume: 0.6, stemType: 'music' },
+          { filePath: sfxWav, startTimeSeconds: 0.5, volume: 0.8, stemType: 'sfx' },
+        ],
+      });
+
+      masterAudioPath = mixResult.masterAudioPath;
+      logger.info(`Mixed real master audio for project "${projectId}" at: ${masterAudioPath}`);
+    }
 
     return {
       audioMixContract,
@@ -205,6 +238,7 @@ export class AudioProductionPipelineStep implements PipelineStep {
       sfxCues: allSfxCues,
       actorVisemeMap,
       audioStepSummary: summary,
+      masterAudioPath,
     };
   }
 }

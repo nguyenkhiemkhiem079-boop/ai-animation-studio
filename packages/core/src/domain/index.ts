@@ -13,3 +13,4 @@ export * from './audio.js';
 export * from './timeline.js';
 export * from './qa.js';
 export * from './export.js';
+export * from './execution-mode.js';

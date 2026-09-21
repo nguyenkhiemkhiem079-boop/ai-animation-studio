@@ -7,3 +7,5 @@ export * from './score-composer.js';
 export * from './foley-mixer.js';
 export * from './audio-mix-engine.js';
 export * from './audio-pipeline-step.js';
+export * from './local-audio-generator.js';
+export * from './real-audio-mixer.js';

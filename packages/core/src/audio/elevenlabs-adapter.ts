@@ -32,6 +32,7 @@ export interface ElevenLabsAdapterOptions {
 export class ElevenLabsVoiceAdapter implements IProvider {
   public readonly metadata: ProviderMetadata;
   private executor?: ElevenLabsRequestExecutor;
+  private apiKey?: string;
 
   constructor(options: ElevenLabsAdapterOptions = {}) {
     this.metadata = {
@@ -44,10 +45,23 @@ export class ElevenLabsVoiceAdapter implements IProvider {
       averageLatencyMs: options.latencyMs ?? 40,
     };
     this.executor = options.executor;
+    this.apiKey = options.apiKey ?? process.env.ELEVENLABS_API_KEY;
   }
 
   public async healthCheck(): Promise<boolean> {
-    return true;
+    return !!(this.executor || this.apiKey);
+  }
+
+  public async diagnoseHealth(): Promise<any> {
+    const isConfigured = !!(this.executor || this.apiKey);
+    return {
+      providerId: this.metadata.id,
+      name: this.metadata.name,
+      status: isConfigured ? 'AVAILABLE' : 'NOT_CONFIGURED',
+      isLocal: false,
+      capabilities: this.metadata.capabilities,
+      details: isConfigured ? 'ElevenLabs API key configured' : 'ELEVENLABS_API_KEY environment variable not configured',
+    };
   }
 
   public async execute<TInput = unknown, TOutput = unknown>(

@@ -2,7 +2,9 @@ import { z } from 'zod';
 
 export const ExportFormatSchema = z.enum([
   'html5_bundle',
+  'mp4',
   'mp4_manifest',
+  'webm',
   'webm_manifest',
   'otio',
   'edl',

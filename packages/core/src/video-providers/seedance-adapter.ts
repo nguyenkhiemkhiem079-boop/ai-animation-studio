@@ -35,6 +35,7 @@ export interface SeedanceAdapterOptions {
 export class SeedanceVideoAdapter implements IProvider {
   public readonly metadata: ProviderMetadata;
   private executor?: SeedanceRequestExecutor;
+  private apiKey?: string;
 
   constructor(options: SeedanceAdapterOptions = {}) {
     this.metadata = {
@@ -47,10 +48,23 @@ export class SeedanceVideoAdapter implements IProvider {
       averageLatencyMs: options.latencyMs ?? 45,
     };
     this.executor = options.executor;
+    this.apiKey = options.apiKey ?? process.env.SEEDANCE_API_KEY;
   }
 
   public async healthCheck(): Promise<boolean> {
-    return true;
+    return !!(this.executor || this.apiKey);
+  }
+
+  public async diagnoseHealth(): Promise<any> {
+    const isConfigured = !!(this.executor || this.apiKey);
+    return {
+      providerId: this.metadata.id,
+      name: this.metadata.name,
+      status: isConfigured ? 'AVAILABLE' : 'NOT_CONFIGURED',
+      isLocal: false,
+      capabilities: this.metadata.capabilities,
+      details: isConfigured ? 'Seedance credentials configured' : 'ByteDance Seedance credentials not configured',
+    };
   }
 
   public async execute<TInput = unknown, TOutput = unknown>(

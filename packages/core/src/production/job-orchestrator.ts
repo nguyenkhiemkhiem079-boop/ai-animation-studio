@@ -9,13 +9,15 @@ import { RenderCache } from './render-cache.js';
 import { BudgetController } from './budget-controller.js';
 import { ProviderBenchmarkTracker } from './benchmark-tracker.js';
 import { StudioError } from '../errors/index.js';
+import { StudioExecutionMode, ProductionSafetyError } from '../domain/execution-mode.js';
 
 export class JobOrchestrator {
   constructor(
     private providerRegistry: ProviderRegistry,
     private renderCache: RenderCache,
     private budgetController: BudgetController,
-    private benchmarkTracker: ProviderBenchmarkTracker
+    private benchmarkTracker: ProviderBenchmarkTracker,
+    private executionMode: StudioExecutionMode = 'MOCK'
   ) {}
 
   public async dispatchJob(
@@ -97,6 +99,20 @@ export class JobOrchestrator {
     job: GenerationJob,
     providerId: string
   ): Promise<GenerationResult | undefined> {
+    if (this.executionMode === 'PRODUCTION') {
+      if (providerId.includes('mock') || !this.providerRegistry.has(providerId)) {
+        throw new ProductionSafetyError(
+          `Cannot use mock or unconfigured provider "${providerId}" in PRODUCTION mode.`
+        );
+      }
+      const p = this.providerRegistry.get(providerId);
+      if ((p.metadata as any).isMock) {
+        throw new ProductionSafetyError(
+          `Provider "${providerId}" is classified as MOCK and cannot run in PRODUCTION mode.`
+        );
+      }
+    }
+
     if (!this.providerRegistry.has(providerId)) {
       // Deterministic local mock fallback if provider not in registry
       const isLocal = providerId.includes('local');

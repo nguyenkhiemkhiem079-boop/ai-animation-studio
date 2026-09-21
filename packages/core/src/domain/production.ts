@@ -104,6 +104,7 @@ export const GenerationResultSchema = z.object({
   wasCached: z.boolean().default(false),
   actualCostUsd: z.number().nonnegative().default(0.0),
   durationMs: z.number().nonnegative().default(0),
+  mediaUri: z.string().optional(),
   error: z.string().optional(),
 });
 export type GenerationResult = z.infer<typeof GenerationResultSchema>;

@@ -42,6 +42,8 @@ export interface VeoAdapterOptions {
 export class VeoVideoAdapter implements IProvider {
   public readonly metadata: ProviderMetadata;
   private executor?: VeoRequestExecutor;
+  private apiKey?: string;
+  private apiEndpoint?: string;
 
   constructor(options: VeoAdapterOptions = {}) {
     this.metadata = {
@@ -54,10 +56,24 @@ export class VeoVideoAdapter implements IProvider {
       averageLatencyMs: options.latencyMs ?? 50,
     };
     this.executor = options.executor;
+    this.apiKey = options.apiKey ?? process.env.GOOGLE_API_KEY ?? process.env.VEO_API_KEY;
+    this.apiEndpoint = options.apiEndpoint;
   }
 
   public async healthCheck(): Promise<boolean> {
-    return true;
+    return !!(this.executor || this.apiKey);
+  }
+
+  public async diagnoseHealth(): Promise<any> {
+    const isConfigured = !!(this.executor || this.apiKey);
+    return {
+      providerId: this.metadata.id,
+      name: this.metadata.name,
+      status: isConfigured ? 'AVAILABLE' : 'NOT_CONFIGURED',
+      isLocal: false,
+      capabilities: this.metadata.capabilities,
+      details: isConfigured ? 'Veo credentials configured' : 'Google Cloud / Veo credentials not configured',
+    };
   }
 
   public async execute<TInput = unknown, TOutput = unknown>(

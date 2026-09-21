@@ -36,9 +36,27 @@ export interface ProviderResult<TOutput = unknown> {
   providerId: string;
 }
 
+export type ProviderHealthStatus =
+  | 'AVAILABLE'
+  | 'UNAVAILABLE'
+  | 'NOT_CONFIGURED'
+  | 'DEGRADED'
+  | 'RATE_LIMITED'
+  | 'TEST_ONLY';
+
+export interface ProviderHealthReport {
+  providerId: string;
+  name: string;
+  status: ProviderHealthStatus;
+  isLocal: boolean;
+  capabilities: ProviderCapability[];
+  details?: string;
+}
+
 export interface IProvider {
   readonly metadata: ProviderMetadata;
   healthCheck(): Promise<boolean>;
+  diagnoseHealth?(): Promise<ProviderHealthReport>;
   execute<TInput = unknown, TOutput = unknown>(task: ProviderTask<TInput>): Promise<ProviderResult<TOutput>>;
 }
 
@@ -106,6 +124,41 @@ export class ProviderRegistry {
     }
 
     return candidates[0];
+  }
+
+  public async diagnoseAll(): Promise<ProviderHealthReport[]> {
+    const reports: ProviderHealthReport[] = [];
+    for (const provider of this.providers.values()) {
+      if (typeof provider.diagnoseHealth === 'function') {
+        reports.push(await provider.diagnoseHealth());
+      } else {
+        const isMock = provider.metadata.id.includes('mock') || (provider.metadata as any).isMock;
+        let isHealthy = false;
+        try {
+          isHealthy = await provider.healthCheck();
+        } catch {
+          isHealthy = false;
+        }
+
+        let status: ProviderHealthStatus;
+        if (isMock) {
+          status = 'TEST_ONLY';
+        } else if (isHealthy) {
+          status = 'AVAILABLE';
+        } else {
+          status = 'NOT_CONFIGURED';
+        }
+
+        reports.push({
+          providerId: provider.metadata.id,
+          name: provider.metadata.name,
+          status,
+          isLocal: provider.metadata.isLocal,
+          capabilities: provider.metadata.capabilities,
+        });
+      }
+    }
+    return reports;
   }
 }
 

@@ -9,11 +9,13 @@ import { ProviderRegistry, IProvider } from '../providers/index.js';
 import { PromptCompiler } from './prompt-compiler.js';
 import { ProviderBenchmarkTracker } from './benchmark-tracker.js';
 import { BudgetController } from './budget-controller.js';
+import { StudioExecutionMode, ProductionSafetyError } from '../domain/execution-mode.js';
 
 export interface RouteOptions {
   availableAssetIds?: string[];
   forceGenerative?: boolean;
   preferLocal?: boolean;
+  executionMode?: StudioExecutionMode;
 }
 
 export class ProductionRouter {
@@ -35,6 +37,9 @@ export class ProductionRouter {
     } else if (options.forceGenerative) {
       executionRoute = 'generative_full_video';
       rationale = 'Generative video forced via route options.';
+    } else if (options.executionMode === 'LOCAL') {
+      executionRoute = 'deterministic_hyperframes';
+      rationale = 'Routed to HyperFrames deterministic renderer in LOCAL execution mode.';
     } else {
       // 2. Evaluates Shot Characteristics (Deterministic Animation First)
       const isComplexCamera =
@@ -87,7 +92,20 @@ export class ProductionRouter {
       estimatedCostUsd = 0.0;
       estimatedLatencyMs = 50;
     } else {
-      const videoProviders = this.providerRegistry.findByCapability('video_gen');
+      let videoProviders = this.providerRegistry.findByCapability('video_gen');
+
+      // Safeguard: In PRODUCTION mode, never automatically select mock providers
+      if (options.executionMode === 'PRODUCTION') {
+        videoProviders = videoProviders.filter(
+          (p) => !p.metadata.id.includes('mock') && !(p.metadata as any).isMock
+        );
+        if (videoProviders.length === 0) {
+          throw new ProductionSafetyError(
+            `Cannot route shot "${shot.id}" to generative video in PRODUCTION mode: No real video generation provider configured.`
+          );
+        }
+      }
+
       const bestVideo = this.benchmarkTracker.getBestProvider(videoProviders) ?? videoProviders[0];
 
       if (bestVideo) {
@@ -101,6 +119,11 @@ export class ProductionRouter {
           fallbackProviderId = otherProviders[0].metadata.id;
         }
       } else {
+        if (options.executionMode === 'PRODUCTION') {
+          throw new ProductionSafetyError(
+            `Cannot route shot "${shot.id}" in PRODUCTION mode: No valid production video provider found.`
+          );
+        }
         primaryProviderId = 'generic-video-worker';
         estimatedCostUsd = 0.5;
         estimatedLatencyMs = 15000;
