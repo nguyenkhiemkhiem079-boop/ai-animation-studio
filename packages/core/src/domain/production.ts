@@ -47,6 +47,8 @@ export const ProductionStrategySchema = z.object({
   promptPacket: CompiledPromptPacketSchema.optional(),
   isDeterministic: z.boolean().default(false),
   requiresContinuation: z.boolean().default(false),
+  integrationMode: z.enum(['ASSISTED', 'AUTOMATED', 'DETERMINISTIC']).optional(),
+  userActionRequired: z.boolean().optional(),
 });
 export type ProductionStrategy = z.infer<typeof ProductionStrategySchema>;
 

@@ -77,6 +77,11 @@ import {
   GeminiProvider,
   LLMProviderRegistry,
   getCentralizedModelPolicy,
+  FlowJobManager,
+  FlowProductionPackageBuilder,
+  FlowResultImporter,
+  FlowQAEvaluator,
+  FlowIntegrationMode,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -130,8 +135,12 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const { runGeminiSmoke } = await import('./smoke/gemini-smoke.js');
         await runGeminiSmoke();
         return 0;
+      } else if (subCommand === 'flow') {
+        const { runFlowSmoke } = await import('./smoke/flow-smoke.js');
+        await runFlowSmoke();
+        return 0;
       } else {
-        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini`);
+        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow`);
         return 1;
       }
     }
@@ -202,6 +211,268 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return 0;
       }
       console.error(`Unknown gemini subcommand: "${subCommand}". Supported: doctor, models, smoke`);
+      return 1;
+    }
+
+    case 'flow': {
+      const subCommand = args[1] || 'doctor';
+      const assetRegistry = new FileSystemAssetRegistry(storage);
+      const flowManager = new FlowJobManager(assetRegistry);
+
+      if (subCommand === 'doctor') {
+        console.log('🩺 Running Google Flow Bridge Doctor...');
+        console.log('- Provider: Google Flow (External Creative Workspace)');
+        console.log('- Integration Mode: ASSISTED');
+        console.log('- Official Automation API: NOT CONFIGURED / UNSUPPORTED (Assisted workflow only)');
+        console.log('- Flow Package Builder: AVAILABLE');
+        console.log('- Flow Prompt Compiler: AVAILABLE');
+        console.log('- Flow Result Importer: AVAILABLE');
+        console.log('- Artifact Verification: AVAILABLE');
+        const diag = MediaToolchainDoctor.diagnose();
+        console.log(`- Media Toolchain (FFprobe): ${diag.ffprobe.available ? 'AVAILABLE ✅' : 'NOT FOUND ⚠️'}`);
+        console.log('- Continuity QA Evaluator: AVAILABLE');
+        console.log('- Status: READY (ASSISTED WORKFLOW)');
+        return 0;
+      }
+
+      if (subCommand === 'smoke') {
+        const { runFlowSmoke } = await import('./smoke/flow-smoke.js');
+        await runFlowSmoke();
+        return 0;
+      }
+
+      const defaultShot: ShotContract = {
+        id: args[2] || 'SHOT_DEFAULT',
+        sceneId: 'SCENE_01',
+        shotNumber: 1,
+        purpose: 'establishing',
+        complexity: 'complex_generative_video',
+        rendererIntent: 'generative_full_video',
+        frame: {
+          durationSeconds: 4.0,
+          aspectRatio: '16:9',
+          targetFps: 24,
+        },
+        camera: {
+          focalLength: '35mm',
+          shotSize: 'medium_close_up',
+          angle: 'eye_level',
+          movement: 'push_in',
+          semanticSkills: ['/pushin'],
+        },
+        lighting: {
+          keyLightDirection: 'front',
+          mood: 'cinematic',
+          colorTemperature: 'warm',
+          fogAtmosphere: false,
+        },
+        composition: {
+          rule: 'rule_of_thirds',
+          subjectPlacement: 'center',
+          depthLayers: {
+            foreground: [],
+            midground: ['subject'],
+            background: ['environment'],
+          },
+        },
+        acting: [
+          {
+            characterId: 'CHAR_ACTOR',
+            pose: 'cautious_motion',
+            expression: 'determined',
+            gazeDirection: 'screen_left',
+            actionPrompt: `Action for shot ${args[2] || 'SHOT_DEFAULT'}`,
+          },
+        ],
+        transition: {
+          type: 'cut',
+          durationSeconds: 0,
+        },
+        audioCue: {
+          sfx: [],
+        },
+        requiredAssetIds: [],
+        dependsOnShotIds: [],
+        directorLocks: {
+          isCameraLocked: false,
+          isFramingLocked: false,
+          isRendererLocked: false,
+          isActingLocked: false,
+        },
+        provenance: {
+          sourceBeatId: 'BEAT_01',
+          directorProfileId: 'DEFAULT_CINEMATIC',
+          decidedAt: new Date().toISOString(),
+        },
+      };
+
+      if (subCommand === 'prepare' || subCommand === 'package') {
+        const shotId = args[2];
+        const projectId = args[3] || 'proj_flow_default';
+        const seriesId = args[4] || 'series_flow_default';
+
+        if (!shotId) {
+          console.error('Error: Shot ID is required. Usage: studio flow prepare <shotId> [projectId] [seriesId]');
+          return 1;
+        }
+
+        console.log(`📦 Preparing Google Flow Production Package for shot "${shotId}" in project "${projectId}"...`);
+        const shot = { ...defaultShot, id: shotId };
+
+        const job = await flowManager.prepareFlowJob({
+          projectId,
+          seriesId,
+          sceneId: 'SCENE_01',
+          shot,
+          sourceReferences: [],
+          references: [],
+        });
+
+        console.log(`✅ Google Flow Package prepared successfully!`);
+        console.log(`- Job ID: ${job.jobId}`);
+        console.log(`- Package Directory: ${job.packageDir}`);
+        console.log(`- Recommended Workflow: ${job.package?.recommendedWorkflow}`);
+        console.log(`- Status: ${job.status} (Open Google Flow to render externally)`);
+        return 0;
+      }
+
+      if (subCommand === 'status') {
+        const shotId = args[2];
+        if (!shotId) {
+          console.error('Error: Shot ID is required. Usage: studio flow status <shotId>');
+          return 1;
+        }
+        const jobs = flowManager.getJobsForShot(shotId);
+        if (jobs.length === 0) {
+          console.log(`No Flow production jobs found for shot "${shotId}".`);
+          return 0;
+        }
+        console.log(`🎬 Flow Jobs for shot "${shotId}" (${jobs.length} total):`);
+        for (const j of jobs) {
+          console.log(` - Job [${j.jobId}] v${j.version} | Status: ${j.status} | Workflow: ${j.package?.recommendedWorkflow}`);
+          if (j.importResult?.candidateAssetId) console.log(`   Candidate Asset: ${j.importResult.candidateAssetId}`);
+        }
+        return 0;
+      }
+
+      if (subCommand === 'import') {
+        const shotId = args[2];
+        const videoPath = args[3];
+        const projectId = args[4] || 'proj_flow_default';
+
+        if (!shotId || !videoPath) {
+          console.error('Error: Shot ID and Video Path are required. Usage: studio flow import <shotId> <videoPath> [projectId]');
+          return 1;
+        }
+
+        console.log(`📥 Importing Google Flow generation for shot "${shotId}" from: ${videoPath}...`);
+        let jobs = flowManager.getJobsForShot(shotId);
+        let job = jobs[jobs.length - 1];
+        if (!job) {
+          console.log(`Creating ad-hoc Flow tracking job for shot "${shotId}"...`);
+          const shot = { ...defaultShot, id: shotId };
+          job = await flowManager.prepareFlowJob({
+            projectId,
+            seriesId: 'series_flow_default',
+            sceneId: 'SCENE_01',
+            shot,
+          });
+        }
+
+        const updatedJob = await flowManager.importFlowResult(job.jobId, videoPath);
+
+        console.log(`\n✅ Flow generation imported and verified!`);
+        console.log(`- Candidate Asset ID: ${updatedJob.importResult?.candidateAssetId}`);
+        console.log(`- Resolution: ${updatedJob.importResult?.provenance.resolution}`);
+        console.log(`- Duration: ${updatedJob.importResult?.provenance.durationSeconds}s`);
+        console.log(`- SHA-256: ${updatedJob.importResult?.provenance.checksumSha256}`);
+        console.log(`- Provenance Source: ${updatedJob.importResult?.provenance.sourceType} (${updatedJob.importResult?.provenance.integrationMode})`);
+        console.log(`- QA Status: ${updatedJob.qaReport?.overallStatus} (Score: ${updatedJob.qaReport?.score}%)`);
+        console.log(`- Current State: ${updatedJob.status} (Review and run 'studio flow approve ${shotId}' to pin to timeline)`);
+        return 0;
+      }
+
+      if (subCommand === 'qa') {
+        const shotId = args[2];
+        if (!shotId) {
+          console.error('Error: Shot ID is required. Usage: studio flow qa <shotId>');
+          return 1;
+        }
+        const jobs = flowManager.getJobsForShot(shotId);
+        const job = jobs[jobs.length - 1];
+        if (!job || !job.qaReport) {
+          console.error(`Error: No QA report found for shot "${shotId}". Import a candidate first.`);
+          return 1;
+        }
+        console.log(`🔍 QA Audit for Shot "${shotId}" Candidate:`);
+        console.log(`- Overall Status: ${job.qaReport.overallStatus}`);
+        console.log(`- Can Approve: ${job.qaReport.canApprove ? 'YES ✅' : 'NO ❌'}`);
+        console.log(`- Score: ${job.qaReport.score}%`);
+        if (job.qaReport.issues.length > 0) {
+          console.log(`- Issues (${job.qaReport.issues.length}):`);
+          for (const issue of job.qaReport.issues) {
+            console.log(`   [${issue.severity}] ${issue.dimension}: ${issue.message}`);
+          }
+        }
+        return job.qaReport.canApprove ? 0 : 1;
+      }
+
+      if (subCommand === 'approve') {
+        const shotId = args[2];
+        if (!shotId) {
+          console.error('Error: Shot ID is required. Usage: studio flow approve <shotId>');
+          return 1;
+        }
+        const jobs = flowManager.getJobsForShot(shotId);
+        const job = jobs[jobs.length - 1];
+        if (!job) {
+          console.error(`Error: No candidate asset to approve for shot "${shotId}".`);
+          return 1;
+        }
+        const approvedJob = await flowManager.approveCandidate(job.jobId, 'Approved via CLI');
+        console.log(`🎉 Approved Flow generation for shot "${shotId}"!`);
+        console.log(`- Canonical Asset ID: ${approvedJob.importResult?.candidateAssetId}`);
+        console.log(`- Timeline Pinned: YES ✅`);
+        return 0;
+      }
+
+      if (subCommand === 'reject') {
+        const shotId = args[2];
+        const reason = args[3] || 'Rejected by director';
+        if (!shotId) {
+          console.error('Error: Shot ID is required. Usage: studio flow reject <shotId> [reason]');
+          return 1;
+        }
+        const jobs = flowManager.getJobsForShot(shotId);
+        const job = jobs[jobs.length - 1];
+        if (!job) {
+          console.error(`Error: No job found for shot "${shotId}".`);
+          return 1;
+        }
+        await flowManager.rejectCandidate(job.jobId, reason);
+        console.log(`🚫 Rejected Flow generation for shot "${shotId}".`);
+        console.log(`- Rejection Reason: ${reason}`);
+        console.log(`- Asset retained in archive for provenance/history.`);
+        return 0;
+      }
+
+      if (subCommand === 'history') {
+        const shotId = args[2];
+        if (!shotId) {
+          console.error('Error: Shot ID is required. Usage: studio flow history <shotId>');
+          return 1;
+        }
+        const jobs = flowManager.getJobsForShot(shotId);
+        console.log(`📜 Generation History for shot "${shotId}" (${jobs.length} versions):`);
+        for (const j of jobs) {
+          console.log(` - v${j.version} [${j.jobId}]: Status ${j.status.padEnd(16)} | Created: ${j.createdAt}`);
+          if (j.importResult?.candidateAssetId) console.log(`     Asset: ${j.importResult.candidateAssetId}`);
+          if (j.rejectionReason) console.log(`     Rejected: ${j.rejectionReason}`);
+        }
+        return 0;
+      }
+
+      console.error(`Unknown flow subcommand: "${subCommand}". Supported: doctor, prepare, package, status, import, qa, approve, reject, history, smoke`);
       return 1;
     }
 
@@ -2165,11 +2436,21 @@ Commands:
   smoke golden                           Run end-to-end golden smoke test (Minh & White Butterfly -> master.mp4)
   smoke media                            Run media toolchain smoke test (FFmpeg, FFprobe, Browser, real audio & video)
   smoke gemini                           Run Gemini provider smoke test (offline safe, canonical golden story)
+  smoke flow                             Run Google Flow production bridge smoke test (offline safe, packages assets)
   providers list                         List registered LLM providers and capabilities
   providers doctor [--live]              Check LLM providers health (config check or live ping)
   gemini doctor [--live]                 Run Gemini provider diagnostics (credential & API status)
   gemini models                          Display centralized Gemini model role mapping
   gemini smoke                           Run Gemini structured extraction smoke test
+  flow doctor                            Check Google Flow bridge health, integration mode & tools
+  flow prepare <shotId> [proj]           Build self-contained Google Flow production package
+  flow status <shotId> [proj]            List or inspect Google Flow generation job status
+  flow import <shotId> <mp4Path>         Import & verify rendered MP4 from Google Flow
+  flow qa <shotId> [proj]                Run automated continuity QA on imported Flow candidate
+  flow approve <shotId> [proj]           Promote verified candidate to canonical asset
+  flow reject <shotId> [reason]          Record rejection for Flow candidate
+  flow history <shotId> [proj]           List all generation versions and history for shot
+  flow smoke                             Run Google Flow production bridge smoke test
   checkpoint list <projectId>            List all checkpoints for a project
   checkpoint create <projectId> <ckptId> Create a checkpoint snapshot
   checkpoint restore <projectId> <ckptId>Restore and verify a checkpoint

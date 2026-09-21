@@ -15,6 +15,7 @@ export interface RouteOptions {
   availableAssetIds?: string[];
   forceGenerative?: boolean;
   preferLocal?: boolean;
+  preferFlowAssisted?: boolean;
   executionMode?: StudioExecutionMode;
 }
 
@@ -85,12 +86,23 @@ export class ProductionRouter {
     let fallbackProviderId: string | undefined;
     let estimatedCostUsd = 0.0;
     let estimatedLatencyMs = 50;
+    let integrationMode: 'ASSISTED' | 'AUTOMATED' | 'DETERMINISTIC' = isDeterministic ? 'DETERMINISTIC' : 'AUTOMATED';
+    let userActionRequired = false;
 
-    if (isDeterministic) {
+    if (options.preferFlowAssisted) {
+      primaryProviderId = 'google-flow-assisted';
+      fallbackProviderId = 'hyperframes-local';
+      estimatedCostUsd = 0.0;
+      estimatedLatencyMs = 60000;
+      integrationMode = 'ASSISTED';
+      userActionRequired = true;
+      rationale = 'Routed to Google Flow Assisted production: external creative workspace with human handoff.';
+    } else if (isDeterministic) {
       primaryProviderId = 'hyperframes-local';
       fallbackProviderId = 'svg-canvas-local';
       estimatedCostUsd = 0.0;
       estimatedLatencyMs = 50;
+      integrationMode = 'DETERMINISTIC';
     } else {
       let videoProviders = this.providerRegistry.findByCapability('video_gen');
 
@@ -180,6 +192,8 @@ export class ProductionRouter {
       promptPacket,
       isDeterministic,
       requiresContinuation,
+      integrationMode,
+      userActionRequired,
     };
   }
 
