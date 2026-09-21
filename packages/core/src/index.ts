@@ -26,3 +26,4 @@ export * from './video-providers/index.js';
 export * from './audio/index.js';
 export * from './timeline/index.js';
 export * from './qa/index.js';
+export * from './export/index.js';

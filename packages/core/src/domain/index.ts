@@ -12,3 +12,4 @@ export * from './generative-video.js';
 export * from './audio.js';
 export * from './timeline.js';
 export * from './qa.js';
+export * from './export.js';

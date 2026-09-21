@@ -59,6 +59,9 @@ import {
   SubtitleGenerator,
   ContinuityQAEvaluator,
   AutoRepairEngine,
+  Html5PlayerPackager,
+  NLEInterchangeExporter,
+  VideoRenderer,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -1792,6 +1795,98 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'export': {
+      const subCommand = args[1];
+      const projectId = args[2];
+
+      if (!projectId) {
+        console.error('Error: Project ID is required. Usage: studio export <html5|nle|render> <projectId> [options]');
+        return 1;
+      }
+
+      const timelinePath = `.studio/timelines/${projectId}_sequence.json`;
+      let sequence: any;
+
+      if (await storage.exists(timelinePath)) {
+        sequence = await storage.readJson<any>(timelinePath);
+      } else {
+        sequence = TimelineAssembler.assemble({
+          projectId,
+          shots: [
+            {
+              id: 'SHOT_EX_01',
+              purpose: 'establishing',
+              camera: { movement: 'static', shotSize: 'wide' },
+              transition: { type: 'cut', durationSeconds: 0 },
+              frame: { durationSeconds: 3.5, aspectRatio: '16:9', targetFps: 24 },
+            } as unknown as ShotContract,
+          ],
+        });
+      }
+
+      if (subCommand === 'html5') {
+        const html = Html5PlayerPackager.package({ sequence });
+        const outputPath = `.studio/exports/${projectId}_player.html`;
+        await storage.write(outputPath, html);
+
+        console.log(`🌐 Standalone HTML5 Interactive Player Packaged for Project "${projectId}":`);
+        console.log(` - Output File    : ${outputPath}`);
+        console.log(` - File Size      : ${(html.length / 1024).toFixed(1)} KB`);
+        console.log(` - Resolution     : ${sequence.resolution.width}x${sequence.resolution.height} @ ${sequence.fps}fps`);
+        console.log(` - Total Duration : ${sequence.totalDuration.toFixed(2)}s`);
+        console.log(' - Features       : Scrubbable timeline, Web Audio stems, Subtitle captions, Dark Mode UI ✅');
+        return 0;
+      }
+
+      if (subCommand === 'nle') {
+        const format = args.includes('--format') ? args[args.indexOf('--format') + 1] : 'otio';
+
+        if (format === 'edl') {
+          const edl = NLEInterchangeExporter.exportEdl(sequence);
+          const outputPath = `.studio/exports/${projectId}.edl`;
+          await storage.write(outputPath, edl);
+
+          console.log(`📋 CMX 3600 Edit Decision List Exported for Project "${projectId}":`);
+          console.log(` - Output File    : ${outputPath}`);
+          console.log(` - Compatible NLEs: DaVinci Resolve, Adobe Premiere Pro, Final Cut Pro ✅`);
+          return 0;
+        }
+
+        const otio = NLEInterchangeExporter.exportOtio(sequence);
+        const outputPath = `.studio/exports/${projectId}.otio`;
+        await storage.write(outputPath, otio);
+
+        console.log(`📋 OpenTimelineIO (.otio) Sequence Exported for Project "${projectId}":`);
+        console.log(` - Output File    : ${outputPath}`);
+        console.log(` - Total Tracks   : ${sequence.tracks.length} track(s)`);
+        console.log(` - Standard Schema: Timeline.1 (OpenTimelineIO) ✅`);
+        return 0;
+      }
+
+      if (subCommand === 'render') {
+        const format = args.includes('--format')
+          ? args[args.indexOf('--format') + 1] === 'webm'
+            ? 'webm_manifest'
+            : 'mp4_manifest'
+          : 'mp4_manifest';
+        const manifest = VideoRenderer.compileRenderManifest({ sequence, format });
+        const outputPath = `.studio/exports/${projectId}_render_manifest.json`;
+        await storage.writeJson(outputPath, manifest);
+
+        console.log(`🎬 Video Render Manifest Compiled for Project "${projectId}":`);
+        console.log(` - Manifest ID    : ${manifest.manifestId}`);
+        console.log(` - Target Format  : ${manifest.format.toUpperCase()}`);
+        console.log(` - Codec / Audio  : ${manifest.metadata?.codec}`);
+        console.log(` - Resolution     : ${manifest.resolution.width}x${manifest.resolution.height} @ ${manifest.fps}fps`);
+        console.log(` - Total Frames   : ${manifest.metadata?.totalFrames} frames`);
+        console.log(` - Output File    : ${manifest.outputFiles[0].uri}`);
+        return 0;
+      }
+
+      console.error(`Unknown export subcommand: "${subCommand}". Supported: html5, nle, render`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -1866,6 +1961,9 @@ Commands:
   timeline subtitles <projId> [--format] Generate and display SRT or WebVTT subtitles
   qa audit <projId>                      Run Continuity QA audit for 180-rule, lighting, wardrobe, audio
   qa repair <projId>                     Apply automated repairs for detected continuity issues
+  export html5 <projId>                  Package standalone interactive HTML5 player bundle
+  export nle <projId> [--format otio|edl]Export timeline to OpenTimelineIO or CMX 3600 EDL
+  export render <projId> [--format]      Compile final video render manifest (MP4 / WebM)
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report

@@ -412,6 +412,26 @@ LAN: Then we move tonight.`;
     const repairCode = await runCli(['qa', 'repair', projectId], { cwd: tempDir, storage });
     expect(repairCode).toBe(0);
   });
+
+  it('manages master exports (HTML5, NLE, Video manifest) via CLI', async () => {
+    const projectId = 'proj_cli_export_test';
+
+    // 1. export html5
+    const html5Code = await runCli(['export', 'html5', projectId], { cwd: tempDir, storage });
+    expect(html5Code).toBe(0);
+
+    // 2. export nle (otio)
+    const otioCode = await runCli(['export', 'nle', projectId, '--format', 'otio'], { cwd: tempDir, storage });
+    expect(otioCode).toBe(0);
+
+    // 3. export nle (edl)
+    const edlCode = await runCli(['export', 'nle', projectId, '--format', 'edl'], { cwd: tempDir, storage });
+    expect(edlCode).toBe(0);
+
+    // 4. export render (mp4)
+    const renderCode = await runCli(['export', 'render', projectId, '--format', 'mp4'], { cwd: tempDir, storage });
+    expect(renderCode).toBe(0);
+  });
 });
 
 
