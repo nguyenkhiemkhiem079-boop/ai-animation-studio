@@ -172,16 +172,20 @@ Implemented `IFlowJobRepository` and `StorageFlowJobRepository`:
 
 ---
 
-## 17. Financial Claim Audit
+## 17. Financial Claim & UI Reality Audit
 
 - **Audit Findings**:
   - `packages/cli/src/index.ts:2395`: Hardcoded string `Real-time 75.4% Cost Savings Meter`.
-  - `packages/studio-ui/index.html`: Hardcoded `SAVED 75.4% ($2.50)` and static 75.4% donut chart gauge.
+  - `packages/studio-ui/index.html`: Hardcoded `SAVED 75.4% ($2.50)`, static 75.4% donut chart gauge, hardcoded `$0.75 USD` actual pipeline cost, `$3.25 USD` generative benchmark, static provider latency (22ms, 3400ms, 4200ms, 240ms) and costs, static `ONLINE ✅` statuses, and static `205 Tests Passing • 0 Warnings` in footer.
   - `README.md`: Static reference to 75.4% gauge.
 - **Remediation**:
   - Replaced CLI string with: `Production Cost & Savings Meter (Deterministic vs Estimated Generative)`.
-  - Relabeled costs in UI and CLI as `ESTIMATED BENCHMARK` and `ESTIMATED SAVINGS`.
-  - When user credit report is omitted, credits and USD cost are strictly `UNKNOWN`.
+  - Eliminated all static `75.4%` claims from the production UI. Uncalculated initial metrics now display `NOT MEASURED`.
+  - Replaced hardcoded pipeline cost and generative benchmark with `NOT MEASURED` in production UI.
+  - Replaced static provider latency and cost claims with `NOT MEASURED` and `NOT CONFIGURED`; updated statuses to `LOCAL READY` and `NOT CONFIGURED` to prevent masquerading as live telemetry.
+  - Removed static test counts (`205 Tests Passing • 0 Warnings`) from the production UI footer, replaced with factual `System Ready • Telemetry: NOT MEASURED`.
+  - Interactive demo calculations in the Studio UI are explicitly classified as `DEMO BENCHMARK` rather than live production telemetry.
+  - When user credit report is omitted in Flow imports, credits and USD cost are strictly `UNKNOWN`.
 
 ---
 

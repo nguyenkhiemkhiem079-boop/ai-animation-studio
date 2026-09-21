@@ -327,18 +327,23 @@ function recalculateSavings() {
   // Update Savings Badge in Header
   const savingsBadge = document.getElementById('savings-badge');
   if (savingsBadge) {
-    savingsBadge.innerHTML = `<span class="savings-icon">⚡</span><span class="savings-text">SAVED <strong>${savingsPct}%</strong> ($${totalSaved.toFixed(2)})</span>`;
+    savingsBadge.innerHTML = `<span class="savings-icon">⚡</span><span class="savings-text">DEMO BENCHMARK: <strong>${savingsPct}%</strong> ($${totalSaved.toFixed(2)})</span>`;
   }
 
   // Update Donut Chart
   const donutChart = document.querySelector('.donut-chart');
   const donutVal = document.querySelector('.donut-val');
   if (donutChart) donutChart.style.setProperty('--percent', savingsPct);
-  if (donutVal) donutVal.textContent = `${savingsPct}%`;
+  if (donutVal) {
+    donutVal.classList.remove('not-measured');
+    donutVal.textContent = `${savingsPct}%`;
+  }
 
   // Update Cost Numbers
   const costActualEl = document.querySelector('.cost-box.actual .cost-amount');
-  if (costActualEl) costActualEl.textContent = `$${totalActual.toFixed(2)} USD`;
+  if (costActualEl) costActualEl.textContent = `$${totalActual.toFixed(2)} USD (DEMO)`;
+  const costGenEl = document.querySelector('.cost-box.generative .cost-amount');
+  if (costGenEl) costGenEl.textContent = `$${pureGenEstimate.toFixed(2)} USD (EST)`;
 }
 
 // 8. Deliverable Downloads

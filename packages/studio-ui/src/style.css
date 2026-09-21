@@ -1430,6 +1430,13 @@ body.studio-dark-theme {
   color: var(--accent-emerald);
 }
 
+.donut-val.not-measured {
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+  text-align: center;
+  color: var(--text-muted);
+}
+
 .donut-sub {
   font-size: 0.7rem;
   font-family: var(--font-mono);
@@ -1493,6 +1500,13 @@ body.studio-dark-theme {
 
 .badge-online {
   color: var(--accent-emerald);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.badge-unconfigured,
+.badge-not-measured {
+  color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.75rem;
 }

@@ -988,6 +988,7 @@ describe('Phase 16.6.1 — Google Flow Bridge Final Production Hardening (46 Gat
 
     const uiSource = await fs.readFile(path.resolve('packages', 'studio-ui', 'index.html'), 'utf-8');
     expect(uiSource).not.toContain('SAVED <strong>75.4%</strong>');
+    expect(uiSource).not.toContain('75.4%');
   });
 
   // 45. Flow route remains NEEDS_USER_ACTION
