@@ -50,6 +50,13 @@ export class GeminiProvider implements LLMProvider {
   private lastErrorCategory?: LLMErrorCategory;
 
   constructor(config: GeminiProviderConfig = {}) {
+    if (!config.apiKey && !process.env.GEMINI_API_KEY && typeof (process as any).loadEnvFile === 'function') {
+      try {
+        (process as any).loadEnvFile();
+      } catch {
+        // ignore
+      }
+    }
     this.apiKey = config.apiKey ?? process.env.GEMINI_API_KEY;
     this.modelPolicy = config.modelPolicy ?? new ModelPolicy();
     this.cache = config.cache ?? new LLMCache();

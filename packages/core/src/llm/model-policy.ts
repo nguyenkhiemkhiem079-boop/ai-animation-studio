@@ -9,10 +9,10 @@ export interface ModelPolicyConfig {
 
 export class ModelPolicy {
   public static readonly DEFAULT_MODELS: Record<LLMModelRole, string> = {
-    FAST: 'gemini-2.5-flash',
-    REASONING: 'gemini-2.5-pro',
-    STRUCTURED: 'gemini-2.5-flash',
-    QA: 'gemini-2.5-flash',
+    FAST: 'gemini-3.5-flash',
+    REASONING: 'gemini-3.5-flash',
+    STRUCTURED: 'gemini-3.5-flash',
+    QA: 'gemini-3.5-flash',
   };
 
   private modelMapping: Record<LLMModelRole, string>;

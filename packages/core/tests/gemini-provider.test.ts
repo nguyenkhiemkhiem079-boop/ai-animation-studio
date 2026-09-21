@@ -81,8 +81,8 @@ describe('Phase 16.5: Google AI Studio / Gemini Integration', () => {
   // 4. Model-role selection
   it('4. should select centralized models and support environment overrides', () => {
     const policy = getCentralizedModelPolicy();
-    expect(policy.fast).toBe('gemini-2.5-flash');
-    expect(policy.reasoning).toBe('gemini-2.5-pro');
+    expect(policy.fast).toBe('gemini-3.5-flash');
+    expect(policy.reasoning).toBe('gemini-3.5-flash');
 
     process.env.GEMINI_MODEL_FAST = 'gemini-custom-flash';
     expect(getModelForRole('FAST')).toBe('gemini-custom-flash');

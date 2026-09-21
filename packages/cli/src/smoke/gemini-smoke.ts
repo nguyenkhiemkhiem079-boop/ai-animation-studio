@@ -6,6 +6,15 @@
  */
 
 import * as process from 'node:process';
+
+// Automatically load .env if present
+try {
+  if (typeof (process as any).loadEnvFile === 'function') {
+    (process as any).loadEnvFile();
+  }
+} catch {
+  // ignore
+}
 import {
   GeminiProvider,
   getCentralizedModelPolicy,
