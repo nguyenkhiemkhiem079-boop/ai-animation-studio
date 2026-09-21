@@ -8,3 +8,4 @@ export * from './world.js';
 export * from './production.js';
 export * from './hyperframes.js';
 export * from './character-animation.js';
+export * from './generative-video.js';

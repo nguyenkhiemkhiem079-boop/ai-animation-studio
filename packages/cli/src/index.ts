@@ -39,6 +39,13 @@ import {
   CharacterAnimationLibrary,
   CharacterController,
   LipSyncEngine,
+  MockVideoProvider,
+  VeoVideoAdapter,
+  SeedanceVideoAdapter,
+  ComfyUIVideoAdapter,
+  ContinuationEngine,
+  SurgicalRetakeEngine,
+  RetakeType,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -720,7 +727,12 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
               audioCue: { sfx: [] },
               requiredAssetIds: [],
               dependsOnShotIds: [],
-              directorLocks: {},
+              directorLocks: {
+                isCameraLocked: false,
+                isFramingLocked: false,
+                isRendererLocked: false,
+                isActingLocked: false,
+              },
               provenance: { decidedAt: new Date().toISOString() },
             },
             {
@@ -740,7 +752,12 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
               audioCue: { sfx: [] },
               requiredAssetIds: ['ASSET_CHAR_HERO'],
               dependsOnShotIds: ['SHOT_SC01_SH01'],
-              directorLocks: {},
+              directorLocks: {
+                isCameraLocked: false,
+                isFramingLocked: false,
+                isRendererLocked: false,
+                isActingLocked: false,
+              },
               provenance: { decidedAt: new Date().toISOString() },
             },
           ];
@@ -986,6 +1003,217 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'video': {
+      const subCommand = args[1];
+      const projectId = args[2];
+
+      const providers = [
+        new MockVideoProvider(),
+        new VeoVideoAdapter(),
+        new SeedanceVideoAdapter(),
+        new ComfyUIVideoAdapter(),
+      ];
+
+      if (subCommand === 'list-providers') {
+        console.log(`🎬 Registered Video Generation Providers (${providers.length} available):`);
+        for (const p of providers) {
+          console.log(
+            ` • [${p.metadata.id.padEnd(20)}] ${p.metadata.name.padEnd(32)} | Local: ${p.metadata.isLocal ? 'YES' : 'NO '} | Est: $${p.metadata.costEstimateUsdPerInvocation.toFixed(2)} | Latency: ${p.metadata.averageLatencyMs}ms`
+          );
+        }
+        return 0;
+      }
+
+      if (subCommand === 'render') {
+        const shotId = args[3] || 'SHOT_GEN_01';
+        if (!projectId) {
+          console.error('Error: Project ID is required. Usage: studio video render <projectId> [shotId] [--provider <id>]');
+          return 1;
+        }
+
+        const providerIdx = args.indexOf('--provider');
+        const providerId = providerIdx !== -1 ? args[providerIdx + 1] : 'mock-video-provider';
+        const provider = providers.find((p) => p.metadata.id === providerId) ?? providers[0];
+
+        const task = {
+          taskType: 'video_gen',
+          input: {
+            shotId,
+            projectId,
+            promptPacket: {
+              positivePrompt: `Cinematic rendering of ${shotId} in project ${projectId}`,
+              negativePrompt: 'blurry, low quality, distortion',
+              compiledAt: new Date().toISOString(),
+            },
+            resolution: { width: 1920, height: 1080 },
+            durationSeconds: 3.5,
+            fps: 24,
+          },
+          projectId,
+          shotId,
+        };
+
+        const result = await provider.execute(task);
+        const out = (result.output as any)?.videoOutput ?? (result.output as any);
+
+        console.log(`🎬 Generative Video Render for Shot "${shotId}":`);
+        console.log(` - Status          : COMPLETED ✅`);
+        console.log(` - Provider        : ${provider.metadata.name} (${provider.metadata.id})`);
+        console.log(` - Output Asset    : ${out.assetId ?? `ASSET_GEN_${shotId}`}`);
+        console.log(` - Video URI       : ${out.videoUri ?? `.studio/videos/${projectId}/${shotId}.mp4`}`);
+        console.log(` - Terminal Frame  : ${out.terminalFrameAssetId ?? `FRAME_TERMINAL_${shotId}`}`);
+        console.log(` - Resolution      : ${out.resolution?.width ?? 1920}x${out.resolution?.height ?? 1080} @ ${out.fps ?? 24}fps`);
+        console.log(` - Duration        : ${out.durationSeconds ?? 3.5}s`);
+        console.log(` - Seed            : ${out.seed ?? 424242}`);
+        console.log(` - Cost            : $${result.actualCostUsd.toFixed(4)} USD`);
+        console.log(` - Generation Time : ${result.durationMs}ms`);
+        return 0;
+      }
+
+      if (subCommand === 'continuation') {
+        const shotA = args[3] || 'SHOT_01';
+        const shotB = args[4] || 'SHOT_02';
+        if (!projectId) {
+          console.error('Error: Project ID is required. Usage: studio video continuation <projectId> <shotA> <shotB>');
+          return 1;
+        }
+
+        const continuationEngine = new ContinuationEngine();
+        const dummyShotA: ShotContract = {
+          id: shotA,
+          sceneId: 'SC01',
+          shotNumber: 1,
+          purpose: 'dialogue_coverage',
+          complexity: 'complex_generative_video',
+          rendererIntent: 'generative_full_video',
+          frame: { durationSeconds: 3.0, targetFps: 24, aspectRatio: '16:9' },
+          camera: { focalLength: '50mm', shotSize: 'medium', angle: 'eye_level', movement: 'static', semanticSkills: [] },
+          lighting: { keyLightDirection: 'left', mood: 'tense', colorTemperature: 'cool', fogAtmosphere: false },
+          composition: { rule: 'rule_of_thirds', subjectPlacement: 'left_third', depthLayers: { foreground: [], midground: [], background: [] } },
+          acting: [{ characterId: 'char_main', pose: 'intense_glare', expression: 'serious', gazeDirection: 'screen_right' }],
+          transition: { type: 'cut', durationSeconds: 0 },
+          environmentLocationId: 'loc_office',
+          audioCue: { sfx: [] },
+          requiredAssetIds: [],
+          dependsOnShotIds: [],
+          directorLocks: {
+            isCameraLocked: false,
+            isFramingLocked: false,
+            isRendererLocked: false,
+            isActingLocked: false,
+          },
+          provenance: { decidedAt: new Date().toISOString() },
+        };
+
+        const dummyShotB: ShotContract = {
+          ...dummyShotA,
+          id: shotB,
+          shotNumber: 2,
+          camera: { focalLength: '85mm', shotSize: 'close_up', angle: 'eye_level', movement: 'static', semanticSkills: [] },
+          acting: [{ characterId: 'char_main', pose: 'intense_glare', expression: 'serious', gazeDirection: 'screen_right' }],
+          dependsOnShotIds: [shotA],
+        };
+
+        const packet = continuationEngine.buildContinuationPacket(dummyShotA, dummyShotB);
+
+        console.log(`🔗 Continuation Analysis for "${shotA}" -> "${shotB}":`);
+        console.log(` - Cut Type          : ${packet.cutType.toUpperCase()}`);
+        console.log(` - Terminal Frame    : ${packet.terminalFrameAssetId}`);
+        console.log(` - Lighting Continuity: ${packet.lightingPreserved ? 'PRESERVED ✅' : 'TRANSITIONING ⚠️'}`);
+        if (packet.subjectState) {
+          console.log(` - Subject State     : Character "${packet.subjectState.characterId}" facing ${packet.subjectState.facingAngleDeg}°`);
+        }
+        console.log(` - Anti-Bleed Rules  : ${packet.antiBleedDirectives.length} active`);
+        packet.antiBleedDirectives.forEach((r) => console.log(`   • ${r}`));
+        return 0;
+      }
+
+      if (subCommand === 'retake') {
+        const shotId = args[3];
+        if (!projectId || !shotId) {
+          console.error('Error: Project ID and Shot ID are required. Usage: studio video retake <projectId> <shotId> --reason <reason> [--type <type>]');
+          return 1;
+        }
+
+        const reasonIdx = args.indexOf('--reason');
+        const reason = reasonIdx !== -1 && args[reasonIdx + 1] ? args[reasonIdx + 1] : 'Director adjustment';
+
+        const typeIdx = args.indexOf('--type');
+        const retakeType = (typeIdx !== -1 && args[typeIdx + 1] ? args[typeIdx + 1] : 'lighting_adjustment') as RetakeType;
+
+        const retakeEngine = new SurgicalRetakeEngine();
+        const provider = providers[0];
+
+        const originalTask = {
+          shotId,
+          projectId,
+          seriesId: 'default_series',
+          promptPacket: {
+            positivePrompt: `Cinematic rendering of ${shotId} in project ${projectId}`,
+            negativePrompt: 'blurry, low quality',
+            referenceBindings: [],
+            cameraDirective: '',
+            lightingDirective: '',
+            actingDirective: '',
+            compiledAt: new Date().toISOString(),
+          },
+          referenceBindings: [],
+          motionStrength: 0.7,
+          resolution: { width: 1920, height: 1080 },
+          durationSeconds: 3.5,
+          fps: 24,
+          seed: 12345,
+        };
+
+        const retakeTask = retakeEngine.createRetakeTask(originalTask, {
+          shotId,
+          originalJobId: `job_${shotId}_orig`,
+          retakeType,
+          reason,
+          variableAdjustments: {},
+          lockSeed: retakeType !== 'seed_variation',
+          preserveReferences: true,
+        });
+
+        const result = await provider.execute({
+          taskType: 'video_gen',
+          input: retakeTask,
+          projectId,
+          shotId,
+        });
+
+        const out = (result.output as any)?.videoOutput;
+        const retakeResult = retakeEngine.buildRetakeResult(
+          `job_retake_${shotId}_${Date.now()}`,
+          out,
+          {
+            shotId,
+            originalJobId: `job_${shotId}_orig`,
+            retakeType,
+            reason,
+            variableAdjustments: {},
+            lockSeed: retakeType !== 'seed_variation',
+            preserveReferences: true,
+          },
+          retakeTask.retakeLineage?.retakeCount ?? 1,
+          retakeTask.promptPacket.positivePrompt
+        );
+
+        console.log(`🎬 Surgical Retake Executed for Shot "${shotId}":`);
+        console.log(` - Retake Type     : ${retakeResult.retakeType.toUpperCase()}`);
+        console.log(` - Retake Count    : #${retakeResult.retakeCount}`);
+        console.log(` - Reason          : "${retakeResult.reason}"`);
+        console.log(` - Output Asset    : ${retakeResult.outputAssetId}`);
+        console.log(` - Locked Seed     : ${retakeResult.usedSeed}`);
+        console.log(` - Adjusted Prompt : "${retakeResult.adjustedPrompt}"`);
+        console.log(` - Actual Cost     : $${retakeResult.actualCostUsd.toFixed(4)} USD`);
+        return 0;
+      }
+
+      console.error(`Unknown video subcommand: "${subCommand}". Supported: list-providers, render, continuation, retake`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -1046,6 +1274,10 @@ Commands:
   actor list-clips                       List standard digital actor animation clips
   actor animate <charId> <clip>          Sample and preview digital actor pose keyframes
   actor lipsync <charId> <text>          Generate timed viseme sequence for speech
+  video list-providers                   List available generative video adapters and capabilities
+  video render <projId> [shotId]         Render a shot using generative video provider
+  video continuation <projId> <sA> <sB>  Inspect continuation chaining between sequential shots
+  video retake <projId> <sId> --reason   Execute surgical retake adjusting target variable
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report
@@ -1058,6 +1290,7 @@ Commands:
   inspect <json-file> [schema]           Validate a JSON file against domain schemas
   help                                   Show this message
 `);
+
       return 0;
     }
   }

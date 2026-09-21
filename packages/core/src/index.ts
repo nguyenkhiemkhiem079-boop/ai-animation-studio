@@ -22,3 +22,4 @@ export * from './world/index.js';
 export * from './production/index.js';
 export * from './hyperframes/index.js';
 export * from './character-animation/index.js';
+export * from './video-providers/index.js';

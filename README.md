@@ -160,6 +160,12 @@ npx studio actor list-clips
 npx studio actor animate <characterId> <clipName> [--dialogue <text>]
 npx studio actor lipsync <characterId> "<dialogue text>"
 
+# Generative Video Providers & Continuation
+npx studio video list-providers
+npx studio video render <projectId> [shotId] [--provider <id>]
+npx studio video continuation <projectId> <shotA> <shotB>
+npx studio video retake <projectId> <shotId> --reason <reason> [--type <type>]
+
 # Validate a JSON artifact against domain schemas
 npx studio inspect ./project.json project
 ```
@@ -186,4 +192,6 @@ npx studio inspect ./project.json project
   * HyperFramesCompositionCompiler compiling ShotContracts and layer hierarchies into standalone HTML compositions, ParallaxEngine computing differential motion vectors for multi-plane depth, HyperFramesLayerSystem structuring foreground/midground/backdrop/subtitle layers, CinematicSkillCompiler translating semantic skills (push_in, pull_out, pan_left, orbit, handheld, vintagefilm, motionblur, slowmo) into seekable GSAP timelines, HyperFramesAdapter (IProvider) rendering deterministic animations at $0.00 cost, HyperFramesExecutionPipelineStep for DAG pipeline.
 - [x] **PHASE 8: CHARACTER ANIMATION SYSTEM** (`v0.9-character-animation`)
   * 15-bone humanoid Skeleton with Forward Kinematics (FK), CharacterAnimationLibrary with 14 standard keyframed clips (idle, walk, run, sit, stand, turn, look, point, wave, pick_up, hold, react, fear, surprise), FacialSystem with naturalistic blink cycles and gaze direction, LipSyncEngine translating text dialogue into timed visemes, AnimationBlender for cross-fading and sampling, CharacterController orchestrating actor motions, RigToHyperFramesCompiler for compiling actor rigs into HyperFrames GSAP tweens, CharacterAnimationPipelineStep for DAG pipeline.
-- [ ] **PHASE 9: GENERATIVE VIDEO PROVIDERS**
+- [x] **PHASE 9: GENERATIVE VIDEO PROVIDERS & CONTINUATION** (`v0.10-generative-video`)
+  * Generative Video Provider Adapters (`VeoVideoAdapter`, `SeedanceVideoAdapter`, `ComfyUIVideoAdapter`, `MockVideoProvider`), Reference conditioning binding (turnaround images, start frames, environment plates), ContinuationEngine extracting terminal frames (`FRAME_TERMINAL_<shotId>`) and binding `START_FRAME` across cut boundaries, SurgicalRetakeEngine for targeted single-variable adjustments (lighting, acting, camera speed, seed variation) with lineage tracking, GenerativeVideoPipelineStep for DAG pipeline, Studio CLI video commands.
+- [ ] **PHASE 10: VOICE, MUSIC & SFX AUDIO STUDIO**

@@ -329,6 +329,29 @@ LAN: Then we move tonight.`;
     );
     expect(lipsyncCode).toBe(0);
   });
+
+  it('manages generative video providers, rendering, continuation, and retakes via CLI', async () => {
+    const projectId = 'proj_cli_video_test';
+
+    // 1. video list-providers
+    const listProvidersCode = await runCli(['video', 'list-providers'], { cwd: tempDir, storage });
+    expect(listProvidersCode).toBe(0);
+
+    // 2. video render
+    const renderCode = await runCli(['video', 'render', projectId, 'SHOT_V01'], { cwd: tempDir, storage });
+    expect(renderCode).toBe(0);
+
+    // 3. video continuation
+    const contCode = await runCli(['video', 'continuation', projectId, 'SHOT_V01', 'SHOT_V02'], { cwd: tempDir, storage });
+    expect(contCode).toBe(0);
+
+    // 4. video retake
+    const retakeCode = await runCli(
+      ['video', 'retake', projectId, 'SHOT_V01', '--reason', 'More rim lighting', '--type', 'lighting_adjustment'],
+      { cwd: tempDir, storage }
+    );
+    expect(retakeCode).toBe(0);
+  });
 });
 
 
