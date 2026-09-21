@@ -1,0 +1,27 @@
+{
+  "name": "ai-animation-studio-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Animation Studio — Series-aware, character-consistent, provider-independent animation pipeline",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces --if-present build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --build --verbose",
+    "clean": "npm run --workspaces --if-present clean"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.7"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module"
+}

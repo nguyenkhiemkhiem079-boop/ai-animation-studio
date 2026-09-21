@@ -1,0 +1,23 @@
+{
+  "name": "@ai-studio/cli",
+  "version": "0.1.0",
+  "description": "Developer and pipeline CLI tool for AI Animation Studio",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "studio": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-studio/core": "*",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "typescript": "^5.7.3"
+  }
+}
