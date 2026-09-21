@@ -48,6 +48,16 @@ export class GeminiProvider implements LLMProvider {
   private lastSuccessfulRequestAt?: string;
   private lastFailureMessage?: string;
   private lastErrorCategory?: LLMErrorCategory;
+  private lastUsage?: LLMUsageMetadata;
+  private lastModelUsed?: string;
+
+  public getLastUsage(): LLMUsageMetadata | undefined {
+    return this.lastUsage;
+  }
+
+  public getLastModelUsed(): string | undefined {
+    return this.lastModelUsed;
+  }
 
   constructor(config: GeminiProviderConfig = {}) {
     if (!config.apiKey && !process.env.GEMINI_API_KEY && typeof (process as any).loadEnvFile === 'function') {
@@ -288,6 +298,8 @@ export class GeminiProvider implements LLMProvider {
         const durationMs = Date.now() - startTime;
         const text = response.text ?? '';
         const usage = this.extractUsageMetadata(response, durationMs, attempt);
+        this.lastUsage = usage;
+        this.lastModelUsed = model;
 
         const result: LLMTextResult = {
           text,
@@ -395,6 +407,8 @@ export class GeminiProvider implements LLMProvider {
         const durationMs = Date.now() - startTime;
         const rawText = response.text ?? '';
         const usage = this.extractUsageMetadata(response, durationMs, attempt);
+        this.lastUsage = usage;
+        this.lastModelUsed = model;
 
         // 4. Parse JSON
         let parsedJson: unknown;

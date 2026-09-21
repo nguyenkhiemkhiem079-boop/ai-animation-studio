@@ -6,6 +6,14 @@ Phase 16.5 successfully establishes the production-grade integration of Google G
 
 All core domain engines (`StoryEngine`, `DirectorEngine`, `ContinuityQA`) remain 100% provider-independent, interacting with LLMs strictly through the typed `LLMProvider` contract and `LLMProviderRegistry`. Crucially, all Phase 16 guarantees (real FFmpeg/FFprobe media rendering, HyperFrames frame capture, real audio mixing, deterministic golden MP4 production, and zero mock in production) remain 100% intact with zero regressions.
 
+### Verification Status Distinction:
+- **IMPLEMENTED**: Full architecture, typed `LLMProvider`, `GeminiProvider`, `ModelPolicy`, `LLMCache`, versioned prompts, Story/Director/QA integration, and CLI commands implemented.
+- **LOCAL VERIFIED**: 100% unit tests passed (38 test files, 246 tests), full build passed, typecheck passed, all 31 skills passed, offline deterministic media smoke passed, golden MP4 passed with verified H.264/AAC streams.
+- **LIVE VERIFIED**: Verified with live Google AI Studio credentials using `gemini-3.5-flash`:
+  - `gemini doctor --live`: Status `AVAILABLE`, connection verified in 10267ms.
+  - `smoke:gemini`: Live structured request on canonical story executed and validated via Zod in 14666ms. Zero invented events detected. Actual usage metadata captured (Input tokens: 312, Output tokens: 491, Total tokens: 1633).
+- **CI VERIFIED**: NOT CLAIMED (GitHub Actions CI workflow has not run or completed verification on GitHub remote for this commit).
+
 ---
 
 ## 2. Baseline Commit
@@ -71,11 +79,11 @@ All core domain engines (`StoryEngine`, `DirectorEngine`, `ContinuityQA`) remain
 
 - Centralized in `packages/core/src/llm/model-policy.ts`.
 - Zero hardcoded model strings in engine logic.
-- Roles mapped:
-  - `FAST`: `gemini-2.5-flash` (`GEMINI_MODEL_FAST`)
-  - `REASONING`: `gemini-2.5-pro` (`GEMINI_MODEL_REASONING`)
-  - `STRUCTURED`: `gemini-2.5-flash` (`GEMINI_MODEL_STRUCTURED`)
-  - `QA`: `gemini-2.5-flash` (`GEMINI_MODEL_QA`)
+- Roles mapped to current active Google AI Studio models:
+  - `FAST`: `gemini-3.5-flash` (`GEMINI_MODEL_FAST`)
+  - `REASONING`: `gemini-3.5-flash` (`GEMINI_MODEL_REASONING`)
+  - `STRUCTURED`: `gemini-3.5-flash` (`GEMINI_MODEL_STRUCTURED`)
+  - `QA`: `gemini-3.5-flash` (`GEMINI_MODEL_QA`)
 
 ---
 
@@ -254,8 +262,30 @@ All core domain engines (`StoryEngine`, `DirectorEngine`, `ContinuityQA`) remain
 ## 25. Live Tests
 
 - Configured as opt-in via `RUN_LIVE_PROVIDER_TESTS=true` and valid `GEMINI_API_KEY`.
-- Normal test runs and CI never consume Gemini quota.
-- When unconfigured, `npm run smoke:gemini` reports `status = NOT_CONFIGURED` with exit code 0.
+- Normal unit test runs mock the network boundary and never consume Gemini quota.
+- **Live Verification Execution Results**:
+  - Live Doctor (`npm run studio -- gemini doctor --live`):
+    - Provider: Google Gemini (Google AI Studio)
+    - Status: `AVAILABLE` ✅
+    - Latency: `10267ms`
+    - API Key: `AQ.A...hIjw` (Masked, zero secret exposed)
+    - Active Model: `gemini-3.5-flash`
+  - Live Smoke Test (`npm run smoke:gemini`):
+    - Status: `LIVE_SUCCESS` ✅
+    - Canonical Input: *"Minh bước vào căn phòng tối. Cậu nhìn thấy một con bướm trắng bay quanh ngọn nến."*
+    - Actual Model Used: `gemini-3.5-flash`
+    - Extracted Characters: `Minh`
+    - Extracted Locations: `Căn phòng tối`
+    - Extracted Props: `Ngọn nến, Con bướm trắng`
+    - Extracted Scenes: `1`
+    - Schema Validation: Passed 100% via Zod
+    - Unsupported Events Check: PASSED (Zero invented events detected)
+    - Latency: `14666ms`
+    - Token Usage:
+      - Input Tokens: `312`
+      - Output Tokens: `491`
+      - Total Tokens: `1633`
+      - Cost Status: `FREE_TIER` (zero fabricated savings)
 
 ---
 

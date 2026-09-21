@@ -32,10 +32,10 @@ Open `.env` and set your key:
 
 ```env
 GEMINI_API_KEY=AIzaSyYourRealKeyHere
-GEMINI_MODEL_FAST=gemini-2.5-flash
-GEMINI_MODEL_REASONING=gemini-2.5-pro
-GEMINI_MODEL_STRUCTURED=gemini-2.5-flash
-GEMINI_MODEL_QA=gemini-2.5-flash
+GEMINI_MODEL_FAST=gemini-3.5-flash
+GEMINI_MODEL_REASONING=gemini-3.5-flash
+GEMINI_MODEL_STRUCTURED=gemini-3.5-flash
+GEMINI_MODEL_QA=gemini-3.5-flash
 RUN_LIVE_PROVIDER_TESTS=false
 ```
 
@@ -61,7 +61,7 @@ Expected output when configured:
 - Configured: Yes ✅
 - API Key: AIza...xxxx
 - Diagnostics: Gemini API Client initialized. Key: AIza...xxxx
-- Active Model: gemini-2.5-flash
+- Active Model: gemini-3.5-flash
 ```
 
 To test live reachability:

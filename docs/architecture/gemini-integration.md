@@ -45,10 +45,10 @@ Hardcoded model strings are strictly prohibited throughout the application. All 
 
 | Conceptual Role | Default Gemini Model | Environment Variable Override | Purpose |
 |---|---|---|---|
-| `FAST` | `gemini-2.5-flash` | `GEMINI_MODEL_FAST` | Low-latency ping, health checks, simple summarization |
-| `REASONING` | `gemini-2.5-pro` | `GEMINI_MODEL_REASONING` | In-depth story analysis, character psychological beats, directorial blocking |
-| `STRUCTURED` | `gemini-2.5-flash` | `GEMINI_MODEL_STRUCTURED` | High-fidelity schema-constrained candidate entity extraction |
-| `QA` | `gemini-2.5-flash` | `GEMINI_MODEL_QA` | Semantic continuity checks, source fidelity audits |
+| `FAST` | `gemini-3.5-flash` | `GEMINI_MODEL_FAST` | Low-latency ping, health checks, simple summarization |
+| `REASONING` | `gemini-3.5-flash` | `GEMINI_MODEL_REASONING` | In-depth story analysis, character psychological beats, directorial blocking |
+| `STRUCTURED` | `gemini-3.5-flash` | `GEMINI_MODEL_STRUCTURED` | High-fidelity schema-constrained candidate entity extraction |
+| `QA` | `gemini-3.5-flash` | `GEMINI_MODEL_QA` | Semantic continuity checks, source fidelity audits |
 
 ---
 

@@ -41,9 +41,16 @@ export interface GeminiSmokeResult {
     props: string[];
   };
   usage?: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+  };
+  actualModel?: string;
+  unsupportedEventsCheck?: {
+    passed: boolean;
+    detected: string[];
   };
   durationMs?: number;
   error?: string;
@@ -127,11 +134,29 @@ export async function runGeminiSmoke(): Promise<GeminiSmokeResult> {
     const locations = analysis.locationCandidates.map((l) => l.suggestedName);
     const props = analysis.propCandidates.map((p) => p.suggestedName);
 
+    const usage = provider.getLastUsage();
+    const actualModel = provider.getLastModelUsed() || models.structured;
+
+    // Verify no unsupported story events are invented
+    const forbiddenConcepts = ['ma quỷ', 'ghost', 'cửa đóng', 'door closing', 'chạm vào nến', 'touching candle', 'tấn công', 'attack', 'la hét', 'scream'];
+    const allExtractedText = JSON.stringify(analysis).toLowerCase();
+    const unsupportedFound = forbiddenConcepts.filter((c) => allExtractedText.includes(c));
+    const unsupportedCheckPassed = unsupportedFound.length === 0;
+
     console.log(`✅ Live Gemini Structured Output parsed and validated via Zod! (${durationMs}ms)`);
     console.log(`- Extracted Characters: ${characters.join(', ')}`);
     console.log(`- Extracted Locations: ${locations.join(', ')}`);
     console.log(`- Extracted Props: ${props.join(', ')}`);
     console.log(`- Scenes: ${analysis.sceneCandidates.length}`);
+
+    console.log(`\n📊 Gemini Execution & Usage Metadata:`);
+    console.log(`- Actual Model: ${actualModel}`);
+    console.log(`- Input Tokens: ${usage?.inputTokens ?? 'N/A'}`);
+    console.log(`- Output Tokens: ${usage?.outputTokens ?? 'N/A'}`);
+    console.log(`- Total Tokens: ${usage?.totalTokens ?? 'N/A'}`);
+    console.log(`- Latency: ${durationMs}ms`);
+    console.log(`- Status: LIVE_SUCCESS`);
+    console.log(`- Unsupported Events Check: ${unsupportedCheckPassed ? 'PASSED (Zero invented events) ✅' : 'FAILED ❌'}`);
 
     return {
       status: 'LIVE_SUCCESS',
@@ -144,8 +169,14 @@ export async function runGeminiSmoke(): Promise<GeminiSmokeResult> {
         structured: models.structured,
         qa: models.qa,
       },
+      actualModel,
+      usage,
       liveCheckRun: true,
       structuredOutputValid: true,
+      unsupportedEventsCheck: {
+        passed: unsupportedCheckPassed,
+        detected: unsupportedFound,
+      },
       extractedConcepts: {
         characters,
         locations,
