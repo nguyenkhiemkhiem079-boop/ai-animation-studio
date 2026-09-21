@@ -23,3 +23,4 @@ export * from './production/index.js';
 export * from './hyperframes/index.js';
 export * from './character-animation/index.js';
 export * from './video-providers/index.js';
+export * from './audio/index.js';

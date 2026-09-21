@@ -46,6 +46,14 @@ import {
   ContinuationEngine,
   SurgicalRetakeEngine,
   RetakeType,
+  VoiceStudio,
+  ScoreComposer,
+  FoleyMixer,
+  AudioMixEngine,
+  MockAudioProvider,
+  ElevenLabsVoiceAdapter,
+  MusicGenAdapter,
+  FoleySfxAdapter,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -1214,6 +1222,279 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'audio': {
+      const subCommand = args[1];
+      const registry = new ProviderRegistry();
+      registry.register(new MockAudioProvider());
+      registry.register(new ElevenLabsVoiceAdapter());
+      registry.register(new MusicGenAdapter());
+      registry.register(new FoleySfxAdapter());
+
+      const voiceStudio = new VoiceStudio(registry, storage);
+      const scoreComposer = new ScoreComposer(registry);
+      const foleyMixer = new FoleyMixer(registry);
+      const mixEngine = new AudioMixEngine();
+
+      if (subCommand === 'list-voices') {
+        const seriesId = args[2] || 'default_series';
+        // Seed standard voice profiles if empty
+        voiceStudio.getOrCreateVoiceProfile(seriesId, 'char_kaito', {
+          voiceId: 'voice_kaito_heroic',
+          gender: 'male',
+          age: 'young_adult',
+          pitch: 0.1,
+          speakingRate: 1.05,
+        });
+        voiceStudio.getOrCreateVoiceProfile(seriesId, 'char_elena', {
+          voiceId: 'voice_elena_tactical',
+          gender: 'female',
+          age: 'adult',
+          pitch: -0.05,
+          speakingRate: 1.0,
+        });
+
+        const profiles = voiceStudio.listVoiceProfiles(seriesId);
+        console.log(`🎙️ Registered Voice Profiles for Series "${seriesId}" (${profiles.length} available):`);
+        for (const p of profiles) {
+          console.log(
+            ` • [${p.characterId.padEnd(16)}] Voice: ${p.voiceId.padEnd(22)} | ${p.gender.padEnd(6)} | ${p.age.padEnd(11)} | Pitch: ${p.pitch >= 0 ? '+' : ''}${p.pitch.toFixed(2)} | Rate: ${p.speakingRate.toFixed(2)}x`
+          );
+        }
+        return 0;
+      }
+
+      if (subCommand === 'voice-synth') {
+        const characterId = args[2];
+        const dialogue = args[3];
+        const seriesId = args[4] || 'default_series';
+
+        if (!characterId || !dialogue) {
+          console.error('Error: Character ID and dialogue text required. Usage: studio audio voice-synth <characterId> "<dialogue>" [seriesId]');
+          return 1;
+        }
+
+        const result = await voiceStudio.synthesizeDialogue({
+          seriesId,
+          shotId: 'SHOT_SYNTH_01',
+          characterId,
+          text: dialogue,
+        });
+
+        console.log(`🎙️ Voice Synthesis for Actor "${characterId}":`);
+        console.log(` - Dialogue Text : "${result.dialogueLine.text}"`);
+        console.log(` - Audio Asset   : ${result.dialogueLine.audioAssetId}`);
+        console.log(` - Audio URI     : ${result.dialogueLine.audioUri}`);
+        console.log(` - Duration      : ${result.dialogueLine.durationSeconds.toFixed(2)}s`);
+        console.log(` - Actual Cost   : $${result.actualCostUsd.toFixed(4)} USD`);
+        console.log(` - Visemes Sync  : ${result.visemes.length} timed mouth shapes generated for lip-sync`);
+        return 0;
+      }
+
+      if (subCommand === 'score') {
+        const projectId = args[2];
+        const sceneId = args[3] || 'SCENE_01';
+
+        if (!projectId) {
+          console.error('Error: Project ID required. Usage: studio audio score <projectId> [sceneId]');
+          return 1;
+        }
+
+        const moodIdx = args.indexOf('--mood');
+        const mood = moodIdx !== -1 && args[moodIdx + 1] ? args[moodIdx + 1] : 'suspenseful';
+
+        const dummyScene: ProductionScene = {
+          id: sceneId,
+          projectId,
+          sceneNumber: 1,
+          heading: 'INT. COMMAND CENTER - NIGHT',
+          purpose: 'action',
+          narrativeIntent: {
+            dramaticGoal: 'Infiltration of command center',
+            emotionalTone: 'tense',
+            pacingPriority: 'dynamic',
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          shots: [
+            {
+              id: 'SHOT_SC01_SH01',
+              sceneId,
+              shotNumber: 1,
+              purpose: 'establishing',
+              complexity: 'simple_transform',
+              rendererIntent: 'deterministic_hyperframes',
+              frame: { durationSeconds: 4.0, targetFps: 24, aspectRatio: '16:9' },
+              camera: { focalLength: '35mm', shotSize: 'wide', angle: 'eye_level', movement: 'push_in', semanticSkills: [] },
+              lighting: { keyLightDirection: 'left', mood: 'noir', colorTemperature: 'cool', fogAtmosphere: false },
+              composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
+              acting: [],
+              transition: { type: 'cut', durationSeconds: 0 },
+              audioCue: { sfx: [] },
+              requiredAssetIds: [],
+              dependsOnShotIds: [],
+              directorLocks: { isCameraLocked: false, isFramingLocked: false, isRendererLocked: false, isActingLocked: false },
+              provenance: { decidedAt: new Date().toISOString() },
+            },
+            {
+              id: 'SHOT_SC01_SH02',
+              sceneId,
+              shotNumber: 2,
+              purpose: 'action',
+              complexity: 'complex_generative_video',
+              rendererIntent: 'generative_full_video',
+              frame: { durationSeconds: 5.0, targetFps: 24, aspectRatio: '16:9' },
+              camera: { focalLength: '50mm', shotSize: 'medium', angle: 'low_angle', movement: 'orbit_clockwise', semanticSkills: [] },
+              lighting: { keyLightDirection: 'right', mood: 'intense', colorTemperature: 'warm', fogAtmosphere: true },
+              composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
+              acting: [],
+              transition: { type: 'cut', durationSeconds: 0 },
+              audioCue: { sfx: [] },
+              requiredAssetIds: [],
+              dependsOnShotIds: [],
+              directorLocks: { isCameraLocked: false, isFramingLocked: false, isRendererLocked: false, isActingLocked: false },
+              provenance: { decidedAt: new Date().toISOString() },
+            },
+          ],
+        };
+
+        const result = await scoreComposer.composeSceneScore(dummyScene, { mood });
+
+        console.log(`🎼 Background Score Composed for Scene "${sceneId}":`);
+        console.log(` - Title         : "${result.musicTrack.title}"`);
+        console.log(` - Genre         : ${result.musicTrack.genre}`);
+        console.log(` - Mood          : ${result.musicTrack.mood}`);
+        console.log(` - Tempo         : ${result.musicTrack.tempoBpm} BPM (${result.musicTrack.musicalKey})`);
+        console.log(` - Duration      : ${result.musicTrack.durationSeconds.toFixed(1)}s (Fades: ${result.musicTrack.fadeInSeconds}s in / ${result.musicTrack.fadeOutSeconds}s out)`);
+        console.log(` - Audio Asset   : ${result.musicTrack.audioAssetId}`);
+        console.log(` - Audio URI     : ${result.musicTrack.audioUri}`);
+        console.log(` - Actual Cost   : $${result.actualCostUsd.toFixed(4)} USD`);
+        return 0;
+      }
+
+      if (subCommand === 'sfx') {
+        const projectId = args[2];
+        const shotId = args[3] || 'SHOT_01';
+
+        if (!projectId) {
+          console.error('Error: Project ID required. Usage: studio audio sfx <projectId> [shotId]');
+          return 1;
+        }
+
+        const nameIdx = args.indexOf('--name');
+        const sfxName = nameIdx !== -1 && args[nameIdx + 1] ? args[nameIdx + 1] : 'energy_blade_swing';
+
+        const dummyShot: ShotContract = {
+          id: shotId,
+          sceneId: 'SCENE_01',
+          shotNumber: 1,
+          purpose: 'action',
+          complexity: 'complex_generative_video',
+          rendererIntent: 'generative_full_video',
+          frame: { durationSeconds: 3.5, targetFps: 24, aspectRatio: '16:9' },
+          camera: { focalLength: '50mm', shotSize: 'medium', angle: 'eye_level', movement: 'static', semanticSkills: [] },
+          lighting: { keyLightDirection: 'left', mood: 'tense', colorTemperature: 'cool', fogAtmosphere: false },
+          composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
+          acting: [],
+          transition: { type: 'cut', durationSeconds: 0 },
+          audioCue: { sfx: [sfxName] },
+          requiredAssetIds: [],
+          dependsOnShotIds: [],
+          directorLocks: { isCameraLocked: false, isFramingLocked: false, isRendererLocked: false, isActingLocked: false },
+          provenance: { decidedAt: new Date().toISOString() },
+        };
+
+        const result = await foleyMixer.generateShotSfx(dummyShot);
+
+        console.log(`🔊 Sound Effects Generated for Shot "${shotId}" (${result.sfxCues.length} cue(s)):`);
+        for (const cue of result.sfxCues) {
+          console.log(
+            ` • [${cue.category.toUpperCase().padEnd(10)}] "${cue.name}" at t=${cue.timestampSeconds.toFixed(2)}s (${cue.durationSeconds}s, Vol: ${(cue.volume * 100).toFixed(0)}%) -> ${cue.audioAssetId}`
+          );
+        }
+        console.log(` - Total Cost    : $${result.actualCostUsd.toFixed(4)} USD`);
+        return 0;
+      }
+
+      if (subCommand === 'mix') {
+        const projectId = args[2] || 'proj_demo';
+        const mix = mixEngine.compileAudioMix(
+          projectId,
+          'default_series',
+          [
+            {
+              id: 'line_01',
+              shotId: 'SHOT_01',
+              characterId: 'char_kaito',
+              text: 'The citadel shields are down.',
+              emotion: 'serious',
+              startTimeSeconds: 1.0,
+              durationSeconds: 2.2,
+              audioAssetId: 'ASSET_VOICE_kaito_01',
+              loudnessDb: -14.0,
+            },
+          ],
+          [
+            {
+              id: 'music_01',
+              sceneId: 'SCENE_01',
+              title: 'Citadel Infiltration Theme',
+              genre: 'cinematic_electronic',
+              mood: 'suspenseful',
+              tempoBpm: 110,
+              musicalKey: 'D Minor',
+              startTimeSeconds: 0.0,
+              durationSeconds: 12.0,
+              volume: 0.7,
+              fadeInSeconds: 1.0,
+              fadeOutSeconds: 1.5,
+              audioAssetId: 'ASSET_MUSIC_01',
+            },
+          ],
+          [
+            {
+              id: 'sfx_01',
+              shotId: 'SHOT_01',
+              name: 'heavy_door_creak',
+              category: 'foley',
+              timestampSeconds: 0.5,
+              durationSeconds: 1.8,
+              volume: 0.8,
+              audioAssetId: 'ASSET_SFX_01',
+            },
+            {
+              id: 'sfx_02',
+              shotId: 'SHOT_01',
+              name: 'plasma_hum',
+              category: 'electronic',
+              timestampSeconds: 3.5,
+              durationSeconds: 2.0,
+              volume: 0.6,
+              audioAssetId: 'ASSET_SFX_02',
+            },
+          ],
+          12.0
+        );
+
+        const intervals = mixEngine.calculateDuckingIntervals(mix);
+
+        console.log(`🎚️ Master Audio Mix Contract for Project "${projectId}":`);
+        console.log(` - Total Duration    : ${mix.totalDurationSeconds}s`);
+        console.log(` - Master Volume     : ${(mix.masterVolume * 100).toFixed(0)}%`);
+        console.log(` - Dialogue Track    : ${mix.dialogueTracks.length} line(s) (Vol: ${(mix.dialogueVolume * 100).toFixed(0)}%)`);
+        console.log(` - Music Track       : ${mix.musicTracks.length} theme(s) (Vol: ${(mix.musicVolume * 100).toFixed(0)}%)`);
+        console.log(` - SFX Track         : ${mix.sfxCues.length} cue(s) (Vol: ${(mix.sfxVolume * 100).toFixed(0)}%)`);
+        console.log(` - Automatic Ducking : ${mix.ducking.enabled ? `ENABLED ✅ (${mix.ducking.duckMusicOnDialogueDb}dB on dialogue)` : 'DISABLED'}`);
+        console.log(` - Ducking Windows   : ${intervals.length} interval(s) active:`);
+        for (const i of intervals) {
+          console.log(`   • [${i.startSeconds.toFixed(2)}s -> ${i.endSeconds.toFixed(2)}s] Ducking music by ${i.duckDb}dB`);
+        }
+        return 0;
+      }
+
+      console.error(`Unknown audio subcommand: "${subCommand}". Supported: list-voices, voice-synth, score, sfx, mix`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -1278,6 +1559,11 @@ Commands:
   video render <projId> [shotId]         Render a shot using generative video provider
   video continuation <projId> <sA> <sB>  Inspect continuation chaining between sequential shots
   video retake <projId> <sId> --reason   Execute surgical retake adjusting target variable
+  audio list-voices [seriesId]           List character voice profiles in series
+  audio voice-synth <charId> "<text>"    Synthesize character dialogue line with lip-sync visemes
+  audio score <projId> [sceneId]         Compose background score for a scene
+  audio sfx <projId> [shotId]            Generate/retrieve timed sound effect cues
+  audio mix [projId]                     Compile master audio mix contract with automatic ducking
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report
@@ -1290,6 +1576,7 @@ Commands:
   inspect <json-file> [schema]           Validate a JSON file against domain schemas
   help                                   Show this message
 `);
+
 
       return 0;
     }

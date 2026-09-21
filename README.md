@@ -166,6 +166,13 @@ npx studio video render <projectId> [shotId] [--provider <id>]
 npx studio video continuation <projectId> <shotA> <shotB>
 npx studio video retake <projectId> <shotId> --reason <reason> [--type <type>]
 
+# Voice, Music & SFX Audio Studio
+npx studio audio list-voices [seriesId]
+npx studio audio voice-synth <charId> "<dialogue text>" [seriesId]
+npx studio audio score <projectId> [sceneId] [--mood <mood>]
+npx studio audio sfx <projectId> [shotId] [--name <name>]
+npx studio audio mix [projectId]
+
 # Validate a JSON artifact against domain schemas
 npx studio inspect ./project.json project
 ```
@@ -194,4 +201,6 @@ npx studio inspect ./project.json project
   * 15-bone humanoid Skeleton with Forward Kinematics (FK), CharacterAnimationLibrary with 14 standard keyframed clips (idle, walk, run, sit, stand, turn, look, point, wave, pick_up, hold, react, fear, surprise), FacialSystem with naturalistic blink cycles and gaze direction, LipSyncEngine translating text dialogue into timed visemes, AnimationBlender for cross-fading and sampling, CharacterController orchestrating actor motions, RigToHyperFramesCompiler for compiling actor rigs into HyperFrames GSAP tweens, CharacterAnimationPipelineStep for DAG pipeline.
 - [x] **PHASE 9: GENERATIVE VIDEO PROVIDERS & CONTINUATION** (`v0.10-generative-video`)
   * Generative Video Provider Adapters (`VeoVideoAdapter`, `SeedanceVideoAdapter`, `ComfyUIVideoAdapter`, `MockVideoProvider`), Reference conditioning binding (turnaround images, start frames, environment plates), ContinuationEngine extracting terminal frames (`FRAME_TERMINAL_<shotId>`) and binding `START_FRAME` across cut boundaries, SurgicalRetakeEngine for targeted single-variable adjustments (lighting, acting, camera speed, seed variation) with lineage tracking, GenerativeVideoPipelineStep for DAG pipeline, Studio CLI video commands.
-- [ ] **PHASE 10: VOICE, MUSIC & SFX AUDIO STUDIO**
+- [x] **PHASE 10: VOICE, MUSIC & SFX AUDIO STUDIO** (`v0.11-audio-studio`)
+  * Domain models (`CharacterVoiceProfile`, `AudioDialogueTrack`, `MusicTrack`, `SfxCue`, `AudioMixContract`), Audio Provider Adapters (`ElevenLabsVoiceAdapter`, `MusicGenAdapter`, `FoleySfxAdapter`, `MockAudioProvider`), VoiceStudio managing character vocal identity and syncing with LipSyncEngine, ScoreComposer for background musical themes and scene pacing, FoleyMixer for shot-level sound effects, AudioMixEngine with automatic dialogue ducking (-6dB) and Web Audio API export, AudioProductionPipelineStep for DAG pipeline, Studio CLI audio commands.
+- [ ] **PHASE 11: TIMELINE, EDITING & FINAL RENDER**

@@ -352,6 +352,34 @@ LAN: Then we move tonight.`;
     );
     expect(retakeCode).toBe(0);
   });
+
+  it('manages character voice profiles, dialogue synthesis, scoring, sfx, and mix via CLI', async () => {
+    const projectId = 'proj_cli_audio_test';
+    const seriesId = 'series_cli_audio';
+
+    // 1. audio list-voices
+    const listVoicesCode = await runCli(['audio', 'list-voices', seriesId], { cwd: tempDir, storage });
+    expect(listVoicesCode).toBe(0);
+
+    // 2. audio voice-synth
+    const synthCode = await runCli(
+      ['audio', 'voice-synth', 'char_kaito', 'Shields at seventy percent.'],
+      { cwd: tempDir, storage }
+    );
+    expect(synthCode).toBe(0);
+
+    // 3. audio score
+    const scoreCode = await runCli(['audio', 'score', projectId, 'SCENE_01'], { cwd: tempDir, storage });
+    expect(scoreCode).toBe(0);
+
+    // 4. audio sfx
+    const sfxCode = await runCli(['audio', 'sfx', projectId, 'SHOT_01', '--name', 'plasma_blast'], { cwd: tempDir, storage });
+    expect(sfxCode).toBe(0);
+
+    // 5. audio mix
+    const mixCode = await runCli(['audio', 'mix', projectId], { cwd: tempDir, storage });
+    expect(mixCode).toBe(0);
+  });
 });
 
 
