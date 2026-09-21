@@ -32,3 +32,9 @@ Thumbs.db
 .studio/
 scratch/
 tmp/
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+*.env

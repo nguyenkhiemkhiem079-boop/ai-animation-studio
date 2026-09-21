@@ -117,7 +117,8 @@ export class SourceDocumentManager {
     }
 
     // Find enclosing segment index
-    const seg = doc.segments.find((s) => charStart >= s.charStart && charStart < s.charEnd) ?? doc.segments[0];
+    const segments = doc.segments ?? [];
+    const seg = segments.find((s) => charStart >= s.charStart && charStart < s.charEnd) ?? segments[0];
     const sliceText = doc.rawContent.slice(charStart, charEnd);
 
     return {

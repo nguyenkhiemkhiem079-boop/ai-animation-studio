@@ -8,3 +8,4 @@ export * from './cinematic-grammar-engine.js';
 export * from './shot-planner.js';
 export * from './director-qa.js';
 export * from './director-pipeline-step.js';
+export * from './llm-director-assistant.js';

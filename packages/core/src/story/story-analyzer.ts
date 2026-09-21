@@ -332,13 +332,20 @@ export class RuleBasedStoryAnalyzer implements IStoryAnalyzer {
   }
 }
 
+import { LLMProvider, LLMTaskType } from '../llm/llm-provider.js';
+import {
+  STORY_ANALYSIS_PROMPT_V1,
+  StoryAnalysisExtractionSchema,
+  StoryAnalysisExtraction,
+} from '../llm/prompts/story-analysis.js';
+
 /**
- * Story Analyzer using an external LLM Provider with strict Zod structured output validation.
+ * Story Analyzer using an external LLM Provider or IProvider with strict Zod structured output validation.
  */
 export class ProviderStoryAnalyzer implements IStoryAnalyzer {
-  private provider: IProvider;
+  private provider: IProvider | LLMProvider;
 
-  constructor(provider: IProvider) {
+  constructor(provider: IProvider | LLMProvider) {
     this.provider = provider;
   }
 
@@ -347,7 +354,156 @@ export class ProviderStoryAnalyzer implements IStoryAnalyzer {
     universe?: Universe,
     options: StoryAnalysisOptions = {}
   ): Promise<StoryAnalysis> {
-    const result = await this.provider.execute<
+    // If provider is modern LLMProvider
+    if ('generateStructured' in this.provider && typeof this.provider.generateStructured === 'function') {
+      const canonCharNames = universe
+        ? Object.values(universe.characters).map((c) => c.name).join(', ')
+        : '';
+      const structuredResult = await this.provider.generateStructured<StoryAnalysisExtraction>({
+        taskType: 'STORY_ANALYSIS',
+        systemInstruction: STORY_ANALYSIS_PROMPT_V1.systemInstruction,
+        prompt: STORY_ANALYSIS_PROMPT_V1.buildPrompt({
+          title: doc.title,
+          rawContent: doc.rawContent,
+          universeContext: universe ? `Series: ${universe.seriesId}, Existing Canon Characters: ${canonCharNames}` : undefined,
+        }),
+        responseSchema: StoryAnalysisExtractionSchema,
+        schemaName: 'StoryAnalysisExtraction',
+        projectId: doc.projectId,
+        seriesId: universe?.seriesId,
+        metadata: {
+          promptVersion: STORY_ANALYSIS_PROMPT_V1.version,
+          sourceContentHash: doc.contentHash,
+        },
+      });
+
+      const extracted = structuredResult.data;
+
+      // Transform extracted candidates into typed domain candidates with traceability
+      const characterCandidates: CharacterCandidate[] = extracted.characters.map((c, i) => ({
+        candidateId: `CAND_CHAR_${String(i + 1).padStart(3, '0')}`,
+        suggestedName: c.suggestedName,
+        mentionCount: 1,
+        traits: c.traits,
+        dialogueSample: c.dialogueSample,
+        sourceTrace: [SourceDocumentManager.createTraceabilityPointer(doc, 0, Math.min(doc.rawContent.length, 100))],
+      }));
+
+      const locationCandidates: LocationCandidate[] = extracted.locations.map((l, i) => ({
+        candidateId: `CAND_LOC_${String(i + 1).padStart(3, '0')}`,
+        suggestedName: l.suggestedName,
+        description: l.description,
+        zones: l.zones,
+        sourceTrace: [SourceDocumentManager.createTraceabilityPointer(doc, 0, Math.min(doc.rawContent.length, 100))],
+      }));
+
+      const propCandidates: PropCandidate[] = extracted.props.map((p, i) => ({
+        candidateId: `CAND_PROP_${String(i + 1).padStart(3, '0')}`,
+        suggestedName: p.suggestedName,
+        visualDescription: p.visualDescription,
+        sourceTrace: [SourceDocumentManager.createTraceabilityPointer(doc, 0, Math.min(doc.rawContent.length, 100))],
+      }));
+
+      const scenes: SceneCandidate[] = extracted.scenes.map((s, i) => ({
+        id: `SCENE_${String(s.sceneNumber).padStart(2, '0')}`,
+        sceneNumber: s.sceneNumber,
+        heading: s.heading,
+        timeOfDay: s.timeOfDay,
+        locationName: s.locationName,
+        charactersPresent: s.charactersPresent,
+        beats: s.beats.map((b, bIdx) => ({
+          id: `BEAT_SC${String(s.sceneNumber).padStart(2, '0')}_${String(bIdx + 1).padStart(2, '0')}`,
+          index: bIdx,
+          summary: b.summary,
+          involvedCharacterIds: b.involvedCharacters,
+          sourceTrace: SourceDocumentManager.createTraceabilityPointer(doc, 0, Math.min(doc.rawContent.length, 100)),
+        })),
+        dialogueLines: s.dialogueLines.map((d) => ({
+          speaker: d.speaker,
+          line: d.line,
+          sourceTrace: SourceDocumentManager.createTraceabilityPointer(doc, 0, Math.min(doc.rawContent.length, 100)),
+        })),
+        narrationLines: s.narrationLines.map((n) => ({
+          text: n,
+          sourceTrace: SourceDocumentManager.createTraceabilityPointer(doc, 0, Math.min(doc.rawContent.length, 100)),
+        })),
+        sourceTrace: [SourceDocumentManager.createTraceabilityPointer(doc, 0, Math.min(doc.rawContent.length, 100))],
+      }));
+
+      // Resolve candidates against universe if provided
+      if (universe && options.resolveCanon !== false) {
+        const dummyStorage = new MemoryStorage();
+        const uniMgr = new UniverseManager(dummyStorage);
+        await uniMgr.saveUniverse(universe);
+        const resolver = options.universeResolver ?? new UniverseResolver(uniMgr);
+
+        for (const char of characterCandidates) {
+          const res = await resolver.resolveCharacter(universe.seriesId, char);
+          if (res.resolved) char.resolvedCanonId = res.canonId;
+        }
+        for (const loc of locationCandidates) {
+          const res = await resolver.resolveLocation(universe.seriesId, loc);
+          if (res.resolved) loc.resolvedCanonId = res.canonId;
+        }
+        for (const prop of propCandidates) {
+          const res = await resolver.resolveProp(universe.seriesId, prop.suggestedName);
+          if (res.resolved) prop.resolvedCanonId = res.canonId;
+        }
+      }
+
+      // Compute coverage and guards
+      const coverage = CoverageAndGuards.calculateCoverage(doc, {
+        scenes,
+        characters: characterCandidates,
+        locations: locationCandidates,
+        props: propCandidates,
+      });
+
+      const hallucinationReport = CoverageAndGuards.validateHallucinationGuard(doc, {
+        scenes,
+        characters: characterCandidates,
+        locations: locationCandidates,
+        props: propCandidates,
+      });
+
+      const canonConflicts = universe
+        ? CanonConflictDetector.detectConflicts(universe, {
+            characters: characterCandidates,
+            locations: locationCandidates,
+            props: propCandidates,
+            scenes,
+          })
+        : [];
+
+      const analysis: StoryAnalysis = {
+        id: `analysis_${Date.now()}`,
+        projectId: doc.projectId,
+        sourceDocumentId: doc.id,
+        sourceContentHash: doc.contentHash,
+        characterCandidates,
+        locationCandidates,
+        propCandidates,
+        relationshipCandidates: [],
+        eventCandidates: [],
+        sceneCandidates: scenes,
+        coverage,
+        hallucinationReport,
+        canonConflicts,
+        review: {
+          summary: extracted.summary,
+          tone: 'Derived via structured LLM extraction preserving source fidelity',
+          pacingAssessment: scenes.length > 5 ? 'Fast paced multi-scene sequence' : 'Contained sequence',
+          suggestedInterventions: [],
+        },
+        analyzedAt: new Date().toISOString(),
+      };
+
+      return StoryAnalysisSchema.parse(analysis);
+    }
+
+    // Fallback to generic IProvider execute
+    const legacyProvider = this.provider as IProvider;
+    const result = await legacyProvider.execute<
       { rawContent: string; title: string },
       Record<string, unknown>
     >({
@@ -358,7 +514,6 @@ export class ProviderStoryAnalyzer implements IStoryAnalyzer {
       },
     });
 
-    // Validate provider structured output via Zod
     try {
       const parsed = StoryAnalysisSchema.parse({
         ...result.output,

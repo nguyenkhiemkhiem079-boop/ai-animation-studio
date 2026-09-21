@@ -65,6 +65,9 @@ import {
   StudioPipelineFactory,
   ProductionSummaryCalculator,
   MediaToolchainDoctor,
+  GeminiProvider,
+  LLMProviderRegistry,
+  getCentralizedModelPolicy,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -114,10 +117,83 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const { runGoldenSmoke } = await import('./smoke/golden-smoke.js');
         await runGoldenSmoke();
         return 0;
+      } else if (subCommand === 'gemini') {
+        const { runGeminiSmoke } = await import('./smoke/gemini-smoke.js');
+        await runGeminiSmoke();
+        return 0;
       } else {
-        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media`);
+        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini`);
         return 1;
       }
+    }
+
+    case 'providers': {
+      const subCommand = args[1] || 'list';
+      if (subCommand === 'list') {
+        const registry = LLMProviderRegistry.getInstance();
+        const providers = registry.listProviders();
+        console.log('🤖 Registered LLM Providers:');
+        for (const p of providers) {
+          const isDefault = p.metadata.id === registry.getDefaultProvider()?.metadata.id;
+          console.log(` - [${p.metadata.id}] ${p.metadata.name} (default: ${isDefault})`);
+          console.log(`   Capabilities: ${p.metadata.supportedTasks.join(', ')}`);
+          console.log(`   Fast Model: ${p.metadata.modelMapping.FAST}`);
+          console.log(`   Reasoning Model: ${p.metadata.modelMapping.REASONING}`);
+        }
+        return 0;
+      }
+      if (subCommand === 'doctor') {
+        const isLive = args.includes('--live');
+        console.log(`🩺 Running LLM Providers Doctor (${isLive ? 'LIVE' : 'CONFIG ONLY'})...`);
+        const registry = LLMProviderRegistry.getInstance();
+        const providers = registry.listProviders();
+        for (const p of providers) {
+          const health = await p.diagnoseHealth(isLive);
+          console.log(`\nProvider: ${p.metadata.name} (${p.metadata.id})`);
+          console.log(`- Status: ${health.status}`);
+          console.log(`- Configured: ${health.configured ? 'Yes ✅' : 'No ❌'}`);
+          console.log(`- Message: ${health.message}`);
+          if (health.selectedModel) console.log(`- Selected Model: ${health.selectedModel}`);
+          if (health.latencyMs !== undefined) console.log(`- Latency: ${health.latencyMs}ms`);
+        }
+        return 0;
+      }
+      console.error(`Unknown providers subcommand: "${subCommand}". Supported: list, doctor`);
+      return 1;
+    }
+
+    case 'gemini': {
+      const subCommand = args[1] || 'doctor';
+      const gemini = new GeminiProvider();
+      if (subCommand === 'doctor') {
+        const isLive = args.includes('--live');
+        console.log(`🩺 Running Gemini Doctor (${isLive ? 'LIVE' : 'CONFIG ONLY'})...`);
+        const health = await gemini.diagnoseHealth(isLive);
+        console.log(`- Provider: ${gemini.metadata.name}`);
+        console.log(`- Status: ${health.status}`);
+        console.log(`- Configured: ${health.configured ? 'Yes ✅' : 'No ❌'}`);
+        console.log(`- API Key: ${gemini.getMaskedApiKey()}`);
+        console.log(`- Diagnostics: ${health.message}`);
+        if (health.selectedModel) console.log(`- Active Model: ${health.selectedModel}`);
+        if (health.latencyMs !== undefined) console.log(`- Latency: ${health.latencyMs}ms`);
+        return health.status === 'AVAILABLE' || health.status === 'NOT_CONFIGURED' ? 0 : 1;
+      }
+      if (subCommand === 'models') {
+        const models = getCentralizedModelPolicy();
+        console.log('🤖 Centralized Gemini Model Policy:');
+        console.log(`- FAST       : ${models.fast} (env: GEMINI_MODEL_FAST)`);
+        console.log(`- REASONING  : ${models.reasoning} (env: GEMINI_MODEL_REASONING)`);
+        console.log(`- STRUCTURED : ${models.structured} (env: GEMINI_MODEL_STRUCTURED)`);
+        console.log(`- QA         : ${models.qa} (env: GEMINI_MODEL_QA)`);
+        return 0;
+      }
+      if (subCommand === 'smoke') {
+        const { runGeminiSmoke } = await import('./smoke/gemini-smoke.js');
+        await runGeminiSmoke();
+        return 0;
+      }
+      console.error(`Unknown gemini subcommand: "${subCommand}". Supported: doctor, models, smoke`);
+      return 1;
     }
 
     case 'checkpoint': {
@@ -2079,6 +2155,12 @@ Commands:
   doctor                                 Check environment, node version, and system health
   smoke golden                           Run end-to-end golden smoke test (Minh & White Butterfly -> master.mp4)
   smoke media                            Run media toolchain smoke test (FFmpeg, FFprobe, Browser, real audio & video)
+  smoke gemini                           Run Gemini provider smoke test (offline safe, canonical golden story)
+  providers list                         List registered LLM providers and capabilities
+  providers doctor [--live]              Check LLM providers health (config check or live ping)
+  gemini doctor [--live]                 Run Gemini provider diagnostics (credential & API status)
+  gemini models                          Display centralized Gemini model role mapping
+  gemini smoke                           Run Gemini structured extraction smoke test
   checkpoint list <projectId>            List all checkpoints for a project
   checkpoint create <projectId> <ckptId> Create a checkpoint snapshot
   checkpoint restore <projectId> <ckptId>Restore and verify a checkpoint
