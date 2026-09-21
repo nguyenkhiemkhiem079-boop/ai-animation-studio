@@ -309,6 +309,27 @@ LAN: Then we move tonight.`;
     const renderCode = await runCli(['hyperframes', 'render', projectId, 'SHOT_HF_01'], { cwd: tempDir, storage });
     expect(renderCode).toBe(0);
   });
+
+  it('manages digital actor animation clips, poses, and lip-sync via CLI', async () => {
+    // 1. actor list-clips
+    const listClipsCode = await runCli(['actor', 'list-clips'], { cwd: tempDir, storage });
+    expect(listClipsCode).toBe(0);
+
+    // 2. actor animate
+    const animateCode = await runCli(
+      ['actor', 'animate', 'char_kaito', 'walk', '--dialogue', 'Halt! Who goes there?'],
+      { cwd: tempDir, storage }
+    );
+    expect(animateCode).toBe(0);
+
+    // 3. actor lipsync
+    const lipsyncCode = await runCli(
+      ['actor', 'lipsync', 'char_kaito', 'We must secure the perimeter.'],
+      { cwd: tempDir, storage }
+    );
+    expect(lipsyncCode).toBe(0);
+  });
 });
+
 
 

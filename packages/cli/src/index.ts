@@ -36,6 +36,9 @@ import {
   ShotContract,
   HyperFramesCompositionCompiler,
   HyperFramesAdapter,
+  CharacterAnimationLibrary,
+  CharacterController,
+  LipSyncEngine,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -914,6 +917,75 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'actor': {
+      const subCommand = args[1];
+      const library = CharacterAnimationLibrary.createDefault();
+
+      if (subCommand === 'list-clips') {
+        const clips = library.listClips();
+        console.log(`🎭 Standard Digital Actor Clips (${clips.length} available):`);
+        for (const c of clips) {
+          console.log(` • [${c.name.padEnd(10)}] ${c.durationSeconds}s (${c.keyframes.length} keyframes, ${c.fps}fps, loop: ${c.loop ? 'YES' : 'NO'})`);
+        }
+        return 0;
+      }
+
+      if (subCommand === 'animate') {
+        const characterId = args[2];
+        const clipName = args[3] || 'idle';
+
+        if (!characterId) {
+          console.error('Error: Character ID is required. Usage: studio actor animate <characterId> <clipName> [--dialogue <text>]');
+          return 1;
+        }
+
+        const controller = new CharacterController(characterId, undefined, library);
+        controller.playClip(clipName, true);
+
+        const dialogueIdx = args.indexOf('--dialogue');
+        if (dialogueIdx !== -1 && args[dialogueIdx + 1]) {
+          controller.speak(args[dialogueIdx + 1], 2.0);
+        }
+
+        const snapshot = controller.samplePose(0.5);
+
+        console.log(`🎭 Sampled Pose for Actor "${characterId}" (Clip: "${clipName}" at t=0.5s):`);
+        console.log(` - Expression : ${snapshot.facialState.expression}`);
+        console.log(` - Eye Gaze   : ${snapshot.facialState.eyeDirection}`);
+        console.log(` - Blink State: ${snapshot.facialState.blinkState}`);
+        console.log(` - Mouth Shape: ${snapshot.facialState.mouthShape}`);
+        console.log(` - Key Bones (World FK):`);
+        console.log(`   • Head   : (${snapshot.worldJoints.head.x.toFixed(1)}, ${snapshot.worldJoints.head.y.toFixed(1)}) rot: ${snapshot.worldJoints.head.rotation.toFixed(1)}°`);
+        console.log(`   • Torso  : (${snapshot.worldJoints.torso.x.toFixed(1)}, ${snapshot.worldJoints.torso.y.toFixed(1)}) rot: ${snapshot.worldJoints.torso.rotation.toFixed(1)}°`);
+        console.log(`   • Hand L : (${snapshot.worldJoints.hand_L.x.toFixed(1)}, ${snapshot.worldJoints.hand_L.y.toFixed(1)}) rot: ${snapshot.worldJoints.hand_L.rotation.toFixed(1)}°`);
+        console.log(`   • Hand R : (${snapshot.worldJoints.hand_R.x.toFixed(1)}, ${snapshot.worldJoints.hand_R.y.toFixed(1)}) rot: ${snapshot.worldJoints.hand_R.rotation.toFixed(1)}°`);
+        return 0;
+      }
+
+      if (subCommand === 'lipsync') {
+        const characterId = args[2];
+        const dialogue = args[3];
+
+        if (!characterId || !dialogue) {
+          console.error('Error: Character ID and dialogue text required. Usage: studio actor lipsync <characterId> "<dialogue text>"');
+          return 1;
+        }
+
+        const lipSync = new LipSyncEngine();
+        const visemes = lipSync.generateVisemes(dialogue, 2.5);
+
+        console.log(`🗣️ Lip-Sync Sequence for Actor "${characterId}" ("${dialogue}"):`);
+        console.log(` - Total Visemes: ${visemes.length}`);
+        for (const v of visemes) {
+          console.log(`   • t = ${v.timeSeconds.toFixed(2)}s -> Mouth Shape: [${v.mouthShape}]`);
+        }
+        return 0;
+      }
+
+      console.error(`Unknown actor subcommand: "${subCommand}". Supported: list-clips, animate, lipsync`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -971,6 +1043,9 @@ Commands:
   hyperframes compile <projId> <shotId>  Compile shot into standalone HyperFrames HTML composition
   hyperframes preview <projId> <shotId>  Preview composition layers and timeline animation
   hyperframes render <projId> <shotId>   Execute deterministic render via HyperFrames adapter (0 cost)
+  actor list-clips                       List standard digital actor animation clips
+  actor animate <charId> <clip>          Sample and preview digital actor pose keyframes
+  actor lipsync <charId> <text>          Generate timed viseme sequence for speech
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report

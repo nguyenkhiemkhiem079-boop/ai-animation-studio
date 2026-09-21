@@ -155,6 +155,11 @@ npx studio hyperframes compile <projectId> <shotId>
 npx studio hyperframes preview <projectId> <shotId>
 npx studio hyperframes render <projectId> <shotId>
 
+# Digital Actor Animation & Lip-Sync
+npx studio actor list-clips
+npx studio actor animate <characterId> <clipName> [--dialogue <text>]
+npx studio actor lipsync <characterId> "<dialogue text>"
+
 # Validate a JSON artifact against domain schemas
 npx studio inspect ./project.json project
 ```
@@ -179,5 +184,6 @@ npx studio inspect ./project.json project
   * ProductionRouter implementing Deterministic Animation First rules, PromptCompiler implementing reference-binding discipline and anti-bleed rules, BudgetController for monitoring and enforcing financial caps, RenderCache for deterministic SHA-256 deduplication and zero-cost re-runs, ProviderBenchmarkTracker for performance, cost, and quality statistics, JobOrchestrator with automatic retries and fallback providers, ProductionPlanningPipelineStep for DAG pipeline.
 - [x] **PHASE 7: HYPERFRAMES & DETERMINISTIC ANIMATION** (`v0.8-hyperframes`)
   * HyperFramesCompositionCompiler compiling ShotContracts and layer hierarchies into standalone HTML compositions, ParallaxEngine computing differential motion vectors for multi-plane depth, HyperFramesLayerSystem structuring foreground/midground/backdrop/subtitle layers, CinematicSkillCompiler translating semantic skills (push_in, pull_out, pan_left, orbit, handheld, vintagefilm, motionblur, slowmo) into seekable GSAP timelines, HyperFramesAdapter (IProvider) rendering deterministic animations at $0.00 cost, HyperFramesExecutionPipelineStep for DAG pipeline.
-- [ ] **PHASE 8: CHARACTER ANIMATION SYSTEM** (`v0.9-character-animation`)
+- [x] **PHASE 8: CHARACTER ANIMATION SYSTEM** (`v0.9-character-animation`)
+  * 15-bone humanoid Skeleton with Forward Kinematics (FK), CharacterAnimationLibrary with 14 standard keyframed clips (idle, walk, run, sit, stand, turn, look, point, wave, pick_up, hold, react, fear, surprise), FacialSystem with naturalistic blink cycles and gaze direction, LipSyncEngine translating text dialogue into timed visemes, AnimationBlender for cross-fading and sampling, CharacterController orchestrating actor motions, RigToHyperFramesCompiler for compiling actor rigs into HyperFrames GSAP tweens, CharacterAnimationPipelineStep for DAG pipeline.
 - [ ] **PHASE 9: GENERATIVE VIDEO PROVIDERS**
