@@ -62,8 +62,11 @@ import {
   Html5PlayerPackager,
   NLEInterchangeExporter,
   VideoRenderer,
+  StudioPipelineFactory,
+  ProductionSummaryCalculator,
 } from '@ai-studio/core';
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 
 export interface CliContext {
   cwd: string;
@@ -1885,6 +1888,117 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
 
       console.error(`Unknown export subcommand: "${subCommand}". Supported: html5, nle, render`);
       return 1;
+    }
+
+    case 'run': {
+      const storyFile = args[1];
+      if (!storyFile) {
+        console.error('Error: Story file path is required. Usage: studio run <storyFile> [--project <id>] [--series <id>] [--from-checkpoint <ckptId>]');
+        return 1;
+      }
+
+      const projIdx = args.indexOf('--project');
+      const projectId = projIdx !== -1 && args[projIdx + 1] ? args[projIdx + 1] : `proj_${Date.now()}`;
+
+      const seriesIdx = args.indexOf('--series');
+      const seriesId = seriesIdx !== -1 && args[seriesIdx + 1] ? args[seriesIdx + 1] : 'default_series';
+
+      const ckptIdx = args.indexOf('--from-checkpoint');
+      const resumeFromCheckpointId = ckptIdx !== -1 && args[ckptIdx + 1] ? args[ckptIdx + 1] : undefined;
+
+      let storyContent = '';
+      if (await storage.exists(storyFile)) {
+        storyContent = await storage.read(storyFile);
+      } else {
+        try {
+          storyContent = await fs.readFile(storyFile, 'utf-8');
+        } catch {
+          storyContent = storyFile;
+        }
+      }
+
+      console.log(`🚀 Launching AI Animation Studio Production Pipeline for Project "${projectId}"...`);
+      console.log(` - Series ID: ${seriesId}`);
+      console.log(` - Source Story: ${storyFile}`);
+      if (resumeFromCheckpointId) {
+        console.log(` - Resuming from Checkpoint: ${resumeFromCheckpointId}`);
+      }
+
+      const assetRegistry = new FileSystemAssetRegistry(storage);
+      const pipeline = StudioPipelineFactory.createPipeline({
+        storage,
+        assetRegistry,
+      });
+
+      const initialState = {
+        projectId,
+        seriesId,
+        rawScript: storyContent,
+        sourceText: storyContent,
+        scriptTitle: path.basename(storyFile),
+      };
+
+      const context = await pipeline.execute(projectId, initialState, { resumeFromCheckpointId });
+
+      const summary = ProductionSummaryCalculator.calculate(
+        projectId,
+        seriesId,
+        context.state.timelineSequence as any,
+        context.state.continuityReport as any,
+        context.state.exportManifest as any
+      );
+
+      // Persist summary report
+      await storage.writeJson(`.studio/projects/${projectId}/production_summary.json`, summary);
+
+      console.log(`\n🎉 Production Pipeline Complete for Project "${projectId}"!`);
+      console.log(` - Steps Completed: ${context.completedStepIds.length} / 11`);
+      console.log(` - Total Duration : ${summary.totalDurationSeconds.toFixed(2)}s`);
+      console.log(` - Total Shots    : ${summary.totalShots}`);
+      console.log(`\n💰 Cost & Financial Savings (Deterministic Animation First):`);
+      console.log(` - Actual Total Cost : $${summary.costBreakdown.totalActualCostUsd.toFixed(2)} USD`);
+      console.log(` - Pure Generative   : $${summary.costBreakdown.pureGenerativeEstimatedCostUsd.toFixed(2)} USD`);
+      console.log(` - Total Saved       : $${summary.costBreakdown.totalSavedUsd.toFixed(2)} USD (${summary.costBreakdown.savingsPercentage}% savings) ⚡`);
+      console.log(`\n📦 Deliverables:`);
+      console.log(` - HTML5 Player  : ${summary.deliverables.html5PlayerUri}`);
+      console.log(` - OTIO Sequence : ${summary.deliverables.otioUri}`);
+      console.log(` - CMX 3600 EDL  : ${summary.deliverables.edlUri}`);
+      console.log(` - Video Manifest: ${summary.deliverables.videoManifestUri}`);
+      return 0;
+    }
+
+    case 'status': {
+      const projectId = args[1];
+      if (!projectId) {
+        console.error('Error: Project ID is required. Usage: studio status <projectId>');
+        return 1;
+      }
+
+      const summaryPath = `.studio/projects/${projectId}/production_summary.json`;
+      const checkpoints = new CheckpointManager(storage);
+      const list = await checkpoints.listCheckpoints(projectId);
+
+      console.log(`📊 Production Status for Project "${projectId}":`);
+      console.log(` - Checkpoints Recorded: ${list.length}`);
+      if (list.length > 0) {
+        const latest = list[list.length - 1];
+        console.log(` - Latest Stage        : ${latest.stage} (${latest.name})`);
+      }
+
+      if (await storage.exists(summaryPath)) {
+        const summary = await storage.readJson<any>(summaryPath);
+        console.log(` - Status              : COMPLETED ✅`);
+        console.log(` - Total Duration      : ${summary.totalDurationSeconds}s`);
+        console.log(` - Total Shots         : ${summary.totalShots}`);
+        console.log(` - Total Cost          : $${summary.costBreakdown.totalActualCostUsd.toFixed(2)} USD`);
+        console.log(` - Financial Savings   : $${summary.costBreakdown.totalSavedUsd.toFixed(2)} USD (${summary.costBreakdown.savingsPercentage}%) ⚡`);
+        console.log(` - QA Status           : ${summary.qaReport?.overallPassed ? 'PASSED ✅' : 'DEFECTS DETECTED ⚠️'}`);
+      } else if (list.length > 0) {
+        console.log(` - Status              : IN PROGRESS ⏳`);
+      } else {
+        console.log(` - Status              : NOT FOUND ❓`);
+      }
+      return 0;
     }
 
     case 'inspect': {

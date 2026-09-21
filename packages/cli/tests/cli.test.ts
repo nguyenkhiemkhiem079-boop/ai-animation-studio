@@ -432,6 +432,31 @@ LAN: Then we move tonight.`;
     const renderCode = await runCli(['export', 'render', projectId, '--format', 'mp4'], { cwd: tempDir, storage });
     expect(renderCode).toBe(0);
   });
+
+  it('runs full end-to-end pipeline and checks status via CLI', async () => {
+    const projectId = 'proj_cli_e2e_test';
+    const scriptFile = 'scripts/e2e_story.txt';
+    const scriptContent = `INT. CYBERPUNK BAR - NIGHT
+Kaito confronts Elena in the corner booth.
+KAITO
+We know what you did.
+ELENA
+Then you know it was necessary.`;
+
+    await storage.write(scriptFile, scriptContent);
+
+    // 1. studio run
+    const runCode = await runCli(
+      ['run', scriptFile, '--project', projectId, '--series', 'series_cli_e2e'],
+      { cwd: tempDir, storage }
+    );
+    expect(runCode).toBe(0);
+    expect(await storage.exists(`.studio/projects/${projectId}/production_summary.json`)).toBe(true);
+
+    // 2. studio status
+    const statusCode = await runCli(['status', projectId], { cwd: tempDir, storage });
+    expect(statusCode).toBe(0);
+  });
 });
 
 

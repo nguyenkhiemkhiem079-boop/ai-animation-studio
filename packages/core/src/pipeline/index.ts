@@ -192,3 +192,6 @@ export class Pipeline {
     return context;
   }
 }
+
+export * from './studio-pipeline-factory.js';
+export * from './production-summary.js';

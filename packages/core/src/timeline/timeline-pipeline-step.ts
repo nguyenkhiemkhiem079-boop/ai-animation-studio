@@ -47,7 +47,7 @@ export class TimelineEditingPipelineStep implements PipelineStep {
 
     // 2. Build Video Asset Map from state / registry
     const videoAssetMap = new Map<string, VideoAssetBinding>();
-    const renderedVideoMap = state.renderedVideoMap as Record<string, { assetId: string; videoUri?: string; duration?: number }> | undefined;
+    const renderedVideoMap = (state.renderedVideoMap || state.generativeVideoOutputs) as Record<string, { assetId: string; videoUri?: string; duration?: number }> | undefined;
 
     if (renderedVideoMap) {
       for (const [shotId, info] of Object.entries(renderedVideoMap)) {
@@ -60,12 +60,12 @@ export class TimelineEditingPipelineStep implements PipelineStep {
     }
 
     // Also check hyperframes compositions if present
-    const hfCompositions = state.hyperFramesCompositions as Record<string, { assetId: string; duration?: number }> | undefined;
+    const hfCompositions = (state.hyperFramesCompositions || state.renderedHyperFramesCompositions) as Record<string, { assetId: string; duration?: number; outputAssetId?: string }> | undefined;
     if (hfCompositions) {
       for (const [shotId, info] of Object.entries(hfCompositions)) {
         if (!videoAssetMap.has(shotId)) {
           videoAssetMap.set(shotId, {
-            assetId: info.assetId,
+            assetId: info.outputAssetId || info.assetId,
             duration: info.duration,
           });
         }
@@ -73,7 +73,7 @@ export class TimelineEditingPipelineStep implements PipelineStep {
     }
 
     // 3. Retrieve Audio Mix from state
-    const audioMix = state.audioMix as AudioMixContract | undefined;
+    const audioMix = (state.audioMix || state.audioMixContract) as AudioMixContract | undefined;
 
     // 4. Assemble Timeline Sequence
     const sequence = TimelineAssembler.assemble({

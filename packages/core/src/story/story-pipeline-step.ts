@@ -22,9 +22,9 @@ export function createStoryIntelligenceStep(options: StoryIntelligenceStepOption
     description: 'Losslessly ingests source text, extracts narrative beats, scenes, candidates, and checks canon conflicts.',
     saveCheckpointAfter: options.saveCheckpointAfter ?? true,
     run: async (context: PipelineContext): Promise<Record<string, unknown>> => {
-      const rawText = (context.state.rawScript || context.state.sourceContent || context.state.script) as string;
+      const rawText = (context.state.rawScript || context.state.sourceContent || context.state.script || context.state.sourceText) as string;
       if (!rawText || typeof rawText !== 'string') {
-        throw new ValidationError('Pipeline state must include "rawScript" or "sourceContent" string to run Story Intelligence');
+        throw new ValidationError('Pipeline state must include "rawScript", "sourceContent", or "sourceText" string to run Story Intelligence');
       }
 
       const title = (context.state.scriptTitle as string) || 'Untitled Production';
