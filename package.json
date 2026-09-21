@@ -20,6 +20,7 @@
     "smoke:golden": "tsx packages/cli/src/index.ts smoke golden",
     "smoke:gemini": "tsx packages/cli/src/index.ts smoke gemini",
     "smoke:flow": "tsx packages/cli/src/index.ts smoke flow",
+    "smoke:flow-media": "tsx packages/cli/src/index.ts flow flow-media",
     "studio": "tsx packages/cli/src/index.ts",
     "clean": "npm run --workspaces --if-present clean"
   },

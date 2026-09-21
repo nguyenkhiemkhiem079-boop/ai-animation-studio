@@ -91,3 +91,49 @@ External generative video models suffer from severe identity drift if supplied w
 - **Candidate Status**: Imported media is enrolled into `IAssetRegistry` with `status: 'candidate'`. It cannot be used in production timelines until human review.
 - **Continuity QA Gate**: `FlowQAEvaluator` checks duration fidelity, codec compliance, and scans notes for unsupported/hallucinated events. Any `CRITICAL` issue transitions the job to `QA_FAILED` and blocks approval.
 - **Versioned Iteration**: Re-rendering a shot creates version increments (`v1`, `v2`, etc.), preserving historical candidates for audit without silently overwriting canon.
+
+## 7. Persistent Flow Job Storage (`StorageFlowJobRepository`)
+
+Flow job records are not memory-only. They are physically persisted to the Studio's storage root using `IFlowJobRepository` backed by `IStorageProvider`:
+- Physical location: `.studio/flow/jobs/<jobId>.json`
+- Persistence transitions: State is committed to disk at every lifecycle transition (`DRAFT`, `PACKAGE_READY`, `NEEDS_USER_ACTION`, `WAITING_FOR_IMPORT`, `IMPORTED`, `VERIFYING`, `VERIFIED`, `QA_PENDING`, `CANDIDATE`, `QA_FAILED`, `APPROVED`, `REJECTED`, `ARCHIVED`).
+- Atomic writes: Uses atomic temp file writing (`.tmp` + rename) supported by `FileSystemStorage` to prevent partial or corrupted JSON.
+
+## 8. Restart Recovery & Collision-Safe Versioning
+
+- **Restart Recovery**: If the Studio process terminates while a job is in `NEEDS_USER_ACTION` or `CANDIDATE`, a new `FlowJobManager` instance reloads the exact job state from disk.
+- **Persistent Version History**: Next version generation queries disk history (`findByShot`). A restarted process generates `v2` (or `v3`) rather than resetting to `v1`.
+- **Collision Protection**: Version allocation checks both disk state and in-memory caches, retrying with incremented versions to avoid overwriting existing files.
+- **Series/Project Scoping**: Jobs are strictly scoped by `projectId`, `seriesId`, and `shotId`. `SHOT_001` in Series A cannot collide with `SHOT_001` in Series B.
+
+## 9. Canonical Semantic Package Hashing
+
+Flow packages calculate a deterministic SHA-256 semantic package digest via `computePackageSemanticHash`:
+- **Included Semantic Inputs**: `shotContractSnapshot`, `sourceReferences`, `references`, `firstFrame`, `lastFrame`, `continuityConstraints`, `styleGuidelines`, `explicitWorkflow`, `modelRecommendation`.
+- **Canonical Key Ordering**: Deep recursive sorting of object keys guarantees identical hashes regardless of serialization order.
+- **Excluded Volatile Properties**: Timestamps (`createdAt`, `timestamp`), temporary file paths, and runtime IDs are excluded so package identity reflects only creative content.
+
+## 10. Import Failure Atomicity
+
+If media import or FFprobe verification fails (e.g., corrupt MP4, zero-byte file, missing video track):
+- The job is **never** left in a falsely reporting `VERIFIED` state.
+- The job state is safely reverted to `WAITING_FOR_IMPORT` with diagnostic metadata (`lastError`, `lastAttemptAt`, `failureCode`).
+- Previous valid candidates are preserved.
+
+## 11. Approval Artifact Re-Verification
+
+Before a candidate is promoted (`CANDIDATE -> APPROVED`):
+- The physical artifact on disk is re-verified for existence, readability, non-zero size, and SHA-256 checksum integrity.
+- If the artifact originally passed video stream verification, `ArtifactVerifier` re-verifies that a valid video stream is present. If the candidate file disappeared or became corrupted post-import, approval is strictly blocked (`FLOW_CANDIDATE_ARTIFACT_INVALID`).
+
+## 12. Financial Claim Reality & Transparency
+
+- **Untracked / Unknown Costs**: When credit usage is not specified by the user during import, cost is classified strictly as `UNKNOWN`, not zero.
+- **Estimated Benchmarks**: Financial metrics comparing deterministic vs generative routing are labeled as `ESTIMATED BENCHMARK`.
+- **Zero Fabrication**: Unsupported percentage claims (e.g. hardcoded 75.4%) are completely eliminated from production CLI and UI displays.
+
+## 13. QA Scope & Phase 17 Deferred Scope
+
+Current `FlowQAEvaluator` performs deterministic, metadata, and heuristic QA (temporal bounds, container conformance, hallucination keyword scanning).
+> [!NOTE]
+> Visual semantic continuity QA (cross-shot character feature embeddings, facial landmark matching, and spatial perspective QA) is explicitly deferred to **Phase 17**. Current evaluation is deterministic metadata QA and does not overclaim multimodal visual certainty.

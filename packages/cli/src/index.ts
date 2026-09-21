@@ -78,6 +78,7 @@ import {
   LLMProviderRegistry,
   getCentralizedModelPolicy,
   FlowJobManager,
+  StorageFlowJobRepository,
   FlowProductionPackageBuilder,
   FlowResultImporter,
   FlowQAEvaluator,
@@ -217,7 +218,9 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
     case 'flow': {
       const subCommand = args[1] || 'doctor';
       const assetRegistry = new FileSystemAssetRegistry(storage);
-      const flowManager = new FlowJobManager(assetRegistry);
+      const flowRepo = new StorageFlowJobRepository(storage);
+      const flowManager = new FlowJobManager(assetRegistry, undefined, undefined, undefined, flowRepo);
+      await flowManager.loadPersistedJobs();
 
       if (subCommand === 'doctor') {
         console.log('🩺 Running Google Flow Bridge Doctor...');
@@ -238,6 +241,12 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       if (subCommand === 'smoke') {
         const { runFlowSmoke } = await import('./smoke/flow-smoke.js');
         await runFlowSmoke();
+        return 0;
+      }
+
+      if (subCommand === 'flow-media' || subCommand === 'smoke:media' || subCommand === 'media-smoke') {
+        const { runFlowMediaSmoke } = await import('./smoke/flow-media-smoke.js');
+        await runFlowMediaSmoke();
         return 0;
       }
 
@@ -2341,9 +2350,9 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log(` - Total Duration : ${summary.totalDurationSeconds.toFixed(2)}s`);
       console.log(` - Total Shots    : ${summary.totalShots}`);
       console.log(`\n💰 Cost & Financial Savings (Deterministic Animation First):`);
-      console.log(` - Actual Total Cost : $${summary.costBreakdown.totalActualCostUsd.toFixed(2)} USD`);
-      console.log(` - Pure Generative   : $${summary.costBreakdown.pureGenerativeEstimatedCostUsd.toFixed(2)} USD`);
-      console.log(` - Total Saved       : $${summary.costBreakdown.totalSavedUsd.toFixed(2)} USD (${summary.costBreakdown.savingsPercentage}% savings) ⚡`);
+      console.log(` - Actual Total Cost : $${summary.costBreakdown.totalActualCostUsd.toFixed(2)} USD (Recorded/Verified)`);
+      console.log(` - Pure Generative   : $${summary.costBreakdown.pureGenerativeEstimatedCostUsd.toFixed(2)} USD (Estimated Benchmark)`);
+      console.log(` - Total Saved       : $${summary.costBreakdown.totalSavedUsd.toFixed(2)} USD (${summary.costBreakdown.savingsPercentage}% Estimated Savings) ⚡`);
       console.log(`\n📦 Deliverables:`);
       console.log(` - HTML5 Player  : ${summary.deliverables.html5PlayerUri}`);
       console.log(` - OTIO Sequence : ${summary.deliverables.otioUri}`);
@@ -2376,7 +2385,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.log(` - Total Duration      : ${summary.totalDurationSeconds}s`);
         console.log(` - Total Shots         : ${summary.totalShots}`);
         console.log(` - Total Cost          : $${summary.costBreakdown.totalActualCostUsd.toFixed(2)} USD`);
-        console.log(` - Financial Savings   : $${summary.costBreakdown.totalSavedUsd.toFixed(2)} USD (${summary.costBreakdown.savingsPercentage}%) ⚡`);
+        console.log(` - Financial Savings   : $${summary.costBreakdown.totalSavedUsd.toFixed(2)} USD (${summary.costBreakdown.savingsPercentage}% Estimated) ⚡`);
         console.log(` - QA Status           : ${summary.qaReport?.overallPassed ? 'PASSED ✅' : 'DEFECTS DETECTED ⚠️'}`);
       } else if (list.length > 0) {
         console.log(` - Status              : IN PROGRESS ⏳`);
@@ -2392,7 +2401,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log(` - Dual-Mode Player: Deterministic HyperFrames DOM + Master Video Compositor`);
       console.log(` - Multi-Track Timeline: Video (V1), Dialogue (A1), Score (A2), SFX (A3), Subs (S1)`);
       console.log(` - Production Assets: Canonical 6-View Turnarounds & Spatial Staging`);
-      console.log(` - Financial Monitor: Real-time 75.4% Cost Savings Meter`);
+      console.log(` - Financial Monitor: Production Cost & Savings Meter (Deterministic vs Estimated Generative)`);
       console.log(`Open http://localhost:${port} in your browser to begin animation production!`);
       return 0;
     }

@@ -43,6 +43,7 @@ export interface FlowImportProvenance {
   creditUsage: FlowCreditUsage;
   modelUsed?: string;
   notes?: string;
+  hasVideoStreamVerified?: boolean;
 }
 
 export interface FlowImportResult {
@@ -176,6 +177,7 @@ export class FlowResultImporter {
       creditUsage,
       modelUsed: input.generationMetadata?.modelUsed,
       notes: input.generationMetadata?.notes,
+      hasVideoStreamVerified: verification.hasVideoStream === true,
     };
 
     // Save provenance file alongside video

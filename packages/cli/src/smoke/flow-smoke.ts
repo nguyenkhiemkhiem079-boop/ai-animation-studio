@@ -2,7 +2,8 @@
  * Google Flow Production Smoke Test
  * Generates a real physical Google Flow production package for the canonical story:
  * "Minh bước vào căn phòng tối. Cậu nhìn thấy một con bướm trắng bay quanh ngọn nến."
- * Verifies files on disk, schema conformance, reference packaging, and prompt structure.
+ * Verifies files on disk, schema conformance, reference packaging, semantic package hash,
+ * physical persistence, and process restart recovery with a NEW manager instance.
  * Reports status = NEEDS_USER_ACTION truthfully without pretending generation was automatic.
  */
 
@@ -10,7 +11,9 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import {
   ShotContract,
-  FlowProductionPackageBuilder,
+  FlowJobManager,
+  StorageFlowJobRepository,
+  FileSystemStorage,
   FlowProductionPackageV1,
   FlowReferenceAsset,
   SourceDocumentManager,
@@ -26,7 +29,10 @@ export interface FlowSmokeResult {
   workflow: string;
   workflowReason: string;
   hasReferences: boolean;
+  semanticHash: string;
   zeroSecretsVerified: boolean;
+  persistedJobVerified: boolean;
+  restartRecoveryVerified: boolean;
   package: FlowProductionPackageV1;
 }
 
@@ -36,6 +42,10 @@ export async function runFlowSmoke(): Promise<FlowSmokeResult> {
   const baseDir = path.resolve('.studio', 'smoke', 'flow');
   await fs.rm(baseDir, { recursive: true, force: true });
   await fs.mkdir(baseDir, { recursive: true });
+
+  const storage = new FileSystemStorage('.');
+  const repo = new StorageFlowJobRepository(storage);
+  const manager = new FlowJobManager(undefined, undefined, undefined, undefined, repo);
 
   const canonicalText = 'Minh bước vào căn phòng tối. Cậu nhìn thấy một con bướm trắng bay quanh ngọn nến.';
   const doc = SourceDocumentManager.createSourceDocument(
@@ -149,8 +159,8 @@ export async function runFlowSmoke(): Promise<FlowSmokeResult> {
 
   const sourceRefs = [SourceDocumentManager.createTraceabilityPointer(doc, 0, canonicalText.length)];
 
-  const builder = new FlowProductionPackageBuilder();
-  const buildResult = await builder.buildPackage({
+  // Prepare job with physical persistence
+  const preparedJob = await manager.prepareFlowJob({
     projectId: 'proj_smoke_flow',
     seriesId: 'series_smoke',
     sceneId: 'SCENE_01',
@@ -165,42 +175,78 @@ export async function runFlowSmoke(): Promise<FlowSmokeResult> {
     outputBaseDir: baseDir,
   });
 
+  const packageDir = preparedJob.packageDir!;
+  const manifestPath = path.join(packageDir, 'flow-package.json');
+  const promptPath = path.join(packageDir, 'prompt.txt');
+  const readmePath = path.join(packageDir, 'README.txt');
+
   // Physical file verification
-  const manifestExists = await fs.access(buildResult.manifestPath).then(() => true).catch(() => false);
-  const promptExists = await fs.access(buildResult.promptPath).then(() => true).catch(() => false);
-  const readmeExists = await fs.access(buildResult.readmePath).then(() => true).catch(() => false);
+  const manifestExists = await fs.access(manifestPath).then(() => true).catch(() => false);
+  const promptExists = await fs.access(promptPath).then(() => true).catch(() => false);
+  const readmeExists = await fs.access(readmePath).then(() => true).catch(() => false);
 
   if (!manifestExists || !promptExists || !readmeExists) {
     throw new Error('Flow smoke failed: Essential package files missing on disk.');
   }
 
-  // Verify manifest content
-  const manifestContent = await fs.readFile(buildResult.manifestPath, 'utf-8');
+  // Verify manifest content and semantic hash
+  const manifestContent = await fs.readFile(manifestPath, 'utf-8');
   const parsedManifest = JSON.parse(manifestContent) as FlowProductionPackageV1;
 
+  if (!parsedManifest.provenance?.semanticHash) {
+    throw new Error('Flow smoke failed: Package missing semanticHash in provenance.');
+  }
+
   // Verify zero secrets / credentials
-  const allText = manifestContent + (await fs.readFile(buildResult.promptPath, 'utf-8'));
+  const allText = manifestContent + (await fs.readFile(promptPath, 'utf-8'));
   const hasSecrets = /AIzaSy|Bearer |password|client_secret/i.test(allText);
 
-  console.log('✅ Google Flow Production Package generated successfully on disk!');
-  console.log(`- Package Directory: ${buildResult.packageDir}`);
+  // RESTART RECOVERY TEST: Instantiate a completely new manager and reload from disk
+  const freshRepo = new StorageFlowJobRepository(storage);
+  const restartManager = new FlowJobManager(undefined, undefined, undefined, undefined, freshRepo);
+  const reloadedJob = await restartManager.findJob(preparedJob.jobId);
+
+  if (!reloadedJob) {
+    throw new Error(`Flow smoke failed: Persisted job "${preparedJob.jobId}" not found after restart.`);
+  }
+
+  if (reloadedJob.status !== 'NEEDS_USER_ACTION') {
+    throw new Error(`Flow smoke failed: Expected status NEEDS_USER_ACTION after restart, got "${reloadedJob.status}".`);
+  }
+
+  if (reloadedJob.version !== preparedJob.version) {
+    throw new Error(`Flow smoke failed: Version mismatch after restart. Expected ${preparedJob.version}, got ${reloadedJob.version}.`);
+  }
+
+  if (reloadedJob.package?.packageId !== preparedJob.package?.packageId) {
+    throw new Error('Flow smoke failed: Package ID mismatch after restart.');
+  }
+
+  console.log('✅ Google Flow Production Package generated and persisted successfully!');
+  console.log(`- Package Directory: ${packageDir}`);
+  console.log(`- Semantic Hash: ${parsedManifest.provenance.semanticHash}`);
   console.log(`- Recommended Workflow: ${parsedManifest.recommendedWorkflow} (${parsedManifest.workflowReason})`);
   console.log(`- References Bound: ${parsedManifest.references.length}`);
   console.log(`- Target Duration: ${parsedManifest.durationTargetSeconds}s (${parsedManifest.aspectRatio})`);
   console.log(`- Zero Secrets in Package: ${!hasSecrets ? 'VERIFIED ✅' : 'FAILED ❌'}`);
-  console.log(`- Status: NEEDS_USER_ACTION (Assisted human handoff ready)`);
+  console.log(`- State Machine: ${preparedJob.status} (Persisted to .studio/flow/jobs)`);
+  console.log(`- Restart Recovery: VERIFIED ✅ (New manager loaded job from disk)`);
+  console.log(`- Status: NEEDS_USER_ACTION (Assisted human handoff ready — no unofficial API called)`);
 
   return {
     status: 'NEEDS_USER_ACTION',
-    packageDir: buildResult.packageDir,
-    manifestPath: buildResult.manifestPath,
-    promptPath: buildResult.promptPath,
-    readmePath: buildResult.readmePath,
+    packageDir,
+    manifestPath,
+    promptPath,
+    readmePath,
     filesVerified: ['flow-package.json', 'prompt.txt', 'README.txt', 'references/', 'frames/', 'metadata/'],
     workflow: parsedManifest.recommendedWorkflow,
     workflowReason: parsedManifest.workflowReason,
     hasReferences: parsedManifest.references.length > 0,
+    semanticHash: parsedManifest.provenance.semanticHash,
     zeroSecretsVerified: !hasSecrets,
+    persistedJobVerified: true,
+    restartRecoveryVerified: true,
     package: parsedManifest,
   };
 }

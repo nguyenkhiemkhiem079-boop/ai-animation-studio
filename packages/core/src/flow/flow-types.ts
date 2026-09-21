@@ -125,6 +125,7 @@ export const FlowProductionPackageV1Schema = z.object({
     compilerVersion: z.string(),
     packageBuilderVersion: z.string(),
     timestamp: z.string(),
+    semanticHash: z.string().optional(),
   }),
 });
 export const FlowProductionPackageSchema = FlowProductionPackageV1Schema;
@@ -157,6 +158,7 @@ export interface FlowProductionPackageV1 {
     compilerVersion: string;
     packageBuilderVersion: string;
     timestamp: string;
+    semanticHash?: string;
   };
 }
 

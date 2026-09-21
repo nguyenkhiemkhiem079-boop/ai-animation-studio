@@ -38,8 +38,53 @@ export interface BuildPackageResult {
   readmePath: string;
 }
 
+export function canonicalizeJson(value: any): any {
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJson);
+  }
+  const sortedKeys = Object.keys(value).sort();
+  const result: Record<string, any> = {};
+  for (const key of sortedKeys) {
+    if (key === 'createdAt' || key === 'timestamp' || key === 'compiledAt' || key === 'outputBaseDir') {
+      continue;
+    }
+    result[key] = canonicalizeJson(value[key]);
+  }
+  return result;
+}
+
+export function computePackageSemanticHash(input: {
+  shot: ShotContract;
+  sourceReferences?: SourceTraceability[];
+  references?: FlowReferenceAsset[];
+  firstFrame?: FlowFrameDescriptor;
+  lastFrame?: FlowFrameDescriptor;
+  continuityConstraints?: string[];
+  styleGuidelines?: string;
+  explicitWorkflow?: FlowCapability;
+  modelRecommendation?: string;
+}): string {
+  const semanticPayload = {
+    shot: input.shot,
+    sourceReferences: input.sourceReferences || [],
+    references: input.references || [],
+    firstFrame: input.firstFrame,
+    lastFrame: input.lastFrame,
+    continuityConstraints: input.continuityConstraints || [],
+    styleGuidelines: input.styleGuidelines,
+    explicitWorkflow: input.explicitWorkflow,
+    modelRecommendation: input.modelRecommendation || 'Google Flow / Veo 2 (Advisory)',
+  };
+  const canonical = canonicalizeJson(semanticPayload);
+  return crypto.createHash('sha256').update(JSON.stringify(canonical), 'utf-8').digest('hex');
+}
+
 export class FlowProductionPackageBuilder {
   public static readonly VERSION = '1.0.0';
+  public static computeSemanticHash = computePackageSemanticHash;
 
   private promptCompiler: FlowPromptCompiler;
   private workflowRecommender: FlowWorkflowRecommender;
@@ -56,12 +101,8 @@ export class FlowProductionPackageBuilder {
    * Builds and writes a self-contained Google Flow production package to disk.
    */
   public async buildPackage(input: BuildPackageInput): Promise<BuildPackageResult> {
-    const contentDigest = crypto
-      .createHash('sha256')
-      .update(JSON.stringify({ shot: input.shot, refs: input.references, first: input.firstFrame, last: input.lastFrame }))
-      .digest('hex')
-      .substring(0, 12);
-    const packageId = `flow_pkg_${input.projectId}_${input.shot.id}_${contentDigest}`;
+    const semanticHash = FlowProductionPackageBuilder.computeSemanticHash(input);
+    const packageId = `flow_pkg_${input.projectId}_${input.shot.id}_${semanticHash.substring(0, 12)}`;
     const baseDir = input.outputBaseDir ?? path.resolve('.studio', 'flow', input.projectId, input.shot.id);
 
     // 1. Compile prompt
@@ -127,6 +168,7 @@ export class FlowProductionPackageBuilder {
         compilerVersion: FlowPromptCompiler.VERSION,
         packageBuilderVersion: FlowProductionPackageBuilder.VERSION,
         timestamp: new Date().toISOString(),
+        semanticHash,
       },
     };
 

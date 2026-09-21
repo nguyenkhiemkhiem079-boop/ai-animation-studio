@@ -96,3 +96,11 @@ To view version history:
 ```bash
 npm run studio -- flow history SHOT_SC01_SH01 <projectId>
 ```
+
+---
+
+## Process Persistence & Restart Safety
+
+- **Disk Authoritative**: All Flow jobs are physically stored in `.studio/flow/jobs/<jobId>.json`. You can close your terminal, restart your machine, or upgrade Node without losing prepared packages or imported candidates.
+- **Restart-Safe Versioning**: Regenerating a shot after restarting Studio automatically reads disk history and increments the version (`v2`, `v3`) with zero collision risk.
+- **Pre-Approval Physical Check**: When approving a candidate (`studio flow approve`), Studio strictly re-verifies that the physical video artifact on disk is readable, non-empty, and possesses a valid H.264 video stream. If the file was moved or damaged, approval is blocked.

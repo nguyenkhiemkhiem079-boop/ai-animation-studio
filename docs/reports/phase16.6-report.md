@@ -188,4 +188,4 @@ Generates `.studio/smoke/flow/` package, verifies all files on disk, schema conf
 - None. All contracts validated via Zod, with 100% typecheck clean and zero mock leaks into core.
 
 ## 33. Readiness for Phase 17
-**YES**. Phase 16.6 acceptance criteria are fully satisfied. The codebase is prepared for Phase 17.
+**YES**. Phase 16.6 acceptance criteria are fully satisfied, and subsequent production hardening has been completed in **Phase 16.6.1** (see `docs/reports/phase16.6.1-hardening-report.md`). The codebase is prepared for Phase 17.

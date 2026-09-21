@@ -477,17 +477,11 @@ describe('Phase 16.6 — Google Flow Production Bridge Test Suite (40 Gate Crite
     ).rejects.toThrow();
   });
 
-  // 21. import valid MP4
-  it('21. successfully imports valid MP4 and archives physical artifact', async () => {
-    // Copy existing master.mp4 or golden asset from repository
-    const goldenMp4 = path.resolve('.studio', 'smoke', 'golden', 'master.mp4');
-    let testMp4 = goldenMp4;
-    const exists = await fs.stat(goldenMp4).then(() => true).catch(() => false);
-    if (!exists) {
-      // Fallback: create mock media buffer for test if offline
-      testMp4 = path.resolve(testWorkspaceDir, 'mock_valid.mp4');
-      await fs.writeFile(testMp4, Buffer.alloc(1024, 0x7f));
-    }
+  // 21. UNIT: isolated registration test
+  it('21. UNIT: archives file and creates candidate when video stream check is bypassed for isolated unit testing', async () => {
+    // Isolated unit test for registry linking. Real media acceptance is tested in flow-hardening.test.ts
+    const testFile = path.resolve(testWorkspaceDir, 'unit_mock_archive.dat');
+    await fs.writeFile(testFile, Buffer.alloc(1024, 0x7f));
 
     const registry = new InMemoryAssetRegistry();
     const importer = new FlowResultImporter(registry);
@@ -495,8 +489,8 @@ describe('Phase 16.6 — Google Flow Production Bridge Test Suite (40 Gate Crite
       projectId: 'proj_test',
       seriesId: 'series_test',
       shotId: 'SHOT_01',
-      sourceMp4Path: testMp4,
-      requireValidVideoStream: false, // avoid requiring real ffprobe decoding if test mp4 is small buffer
+      sourceMp4Path: testFile,
+      requireValidVideoStream: false, // Explicitly bypassed in unit test
     });
 
     expect(result.candidateAssetId).toBeDefined();
