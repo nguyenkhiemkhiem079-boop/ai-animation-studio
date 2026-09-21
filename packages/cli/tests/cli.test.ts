@@ -100,4 +100,39 @@ describe('CLI Commands', () => {
     const importCode = await runCli(['universe', 'import', 'series_cli_backup', exportFile], { cwd: tempDir, storage });
     expect(importCode).toBe(0);
   });
+
+  it('ingests, analyzes, and reports stories via CLI', async () => {
+    const projectId = 'proj_cli_story';
+    const scriptFile = 'scripts/episode1.txt';
+    const scriptContent = `INT. ROOFTOP - NIGHT
+
+Heavy rain falls.
+MINH: It ends tonight.
+VICTOR: You cannot stop what has started.`;
+
+    await storage.write(scriptFile, scriptContent);
+
+    // 1. story ingest
+    const ingestCode = await runCli(['story', 'ingest', projectId, scriptFile], {
+      cwd: tempDir,
+      storage,
+    });
+    expect(ingestCode).toBe(0);
+    expect(await storage.exists(`.studio/projects/${projectId}/source_doc.json`)).toBe(true);
+
+    // 2. story analyze
+    const analyzeCode = await runCli(['story', 'analyze', projectId, scriptFile], {
+      cwd: tempDir,
+      storage,
+    });
+    expect(analyzeCode).toBe(0);
+    expect(await storage.exists(`.studio/projects/${projectId}/story_analysis.json`)).toBe(true);
+
+    // 3. story report
+    const reportCode = await runCli(['story', 'report', projectId, scriptFile], {
+      cwd: tempDir,
+      storage,
+    });
+    expect(reportCode).toBe(0);
+  });
 });

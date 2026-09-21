@@ -13,7 +13,7 @@ The **AI Animation Studio** converts full user story content into complete, edit
 ```
 FULL USER CONTENT
       ↓
-Story Intelligence (Source-preserving, beats, candidates)
+Story Intelligence (Source-preserving, beats, candidates, coverage, hallucination guard)
       ↓
 Persistent Universe (Character DNA, Location DNA, isolated series memory)
       ↓
@@ -71,7 +71,8 @@ ai-animation-studio/
 │   │   │   ├── providers/      # IProvider, ProviderRegistry, MockProvider
 │   │   │   ├── asset-registry/ # AssetRegistry (dedup, versioning, canon approval)
 │   │   │   ├── cinematic-skills/# Semantic skills (push_in, orbit, etc.)
-│   │   │   └── universe/       # UniverseManager, WorldStateTracker, UniverseResolver, ProjectManager
+│   │   │   ├── universe/       # UniverseManager, WorldStateTracker, UniverseResolver, ProjectManager
+│   │   │   └── story/          # SourceDocumentManager, StoryAnalyzer, Coverage, HallucinationGuard
 │   │   └── tests/              # Vitest test suite
 │   └── cli/                    # Studio developer CLI
 │       ├── src/
@@ -121,6 +122,11 @@ npx studio character list <seriesId>
 npx studio universe export <seriesId> backup.json
 npx studio universe import <seriesId> backup.json
 
+# Story Intelligence
+npx studio story ingest <projectId> script.txt
+npx studio story analyze <projectId> script.txt [seriesId]
+npx studio story report <projectId> script.txt [seriesId]
+
 # Validate a JSON artifact against domain schemas
 npx studio inspect ./project.json project
 ```
@@ -133,7 +139,8 @@ npx studio inspect ./project.json project
   * Monorepo skeleton, Core domain, Zod schemas, Provider abstraction, Pipeline engine, Checkpoint system, Asset Registry, ShotContract, CinematicSkill foundation, Storage abstraction, Errors, Logging, Events, Vitest test suite, CI workflow, AGENTS.md, Architecture documentation.
 - [x] **PHASE 1: PROJECT + SERIES + UNIVERSE CORE** (`v0.2-universe`)
   * Series namespace isolation, UniverseManager, Immutable CharacterDNA versioning, LocationDNA zones & props, Relationships, WorldStateTracker, StateTransitions, ContinuitySnapshot, UniverseResolver, Local persistence, Universe import/export.
-- [ ] **PHASE 2: STORY INTELLIGENCE ENGINE** (`v0.3-story-intelligence`)
+- [x] **PHASE 2: STORY INTELLIGENCE ENGINE** (`v0.3-story-intelligence`)
+  * Lossless source document ingestion, character-offset segmentation, RuleBasedStoryAnalyzer, ProviderStoryAnalyzer, Candidate != Canon extraction, exact source traceability, Source Coverage calculation, Hallucination Guard, Canon conflict detection, StoryIntelligenceStep for DAG pipeline.
 - [ ] **PHASE 3: SCENE & SHOT DIRECTOR** (`v0.4-director`)
 - [ ] **PHASE 4: CHARACTER & ASSET STUDIO** (`v0.5-character-assets`)
 - [ ] **PHASE 5: WORLD & ENVIRONMENT STUDIO** (`v0.6-world-studio`)

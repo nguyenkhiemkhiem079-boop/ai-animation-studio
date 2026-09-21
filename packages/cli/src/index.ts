@@ -13,6 +13,8 @@ import {
   CharacterDNASchema,
   ShotContractSchema,
   UniverseManager,
+  SourceDocumentManager,
+  RuleBasedStoryAnalyzer,
 } from '@ai-studio/core';
 
 export interface CliContext {
@@ -151,6 +153,57 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'story': {
+      const subCommand = args[1];
+      const projectId = args[2];
+      const inputFile = args[3];
+      const seriesId = args[4] || 'default_series';
+
+      if (!projectId || !inputFile) {
+        console.error('Error: Project ID and input file are required. Usage: studio story <ingest|analyze|report> <projectId> <inputFile> [seriesId]');
+        return 1;
+      }
+
+      const content = await storage.read(inputFile);
+
+      if (subCommand === 'ingest') {
+        const doc = SourceDocumentManager.createSourceDocument(projectId, inputFile, content);
+        const outPath = `.studio/projects/${projectId}/source_doc.json`;
+        await storage.writeJson(outPath, doc);
+        console.log(`✅ Ingested "${inputFile}" losslessly!`);
+        console.log(` - Characters: ${doc.rawContent.length}, Words: ${doc.wordCount}, Segments: ${doc.segments.length}`);
+        console.log(` - SHA-256: ${doc.contentHash}`);
+        return 0;
+      }
+
+      if (subCommand === 'analyze' || subCommand === 'report') {
+        const doc = SourceDocumentManager.createSourceDocument(projectId, inputFile, content);
+        const universeManager = new UniverseManager(storage);
+        const universe = await universeManager.getOrCreateUniverse(seriesId);
+
+        const analyzer = new RuleBasedStoryAnalyzer();
+        const analysis = await analyzer.analyze(doc, universe);
+        const outPath = `.studio/projects/${projectId}/story_analysis.json`;
+        await storage.writeJson(outPath, analysis);
+
+        console.log(`📖 Story Intelligence Report for "${doc.title}":`);
+        console.log(` - Scenes: ${analysis.sceneCandidates.length}`);
+        console.log(` - Character Candidates: ${analysis.characterCandidates.map((c) => c.suggestedName).join(', ') || 'None'}`);
+        console.log(` - Location Candidates: ${analysis.locationCandidates.map((l) => l.suggestedName).join(', ') || 'None'}`);
+        console.log(` - Prop Candidates: ${analysis.propCandidates.map((p) => p.suggestedName).join(', ') || 'None'}`);
+        console.log(` - Source Coverage: ${analysis.coverage.coveragePercentage}% (${analysis.coverage.coveredCharacters}/${analysis.coverage.totalCharacters} chars)`);
+        console.log(` - Hallucination Guard: ${analysis.hallucinationReport.isValid ? 'PASSED ✅' : 'VIOLATIONS ⚠️'}`);
+        console.log(` - Canon Conflicts: ${analysis.canonConflicts.length}`);
+        for (const conflict of analysis.canonConflicts) {
+          console.log(`   ⚠️ [${conflict.entityType}] ${conflict.description}`);
+        }
+        return 0;
+      }
+
+      console.error(`Unknown story subcommand: "${subCommand}". Supported: ingest, analyze, report`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -180,7 +233,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
     case 'help':
     default: {
       console.log(`
-🎬 AI Animation Studio CLI (v0.2.0)
+🎬 AI Animation Studio CLI (v0.3.0)
 
 Usage:
   studio <command> [options]
@@ -194,6 +247,9 @@ Commands:
   universe export <seriesId> [file]      Export series universe bundle
   universe import <seriesId> <file>      Import series universe bundle
   character list <seriesId>              List all canonical characters and active versions
+  story ingest <projectId> <file>        Losslessly ingest script into source document with segments
+  story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
+  story report <projectId> <file>        Print story intelligence and canon conflict report
   inspect <json-file> [schema]           Validate a JSON file against domain schemas
   help                                   Show this message
 `);

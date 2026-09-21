@@ -14,3 +14,4 @@ export * from './providers/index.js';
 export * from './asset-registry/index.js';
 export * from './cinematic-skills/index.js';
 export * from './universe/index.js';
+export * from './story/index.js';

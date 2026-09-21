@@ -1,5 +1,6 @@
 /**
- * Domain models and schemas for Story Intelligence, Source Documents, and Candidates.
+ * Domain models and schemas for Story Intelligence, Source Documents,
+ * Traceability, Candidates, Coverage, and Hallucination Guard.
  */
 
 import { z } from 'zod';
@@ -35,6 +36,31 @@ export const SourceDocumentSchema = z.object({
 });
 export type SourceDocument = z.infer<typeof SourceDocumentSchema>;
 
+export const DialogueLineSchema = z.object({
+  speaker: z.string().min(1),
+  line: z.string(),
+  intent: z.string().optional(),
+  sourceTrace: SourceTraceabilitySchema,
+});
+export type DialogueLine = z.infer<typeof DialogueLineSchema>;
+
+export const NarrationLineSchema = z.object({
+  text: z.string(),
+  voiceMood: z.string().optional(),
+  sourceTrace: SourceTraceabilitySchema,
+});
+export type NarrationLine = z.infer<typeof NarrationLineSchema>;
+
+export const NarrativeBeatSchema = z.object({
+  id: z.string().min(1),
+  index: z.number().int().nonnegative(),
+  summary: z.string(),
+  emotionalShift: z.string().optional(),
+  involvedCharacterIds: z.array(z.string()).default([]),
+  sourceTrace: SourceTraceabilitySchema,
+});
+export type NarrativeBeat = z.infer<typeof NarrativeBeatSchema>;
+
 export const CharacterCandidateSchema = z.object({
   candidateId: z.string().min(1),
   suggestedName: z.string().min(1),
@@ -50,20 +76,40 @@ export const LocationCandidateSchema = z.object({
   candidateId: z.string().min(1),
   suggestedName: z.string().min(1),
   description: z.string(),
+  zones: z.array(z.string()).default([]),
   sourceTrace: z.array(SourceTraceabilitySchema).default([]),
   resolvedCanonId: z.string().optional(),
 });
 export type LocationCandidate = z.infer<typeof LocationCandidateSchema>;
 
-export const NarrativeBeatSchema = z.object({
+export const PropCandidateSchema = z.object({
+  candidateId: z.string().min(1),
+  suggestedName: z.string().min(1),
+  visualDescription: z.string(),
+  holder: z.string().optional(),
+  sourceTrace: z.array(SourceTraceabilitySchema).default([]),
+  resolvedCanonId: z.string().optional(),
+});
+export type PropCandidate = z.infer<typeof PropCandidateSchema>;
+
+export const RelationshipCandidateSchema = z.object({
   id: z.string().min(1),
-  index: z.number().int().nonnegative(),
-  summary: z.string(),
-  emotionalShift: z.string().optional(),
-  involvedCharacterIds: z.array(z.string()).default([]),
+  characterA: z.string().min(1),
+  characterB: z.string().min(1),
+  inferredRelation: z.string(),
+  sentiment: z.enum(['friendly', 'hostile', 'neutral', 'ambivalent']).default('neutral'),
   sourceTrace: SourceTraceabilitySchema,
 });
-export type NarrativeBeat = z.infer<typeof NarrativeBeatSchema>;
+export type RelationshipCandidate = z.infer<typeof RelationshipCandidateSchema>;
+
+export const EventCandidateSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  summary: z.string(),
+  significance: z.string().optional(),
+  sourceTrace: SourceTraceabilitySchema,
+});
+export type EventCandidate = z.infer<typeof EventCandidateSchema>;
 
 export const SceneCandidateSchema = z.object({
   id: z.string().min(1),
@@ -73,23 +119,54 @@ export const SceneCandidateSchema = z.object({
   locationName: z.string(),
   charactersPresent: z.array(z.string()).default([]),
   beats: z.array(NarrativeBeatSchema).default([]),
-  dialogueLines: z.array(
-    z.object({
-      speaker: z.string(),
-      line: z.string(),
-      intent: z.string().optional(),
-      sourceTrace: SourceTraceabilitySchema.optional(),
-    })
-  ).default([]),
-  narrationLines: z.array(
-    z.object({
-      text: z.string(),
-      sourceTrace: SourceTraceabilitySchema.optional(),
-    })
-  ).default([]),
+  dialogueLines: z.array(DialogueLineSchema).default([]),
+  narrationLines: z.array(NarrationLineSchema).default([]),
   sourceTrace: z.array(SourceTraceabilitySchema).default([]),
 });
 export type SceneCandidate = z.infer<typeof SceneCandidateSchema>;
+
+export const CanonConflictSchema = z.object({
+  entityType: z.enum(['character', 'location', 'prop', 'fact']),
+  entityId: z.string(),
+  description: z.string(),
+  sourceTrace: SourceTraceabilitySchema.optional(),
+  suggestedResolution: z.string().optional(),
+});
+export type CanonConflict = z.infer<typeof CanonConflictSchema>;
+
+export const SourceCoverageSchema = z.object({
+  coveragePercentage: z.number().min(0).max(100),
+  totalCharacters: z.number().int().nonnegative(),
+  coveredCharacters: z.number().int().nonnegative(),
+  coveredRanges: z.array(z.tuple([z.number(), z.number()])).default([]),
+  uncoveredRanges: z.array(z.tuple([z.number(), z.number()])).default([]),
+});
+export type SourceCoverage = z.infer<typeof SourceCoverageSchema>;
+
+export const HallucinationGuardReportSchema = z.object({
+  isValid: z.boolean(),
+  violations: z.array(
+    z.object({
+      entityType: z.string(),
+      entityId: z.string(),
+      reason: z.string(),
+      invalidOffset: z.object({
+        charStart: z.number(),
+        charEnd: z.number(),
+      }),
+    })
+  ).default([]),
+  ungroundedEntities: z.array(z.string()).default([]),
+});
+export type HallucinationGuardReport = z.infer<typeof HallucinationGuardReportSchema>;
+
+export const StoryReviewSchema = z.object({
+  summary: z.string(),
+  tone: z.string().optional(),
+  pacingAssessment: z.string().optional(),
+  suggestedInterventions: z.array(z.string()).default([]),
+});
+export type StoryReview = z.infer<typeof StoryReviewSchema>;
 
 export const StoryAnalysisSchema = z.object({
   id: z.string().min(1),
@@ -98,16 +175,24 @@ export const StoryAnalysisSchema = z.object({
   sourceContentHash: z.string().min(1),
   characterCandidates: z.array(CharacterCandidateSchema).default([]),
   locationCandidates: z.array(LocationCandidateSchema).default([]),
+  propCandidates: z.array(PropCandidateSchema).default([]),
+  relationshipCandidates: z.array(RelationshipCandidateSchema).default([]),
+  eventCandidates: z.array(EventCandidateSchema).default([]),
   sceneCandidates: z.array(SceneCandidateSchema).default([]),
-  sourceCoveragePercentage: z.number().min(0).max(100),
-  canonConflicts: z.array(
-    z.object({
-      entityType: z.enum(['character', 'location', 'prop', 'fact']),
-      entityId: z.string(),
-      description: z.string(),
-      suggestedResolution: z.string().optional(),
-    })
-  ).default([]),
+  coverage: SourceCoverageSchema.default({
+    coveragePercentage: 0,
+    totalCharacters: 0,
+    coveredCharacters: 0,
+    coveredRanges: [],
+    uncoveredRanges: [],
+  }),
+  hallucinationReport: HallucinationGuardReportSchema.default({
+    isValid: true,
+    violations: [],
+    ungroundedEntities: [],
+  }),
+  canonConflicts: z.array(CanonConflictSchema).default([]),
+  review: StoryReviewSchema.optional(),
   analyzedAt: z.string().datetime(),
 });
 export type StoryAnalysis = z.infer<typeof StoryAnalysisSchema>;
