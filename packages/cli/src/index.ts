@@ -28,6 +28,12 @@ import {
   FileSystemAssetRegistry,
   TurnaroundView,
   WorldStudio,
+  ProductionRouter,
+  PromptCompiler,
+  ProviderBenchmarkTracker,
+  BudgetController,
+  ProviderRegistry,
+  ShotContract,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 
@@ -560,6 +566,223 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'production': {
+      const subCommand = args[1];
+      const projectId = args[2];
+      const targetId = args[3];
+
+      if (!projectId) {
+        console.error('Error: Project ID is required. Usage: studio production <route|plan|budget> <projectId> [targetId]');
+        return 1;
+      }
+
+      const providerRegistry = new ProviderRegistry();
+      const promptCompiler = new PromptCompiler();
+      const benchmarkTracker = new ProviderBenchmarkTracker();
+      const budgetController = new BudgetController();
+
+      // Read budget if persisted
+      const budgetPath = `.studio/production/${projectId}_budget.json`;
+      if (await storage.exists(budgetPath)) {
+        const savedBudget = await storage.readJson<any>(budgetPath);
+        if (savedBudget.maxBudgetUsd !== undefined) {
+          budgetController.setMaxBudget(savedBudget.maxBudgetUsd);
+        }
+      }
+
+      const router = new ProductionRouter(providerRegistry, promptCompiler, benchmarkTracker, budgetController);
+
+      if (subCommand === 'route') {
+        const shotId = targetId || 'SHOT_01';
+        // Try loading real shot or construct a representative shot
+        const scenesPath = `.studio/director/${projectId}_scenes.json`;
+        let targetShot: ShotContract | undefined;
+        if (await storage.exists(scenesPath)) {
+          const scenes = await storage.readJson<ProductionScene[]>(scenesPath);
+          for (const s of scenes) {
+            const found = s.shots.find((sh) => sh.id === shotId);
+            if (found) {
+              targetShot = found;
+              break;
+            }
+          }
+        }
+
+        if (!targetShot) {
+          // Construct default test shot for CLI inspection
+          targetShot = {
+            id: shotId,
+            sceneId: 'SCENE_01',
+            shotNumber: 1,
+            purpose: 'establishing',
+            complexity: 'simple_transform',
+            rendererIntent: 'deterministic_hyperframes',
+            frame: { durationSeconds: 3.5, targetFps: 24, aspectRatio: '16:9' },
+            camera: {
+              focalLength: '35mm',
+              shotSize: 'wide',
+              angle: 'eye_level',
+              movement: 'push_in',
+              semanticSkills: ['pushin'],
+            },
+            lighting: {
+              keyLightDirection: 'left',
+              mood: 'noir_suspense',
+              colorTemperature: 'cool',
+              fogAtmosphere: false,
+            },
+            composition: {
+              rule: 'rule_of_thirds',
+              subjectPlacement: 'center',
+              depthLayers: { foreground: [], midground: [], background: [] },
+            },
+            acting: [
+              {
+                characterId: 'char_main',
+                pose: 'standing_watchful',
+                expression: 'serious',
+                gazeDirection: 'screen_right',
+              },
+            ],
+            transition: { type: 'cut', durationSeconds: 0 },
+            environmentLocationId: 'loc_cyber_city',
+            environmentZoneId: 'alley',
+            audioCue: { sfx: [] },
+            requiredAssetIds: ['ASSET_CHAR_MAIN', 'ASSET_LOC_ALLEY'],
+            dependsOnShotIds: [],
+            directorLocks: {
+              isCameraLocked: false,
+              isFramingLocked: false,
+              isRendererLocked: false,
+              isActingLocked: false,
+            },
+            provenance: { decidedAt: new Date().toISOString() },
+          };
+        }
+
+        const strategy = router.routeShot(targetShot);
+
+        console.log(`🎯 Production Route for Shot "${shotId}" (Project "${projectId}"):`);
+        console.log(` - Execution Route : ${strategy.executionRoute.toUpperCase()}`);
+        console.log(` - Deterministic   : ${strategy.isDeterministic ? 'YES ✅ (Zero Generative Cost)' : 'NO 🎬 (Generative Video Required)'}`);
+        console.log(` - Primary Provider: ${strategy.primaryProviderId}`);
+        if (strategy.fallbackProviderId) {
+          console.log(` - Fallback Provider: ${strategy.fallbackProviderId}`);
+        }
+        console.log(` - Estimated Cost  : $${strategy.estimatedCostUsd.toFixed(4)}`);
+        console.log(` - Estimated Latency: ${strategy.estimatedLatencyMs}ms`);
+        console.log(` - Rationale       : ${strategy.rationale}`);
+        console.log(` - Required Assets : ${strategy.requiredInputAssets.length} bound reference(s)`);
+        for (const ref of strategy.requiredInputAssets) {
+          console.log(`   • [${ref.role}] ${ref.assetId} (weight: ${ref.weight})`);
+        }
+        if (strategy.promptPacket) {
+          console.log(` - Positive Prompt : "${strategy.promptPacket.positivePrompt}"`);
+          console.log(` - Negative Prompt : "${strategy.promptPacket.negativePrompt}"`);
+        }
+        return 0;
+      }
+
+      if (subCommand === 'plan') {
+        const seriesId = (args[3] && !args[3].startsWith('--')) ? args[3] : 'default_series';
+        const scenesPath = `.studio/director/${projectId}_scenes.json`;
+        let shotsToPlan: ShotContract[] = [];
+
+        if (await storage.exists(scenesPath)) {
+          const scenes = await storage.readJson<ProductionScene[]>(scenesPath);
+          for (const s of scenes) {
+            shotsToPlan.push(...s.shots);
+          }
+        }
+
+        if (shotsToPlan.length === 0) {
+          // Provide mock shots for CLI demonstration
+          shotsToPlan = [
+            {
+              id: 'SHOT_SC01_SH01',
+              sceneId: 'SC01',
+              shotNumber: 1,
+              purpose: 'establishing',
+              complexity: 'simple_transform',
+              rendererIntent: 'deterministic_hyperframes',
+              frame: { durationSeconds: 3.0, targetFps: 24, aspectRatio: '16:9' },
+              camera: { focalLength: '24mm', shotSize: 'wide', angle: 'eye_level', movement: 'push_in', semanticSkills: ['pushin'] },
+              lighting: { keyLightDirection: 'left', mood: 'somber', colorTemperature: 'cool', fogAtmosphere: false },
+              composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
+              acting: [],
+              transition: { type: 'cut', durationSeconds: 0 },
+              environmentLocationId: 'loc_ruins',
+              audioCue: { sfx: [] },
+              requiredAssetIds: [],
+              dependsOnShotIds: [],
+              directorLocks: {},
+              provenance: { decidedAt: new Date().toISOString() },
+            },
+            {
+              id: 'SHOT_SC01_SH02',
+              sceneId: 'SC01',
+              shotNumber: 2,
+              purpose: 'action',
+              complexity: 'complex_generative_video',
+              rendererIntent: 'generative_full_video',
+              frame: { durationSeconds: 4.0, targetFps: 24, aspectRatio: '16:9' },
+              camera: { focalLength: '50mm', shotSize: 'medium', angle: 'low_angle', movement: 'orbit_clockwise', semanticSkills: ['orbit'] },
+              lighting: { keyLightDirection: 'right', mood: 'intense', colorTemperature: 'warm', fogAtmosphere: true },
+              composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
+              acting: [{ characterId: 'char_hero', pose: 'combat_ready', expression: 'fierce', gazeDirection: 'screen_left', actionPrompt: 'runs and leaps across chasm' }],
+              transition: { type: 'cut', durationSeconds: 0 },
+              environmentLocationId: 'loc_ruins',
+              audioCue: { sfx: [] },
+              requiredAssetIds: ['ASSET_CHAR_HERO'],
+              dependsOnShotIds: ['SHOT_SC01_SH01'],
+              directorLocks: {},
+              provenance: { decidedAt: new Date().toISOString() },
+            },
+          ];
+        }
+
+        const plan = router.planProduction(projectId, seriesId, shotsToPlan);
+
+        console.log(`📋 Production Plan for Project "${projectId}" (${plan.totalShots} total shots):`);
+        console.log(` - Deterministic Shots: ${plan.deterministicShotsCount} (${((plan.deterministicShotsCount / plan.totalShots) * 100).toFixed(1)}%) ⚡`);
+        console.log(` - Generative Shots   : ${plan.generativeShotsCount} 🎬`);
+        console.log(` - Hybrid Shots       : ${plan.hybridShotsCount} 🎨`);
+        console.log(` - Total Est. Cost    : $${plan.totalEstimatedCostUsd.toFixed(4)} USD`);
+        console.log(` - Total Est. Latency : ${plan.totalEstimatedLatencyMs} ms (~${(plan.totalEstimatedLatencyMs / 1000).toFixed(1)}s)`);
+        console.log('\n--- Shot Execution Strategies ---');
+        for (const strat of plan.strategies) {
+          const typeBadge = strat.isDeterministic ? '⚡ DETERMINISTIC' : '🎬 GENERATIVE';
+          console.log(` • [${strat.shotId}] ${typeBadge} -> ${strat.executionRoute} | Provider: ${strat.primaryProviderId} | Est: $${strat.estimatedCostUsd.toFixed(3)}`);
+        }
+        return 0;
+      }
+
+      if (subCommand === 'budget') {
+        const setCapIdx = args.indexOf('--set-cap');
+        if (setCapIdx !== -1 && args[setCapIdx + 1]) {
+          const newCap = parseFloat(args[setCapIdx + 1]);
+          if (!isNaN(newCap) && newCap >= 0) {
+            budgetController.setMaxBudget(newCap);
+            await storage.writeJson(budgetPath, { maxBudgetUsd: newCap, updatedAt: new Date().toISOString() });
+            console.log(`💰 Budget cap for project "${projectId}" updated to $${newCap.toFixed(2)} USD.`);
+          }
+        }
+
+        const status = budgetController.getStatus();
+        console.log(`💰 Budget Status for Project "${projectId}":`);
+        console.log(` - Maximum Budget : $${status.maxBudgetUsd.toFixed(2)} USD`);
+        console.log(` - Spent Budget   : $${status.spentBudgetUsd.toFixed(2)} USD`);
+        console.log(` - Remaining      : $${status.remainingBudgetUsd.toFixed(2)} USD`);
+        console.log(` - Utilization    : ${status.utilizationPercent.toFixed(1)}%`);
+        console.log(` - Warning Alert  : ${status.isWarning ? '⚠️ WARNING (Threshold Exceeded)' : 'NORMAL ✅'}`);
+        console.log(` - Hard Cap Reached: ${status.isHardCapReached ? '⛔ HARD CAP REACHED' : 'NO ✅'}`);
+        return 0;
+      }
+
+      console.error(`Unknown production subcommand: "${subCommand}". Supported: route, plan, budget`);
+      return 1;
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -611,6 +834,9 @@ Commands:
   world staging <seriesId> <locId> <zId> Show 3D/2D spatial layout and landmark anchors
   world resolve <seriesId> <locId> <zId> Resolve environmental backdrop and depth layers
   world props <seriesId> <locId> <zId>   List props and mutable states in zone
+  production route <projId> <shotId>     Evaluate production route (Deterministic vs Generative)
+  production plan <projId> [seriesId]    Plan production, breakdown, cost & latency for all shots
+  production budget <projId> [--set-cap] View or configure project budget and headroom
   story ingest <projectId> <file>        Losslessly ingest script into source document with segments
   story analyze <projectId> <file>       Extract scenes, beats, candidates, and check coverage
   story report <projectId> <file>        Print story intelligence and canon conflict report

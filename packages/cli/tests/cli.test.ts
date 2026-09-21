@@ -273,4 +273,25 @@ LAN: Then we move tonight.`;
     const propsCode = await runCli(['world', 'props', seriesId, locId, 'dome_room'], { cwd: tempDir, storage });
     expect(propsCode).toBe(0);
   });
+
+  it('manages production routing, plans, and budget via CLI', async () => {
+    const projectId = 'proj_cli_prod_test';
+
+    // 1. production route
+    const routeCode = await runCli(['production', 'route', projectId, 'SHOT_DEMO_01'], { cwd: tempDir, storage });
+    expect(routeCode).toBe(0);
+
+    // 2. production plan
+    const planCode = await runCli(['production', 'plan', projectId], { cwd: tempDir, storage });
+    expect(planCode).toBe(0);
+
+    // 3. production budget (default status)
+    const budgetCode = await runCli(['production', 'budget', projectId], { cwd: tempDir, storage });
+    expect(budgetCode).toBe(0);
+
+    // 4. production budget (--set-cap)
+    const setCapCode = await runCli(['production', 'budget', projectId, '--set-cap', '75.50'], { cwd: tempDir, storage });
+    expect(setCapCode).toBe(0);
+  });
 });
+

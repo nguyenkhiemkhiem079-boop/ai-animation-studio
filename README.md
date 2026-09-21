@@ -145,6 +145,11 @@ npx studio world staging <seriesId> <locationId> [zoneId]
 npx studio world resolve <seriesId> <locationId> [zoneId]
 npx studio world props <seriesId> <locationId> [zoneId]
 
+# Production Routing & Budgeting
+npx studio production route <projectId> <shotId>
+npx studio production plan <projectId> [seriesId]
+npx studio production budget <projectId> [--set-cap <usd>]
+
 # Validate a JSON artifact against domain schemas
 npx studio inspect ./project.json project
 ```
@@ -165,7 +170,8 @@ npx studio inspect ./project.json project
   * Character Studio, Canonical Character Sheet (6 turnaround views), ExpressionLibrary, PoseLibrary, OutfitLibrary, CharacterAssetFactory, AssetResolver & AssetReuseEngine, CharacterReferenceResolver, IdentityLock & IdentityQAEvaluator, CharacterAssetPipelineStep for DAG pipeline.
 - [x] **PHASE 5: WORLD & ENVIRONMENT STUDIO** (`v0.6-world-studio`)
   * SpatialMemory & 2D/3D SceneMap staging, Multi-plane depth layer management (foreground, midground, background, depth_map), Parallax displacement computation (pan, truck, push_in), Lighting presets (noir, golden hour, high noon, etc.), Atmosphere presets (dense fog, blizzard, dust motes, etc.), PropPlacementTracker & mutable prop state tracking, LocationReferenceResolver, WorldStudio coordinator, WorldEnvironmentPipelineStep for DAG pipeline.
-- [ ] **PHASE 6: PRODUCTION ROUTER & ASSET GENERATION** (`v0.7-production-router`)
+- [x] **PHASE 6: PRODUCTION ROUTER & ASSET GENERATION** (`v0.7-production-router`)
+  * ProductionRouter implementing Deterministic Animation First rules, PromptCompiler implementing reference-binding discipline and anti-bleed rules, BudgetController for monitoring and enforcing financial caps, RenderCache for deterministic SHA-256 deduplication and zero-cost re-runs, ProviderBenchmarkTracker for performance, cost, and quality statistics, JobOrchestrator with automatic retries and fallback providers, ProductionPlanningPipelineStep for DAG pipeline.
 - [ ] **PHASE 7: HYPERFRAMES & DETERMINISTIC ANIMATION** (`v0.8-hyperframes`)
 - [ ] **PHASE 8: CHARACTER ANIMATION SYSTEM** (`v0.9-character-animation`)
 - [ ] **PHASE 9: GENERATIVE VIDEO PROVIDERS**
