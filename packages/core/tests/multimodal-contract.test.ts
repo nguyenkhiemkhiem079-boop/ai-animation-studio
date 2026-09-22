@@ -540,6 +540,76 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
     expect(reportLocal.identityConsistencyScore).toBeNull();
   });
 
+  it('provider failure cases (AUTH_ERROR, TIMEOUT, malformed structured response) in PRODUCTION fail closed with safe categorization', async () => {
+    const makeProvider = (errorMsg: string): LLMProvider => ({
+      metadata: {
+        id: 'error-provider',
+        name: 'Error Provider',
+        version: '1.0.0',
+        capabilities: ['llm', 'qa'],
+        supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA', 'VISION_QA'],
+        modelMapping: { FAST: 'm', REASONING: 'm', STRUCTURED: 'm', QA: 'm', VISION_QA: 'm' },
+        supportedTasks: ['CONTINUITY_QA'],
+        isLocal: false,
+        costEstimateUsdPerInvocation: 0,
+        averageLatencyMs: 10,
+        supportsImages: true,
+        supportsMultimodalStructuredOutput: true,
+      },
+      healthCheck: async () => true,
+      diagnoseHealth: async () => ({
+        providerId: 'error-provider',
+        name: 'Error Provider',
+        status: 'AVAILABLE',
+        isLocal: false,
+        configured: true,
+        capabilities: ['llm', 'qa'],
+      }),
+      generateText: async () => { throw new Error(errorMsg); },
+      generateStructured: async () => { throw new Error(errorMsg); },
+      execute: async () => { throw new Error('Not implemented'); },
+    });
+
+    // 1. AUTH_ERROR
+    const authEvaluator = new VisualSemanticQAEvaluator(makeProvider('401 Unauthorized: Invalid API key'));
+    const authReport = await authEvaluator.evaluateShotVideo({
+      projectId: 'proj_auth_fail',
+      shot: testShot,
+      videoPath: redVideo,
+      executionMode: 'PRODUCTION',
+    });
+    expect(authReport.passed).toBe(false);
+    expect(authReport.status).toBe('FAIL');
+    expect(authReport.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(authReport.metadata?.providerFailureReason).toBe('AUTH_ERROR');
+
+    // 2. TIMEOUT
+    const timeoutEvaluator = new VisualSemanticQAEvaluator(makeProvider('ETIMEDOUT: Connection timed out'));
+    const timeoutReport = await timeoutEvaluator.evaluateShotVideo({
+      projectId: 'proj_timeout_fail',
+      shot: testShot,
+      videoPath: redVideo,
+      executionMode: 'PRODUCTION',
+    });
+    expect(timeoutReport.passed).toBe(false);
+    expect(timeoutReport.status).toBe('FAIL');
+    expect(timeoutReport.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(timeoutReport.metadata?.providerFailureReason).toBe('TIMEOUT');
+
+    // 3. Malformed structured response / schema failure
+    const schemaEvaluator = new VisualSemanticQAEvaluator(makeProvider('Invalid schema: ZodError failed to parse output'));
+    const schemaReport = await schemaEvaluator.evaluateShotVideo({
+      projectId: 'proj_schema_fail',
+      shot: testShot,
+      videoPath: redVideo,
+      executionMode: 'PRODUCTION',
+    });
+    expect(schemaReport.passed).toBe(false);
+    expect(schemaReport.status).toBe('FAIL');
+    expect(schemaReport.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(schemaReport.metadata?.providerFailureReason).toBe('INVALID_REQUEST');
+  });
+
   it('candidate (unapproved) character reference cannot satisfy canonical identity verification', async () => {
     const spyProvider: LLMProvider = {
       metadata: {
