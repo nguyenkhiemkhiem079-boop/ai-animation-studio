@@ -201,5 +201,321 @@ describe('Phase 13 — Master Render, HTML5 Player & NLE Interchange', () => {
       expect(assets.some((a) => a.tags.includes('edl'))).toBe(true);
       expect(assets.some((a) => a.tags.includes('video'))).toBe(true);
     });
+
+    it('PRODUCTION blocks missing visualQASummary', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_01',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/Required Visual QA step has not been evaluated/);
+    });
+
+    it('PRODUCTION blocks visualQASummary.overallStatus != PASSED', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_02',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+          visualQASummary: {
+            overallStatus: 'FAILED',
+            notEvaluatedShots: 0,
+            missingArtifacts: 0,
+            criticalDefects: 0,
+            reports: [],
+          },
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/Visual QA overall status is "FAILED"/);
+    });
+
+    it('PRODUCTION blocks missingArtifacts > 0', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_03',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+          visualQASummary: {
+            overallStatus: 'PASSED',
+            notEvaluatedShots: 0,
+            missingArtifacts: 1,
+            criticalDefects: 0,
+            reports: [],
+          },
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/1 required shot video artifact\(s\) are missing/);
+    });
+
+    it('PRODUCTION blocks notEvaluatedShots > 0', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_04',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+          visualQASummary: {
+            overallStatus: 'PASSED',
+            notEvaluatedShots: 2,
+            missingArtifacts: 0,
+            criticalDefects: 0,
+            reports: [],
+          },
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/2 shot\(s\) were not evaluated by Visual QA/);
+    });
+
+    it('PRODUCTION blocks character shot when coverage.identityVisual == NOT_EVALUATED (LOCAL_MEDIA_METADATA cannot satisfy)', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_05',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+          shotContracts: [
+            {
+              id: 'clip_v1_01',
+              sceneId: 'sc1',
+              shotNumber: 1,
+              acting: [{ characterId: 'char_kaito' }],
+              frame: { durationSeconds: 2 },
+            },
+          ],
+          visualQASummary: {
+            overallStatus: 'PASSED',
+            notEvaluatedShots: 0,
+            missingArtifacts: 0,
+            criticalDefects: 0,
+            reports: [
+              {
+                shotId: 'clip_v1_01',
+                passed: true,
+                status: 'PASS',
+                evaluationMechanism: 'LOCAL_MEDIA_METADATA',
+                coverage: {
+                  artifactIntegrity: 'VERIFIED',
+                  spatialFormat: 'VERIFIED',
+                  identityVisual: 'NOT_EVALUATED', // NOT evaluated!
+                  temporalArtifactVisual: 'VERIFIED',
+                  semanticAction: 'VERIFIED',
+                },
+              },
+            ],
+          },
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/Visual semantic identity verification is required/);
+    });
+
+    it('PRODUCTION blocks required temporal visual QA when temporalArtifactVisual == NOT_EVALUATED', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_06',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+          shotContracts: [
+            {
+              id: 'clip_v1_01',
+              sceneId: 'sc1',
+              shotNumber: 1,
+              frame: { durationSeconds: 2 },
+            },
+          ],
+          visualQASummary: {
+            overallStatus: 'PASSED',
+            notEvaluatedShots: 0,
+            missingArtifacts: 0,
+            criticalDefects: 0,
+            reports: [
+              {
+                shotId: 'clip_v1_01',
+                passed: true,
+                status: 'PASS',
+                coverage: {
+                  artifactIntegrity: 'VERIFIED',
+                  spatialFormat: 'VERIFIED',
+                  identityVisual: 'NOT_EVALUATED',
+                  temporalArtifactVisual: 'NOT_EVALUATED',
+                  semanticAction: 'VERIFIED',
+                },
+              },
+            ],
+          },
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/temporal visual artifact coverage/);
+    });
+
+    it('PRODUCTION blocks acting shot when semanticAction == NOT_EVALUATED', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_07',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+          shotContracts: [
+            {
+              id: 'clip_v1_01',
+              sceneId: 'sc1',
+              shotNumber: 1,
+              acting: [{ characterId: 'char_kaito', actionPrompt: 'Kaito aims blaster' }],
+              frame: { durationSeconds: 2 },
+            },
+          ],
+          visualQASummary: {
+            overallStatus: 'PASSED',
+            notEvaluatedShots: 0,
+            missingArtifacts: 0,
+            criticalDefects: 0,
+            reports: [
+              {
+                shotId: 'clip_v1_01',
+                passed: true,
+                status: 'PASS',
+                coverage: {
+                  artifactIntegrity: 'VERIFIED',
+                  spatialFormat: 'VERIFIED',
+                  identityVisual: 'VERIFIED',
+                  temporalArtifactVisual: 'VERIFIED',
+                  semanticAction: 'NOT_EVALUATED',
+                },
+              },
+            ],
+          },
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/semanticAction coverage is "NOT_EVALUATED"/);
+    });
+
+    it('PRODUCTION blocks pending critical retakes', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_08',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+          visualQASummary: {
+            overallStatus: 'PASSED',
+            notEvaluatedShots: 0,
+            missingArtifacts: 0,
+            criticalDefects: 0,
+            reports: [
+              {
+                shotId: 'clip_v1_01',
+                retakeRecommendations: [
+                  { recommendationId: 'rec_1', shotId: 'clip_v1_01', priority: 'high', rationale: 'Defect' },
+                ],
+              },
+            ],
+          },
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/retake recommendation\(s\) are pending execution/);
+    });
+
+    it('PRODUCTION blocks unresolved critical continuity issues', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_09',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+          visualQASummary: {
+            overallStatus: 'PASSED',
+            notEvaluatedShots: 0,
+            missingArtifacts: 0,
+            criticalDefects: 0,
+            reports: [],
+          },
+          continuityReport: {
+            overallPassed: false,
+            issues: [
+              { issueId: 'iss_1', severity: 'critical', message: 'Critical 180 break' },
+            ],
+          },
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/Continuity QA has 1 unresolved critical defect\(s\)/);
+    });
+
+    it('PRODUCTION blocks missing authoritative shot video artifact in shotVideoMap', async () => {
+      const step = new MasterExportPipelineStep();
+      const context: PipelineContext = {
+        executionId: 'exec_prod_10',
+        state: {
+          projectId: 'proj_prod',
+          executionMode: 'PRODUCTION',
+          timelineSequence: dummySequence,
+          visualQASummary: {
+            overallStatus: 'PASSED',
+            notEvaluatedShots: 0,
+            missingArtifacts: 0,
+            criticalDefects: 0,
+            reports: [
+              {
+                shotId: 'clip_v1_01',
+                coverage: {
+                  artifactIntegrity: 'VERIFIED',
+                  spatialFormat: 'VERIFIED',
+                  identityVisual: 'VERIFIED',
+                  temporalArtifactVisual: 'VERIFIED',
+                  semanticAction: 'VERIFIED',
+                },
+              },
+              {
+                shotId: 'clip_v1_02',
+                coverage: {
+                  artifactIntegrity: 'VERIFIED',
+                  spatialFormat: 'VERIFIED',
+                  identityVisual: 'VERIFIED',
+                  temporalArtifactVisual: 'VERIFIED',
+                  semanticAction: 'VERIFIED',
+                },
+              },
+            ],
+          },
+          shotVideoMap: {
+            // Missing clip_v1_01 and clip_v1_02!
+          },
+        },
+        logger: defaultLogger,
+      };
+
+      await expect(step.run(context)).rejects.toThrowError(/missing verified physical video artifact/);
+    });
   });
 });

@@ -219,36 +219,18 @@ export class AutoRepairEngine {
         }
 
         case 'color_palette_drift': {
-          // Step 15: Apply actual color grade compensation to timeline clip if present
-          const videoTrack = seq.tracks.find((t) => t.trackType === 'video');
-          const clip = videoTrack?.clips.find((c) => c.clipId.includes(issue.shotId));
-          if (clip) {
-            (clip as any).colorGrading = {
-              lut: 'neutral_rec709_compensation',
-              temperatureOffset: -500,
-            };
-            appliedActions.push({
-              actionId: `act_repair_${issue.issueId}`,
-              issueId: issue.issueId,
-              strategy: 'color_grade_compensation',
-              description: `Applied color grade compensation curve to shot "${issue.shotId}" to restore scene lighting temperature.`,
-              applied: true,
-              status: 'APPLIED',
-              timestamp: new Date().toISOString(),
-            });
-            repaired = true;
-          } else {
-            appliedActions.push({
-              actionId: `act_propose_${issue.issueId}`,
-              issueId: issue.issueId,
-              strategy: 'color_grade_compensation',
-              description: `Proposed color grade compensation curve for shot "${issue.shotId}".`,
-              applied: false,
-              status: 'PROPOSED',
-              timestamp: new Date().toISOString(),
-            });
-            repaired = false;
-          }
+          // Color grading metadata on clips does not physically alter rendered pixels yet.
+          // Truthful repair: set applied = false, status = PROPOSED, and preserve issue as unresolved.
+          appliedActions.push({
+            actionId: `act_propose_${issue.issueId}`,
+            issueId: issue.issueId,
+            strategy: 'color_grade_compensation',
+            description: `Proposed color grade compensation curve for shot "${issue.shotId}". Physical color grade repair requires render pipeline integration.`,
+            applied: false,
+            status: 'PROPOSED',
+            timestamp: new Date().toISOString(),
+          });
+          repaired = false;
           break;
         }
 

@@ -30,6 +30,7 @@ export interface EvaluateShotVideoOptions {
     base64Data?: string;
     uri?: string;
     mimeType?: string;
+    status?: string;
   }[];
   frameCount?: number;
   thresholds?: {
@@ -38,6 +39,27 @@ export interface EvaluateShotVideoOptions {
     minVisualDefectScore?: number;
     minOverallScore?: number;
   };
+  executionMode?: 'MOCK' | 'LOCAL' | 'PRODUCTION';
+}
+
+function categorizeProviderFailure(err: any): string {
+  const msg = String(err?.message || err || '').toLowerCase();
+  if (msg.includes('401') || msg.includes('auth') || msg.includes('unauthorized') || msg.includes('api key') || msg.includes('permission')) {
+    return 'AUTH_ERROR';
+  }
+  if (msg.includes('429') || msg.includes('resourceexhausted') || msg.includes('rate') || msg.includes('quota')) {
+    return 'QUOTA_EXCEEDED';
+  }
+  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('etimedout')) {
+    return 'TIMEOUT';
+  }
+  if (msg.includes('network') || msg.includes('econnrefused') || msg.includes('ehostunreach') || msg.includes('enotfound')) {
+    return 'NETWORK_ERROR';
+  }
+  if (msg.includes('400') || msg.includes('invalid') || msg.includes('schema') || msg.includes('bad request')) {
+    return 'INVALID_REQUEST';
+  }
+  return 'SERVER_ERROR';
 }
 
 export class VisualSemanticQAEvaluator {
@@ -62,6 +84,7 @@ export class VisualSemanticQAEvaluator {
       referenceImages = [],
       frameCount = 3,
       thresholds = {},
+      executionMode = 'MOCK',
     } = options;
 
     const minIdentity = thresholds.minIdentityScore ?? 0.85;
@@ -235,18 +258,102 @@ export class VisualSemanticQAEvaluator {
       };
     }
 
-    // Track missing identity anchors
+    // Track missing identity anchors (Approved canon references only)
     const missingIdentityAnchors: string[] = [];
     if (shot.acting && shot.acting.length > 0) {
       for (const act of shot.acting) {
         const char = characterProfiles.find(
           (c) => c.name.toLowerCase() === act.characterId.toLowerCase() || c.id === act.characterId
         );
-        const hasRef = referenceImages.some((r) => r.entityId === act.characterId || (char && r.entityId === char.id));
-        if (!hasRef) {
+        const hasApprovedRef = referenceImages.some(
+          (r) =>
+            (r.entityId === act.characterId || (char && r.entityId === char.id)) &&
+            (r.status === undefined || r.status === 'approved_canon') &&
+            (r.role.includes('identity') || r.role.includes('turnaround') || r.role.includes('face') || r.role === 'CHARACTER_IDENTITY')
+        );
+        if (!hasApprovedRef) {
           missingIdentityAnchors.push(act.characterId);
         }
       }
+    }
+
+    // Check outfit reference support
+    let missingOutfitReference = false;
+    let missingOutfitCharacter = '';
+    let missingOutfitId = '';
+    if (shot.acting && shot.acting.length > 0) {
+      for (const act of shot.acting) {
+        if (act.outfitId) {
+          const hasOutfitRef = referenceImages.some(
+            (r) =>
+              (r.entityId === act.characterId || r.role.includes(act.characterId)) &&
+              (r.role.includes('outfit') || r.role.includes(act.outfitId!)) &&
+              (r.status === undefined || r.status === 'approved_canon')
+          );
+          if (!hasOutfitRef) {
+            missingOutfitReference = true;
+            missingOutfitCharacter = act.characterId;
+            missingOutfitId = act.outfitId;
+          }
+        }
+      }
+    }
+
+    // Text-only provider or missing multimodal provider safety in PRODUCTION mode
+    const supportsMultimodalStructured = Boolean((this.llm?.metadata as any)?.supportsMultimodalStructuredOutput ?? true);
+    if (executionMode === 'PRODUCTION' && (!this.llm || !isLlmConfigured || !supportsImages || !supportsMultimodalStructured)) {
+      const reason = !this.llm || !isLlmConfigured ? 'NO_MULTIMODAL_PROVIDER_CONFIGURED' : 'PROVIDER_DOES_NOT_SUPPORT_IMAGES';
+      return {
+        reportId: `vis_qa_${shot.id}_${Date.now()}`,
+        projectId,
+        sceneId,
+        shotId: shot.id,
+        assetId,
+        videoUri: videoPath,
+        identityConsistencyScore: null,
+        spatialPerspectiveScore: 0.0,
+        visualDefectScore: 0.0,
+        overallVisualContinuityScore: 0.0,
+        passed: false,
+        status: 'FAIL',
+        coverage: {
+          artifactIntegrity: 'VERIFIED',
+          spatialFormat: 'NOT_EVALUATED',
+          identityVisual: 'NOT_EVALUATED',
+          temporalArtifactVisual: 'NOT_EVALUATED',
+          semanticAction: 'NOT_EVALUATED',
+        },
+        missingIdentityAnchors: missingIdentityAnchors.length > 0 ? missingIdentityAnchors : undefined,
+        defects: [
+          {
+            defectId: `def_text_only_${Date.now()}`,
+            frameIndex: 0,
+            timestampSeconds: 0,
+            region: 'global',
+            issueType: 'visual_artifact_defect',
+            severity: 'critical',
+            confidence: 1.0,
+            description: `Provider does not support multimodal vision evaluation in PRODUCTION mode (${reason}).`,
+            suggestedFix: 'Configure an authorized multimodal vision provider with image support.',
+          },
+        ],
+        retakeRecommendations: [
+          {
+            recommendationId: `rec_text_only_${Date.now()}`,
+            shotId: shot.id,
+            strategy: 'surgical_retake',
+            priority: 'high',
+            rationale: 'Multimodal vision provider required for production visual QA.',
+          },
+        ],
+        evaluatedFramesCount: frames.length,
+        evaluatedAt: new Date().toISOString(),
+        evaluationMechanism: 'LOCAL_MEDIA_METADATA',
+        metadata: {
+          providerFailure: true,
+          providerFailureReason: reason,
+        },
+      };
     }
 
     // 5. Genuine Multimodal Evaluation if provider supports images and is configured
@@ -329,11 +436,34 @@ export class VisualSemanticQAEvaluator {
         });
 
         const output = result.data;
+
+        // Outfit reference penalty if required but missing
+        if (missingOutfitReference) {
+          output.defects.push({
+            defectId: `def_missing_outfit_${Date.now()}`,
+            frameIndex: 0,
+            timestampSeconds: 0,
+            region: 'body',
+            issueType: 'visual_artifact_defect',
+            severity: 'info',
+            confidence: 0.85,
+            description: `Wardrobe/outfit canonical reference for character "${missingOutfitCharacter}" outfit "${missingOutfitId}" was not provided; identity score capped.`,
+            suggestedFix: 'Attach canonical outfit reference image.',
+          });
+          if (output.identityConsistencyScore !== null && output.identityConsistencyScore > 0.88) {
+            output.identityConsistencyScore = 0.88;
+          }
+        }
+
+        // Missing identity anchors prevents claiming verified identityVisual
+        const finalIdentityScore = missingIdentityAnchors.length > 0 ? null : output.identityConsistencyScore;
+        const identityVisualCoverage = (missingIdentityAnchors.length === 0 && finalIdentityScore !== null) ? 'VERIFIED' : 'NOT_EVALUATED';
+
         const hasCritical = output.defects.some((d) => d.severity === 'critical');
         const passed =
           !hasCritical &&
           (output.overallVisualContinuityScore === null || output.overallVisualContinuityScore >= minOverall) &&
-          (output.identityConsistencyScore === null || output.identityConsistencyScore >= minIdentity) &&
+          (finalIdentityScore === null || finalIdentityScore >= minIdentity) &&
           (output.spatialPerspectiveScore === null || output.spatialPerspectiveScore >= minSpatial) &&
           (output.visualDefectScore === null || output.visualDefectScore >= minDefect);
 
@@ -346,7 +476,7 @@ export class VisualSemanticQAEvaluator {
         const coverage: VisualEvaluationCoverage = {
           artifactIntegrity: 'VERIFIED',
           spatialFormat: 'VERIFIED',
-          identityVisual: output.identityConsistencyScore !== null ? 'VERIFIED' : 'NOT_EVALUATED',
+          identityVisual: identityVisualCoverage,
           temporalArtifactVisual: 'VERIFIED',
           semanticAction: 'VERIFIED',
         };
@@ -364,7 +494,7 @@ export class VisualSemanticQAEvaluator {
           shotId: shot.id,
           assetId,
           videoUri: videoPath,
-          identityConsistencyScore: output.identityConsistencyScore,
+          identityConsistencyScore: finalIdentityScore,
           spatialPerspectiveScore: output.spatialPerspectiveScore,
           visualDefectScore: output.visualDefectScore,
           overallVisualContinuityScore: output.overallVisualContinuityScore,
@@ -382,8 +512,62 @@ export class VisualSemanticQAEvaluator {
             latencyMs: result.usage?.latencyMs,
           },
         };
-      } catch {
-        // If multimodal LLM fails, fall back to truthful local metadata evaluation
+      } catch (err: any) {
+        if (executionMode === 'PRODUCTION') {
+          const failureReason = categorizeProviderFailure(err);
+          return {
+            reportId: `vis_qa_${shot.id}_${Date.now()}`,
+            projectId,
+            sceneId,
+            shotId: shot.id,
+            assetId,
+            videoUri: videoPath,
+            identityConsistencyScore: null,
+            spatialPerspectiveScore: null,
+            visualDefectScore: 0.0,
+            overallVisualContinuityScore: 0.0,
+            passed: false,
+            status: 'FAIL',
+            coverage: {
+              artifactIntegrity: 'VERIFIED',
+              spatialFormat: 'NOT_EVALUATED',
+              identityVisual: 'NOT_EVALUATED',
+              temporalArtifactVisual: 'NOT_EVALUATED',
+              semanticAction: 'NOT_EVALUATED',
+            },
+            missingIdentityAnchors: missingIdentityAnchors.length > 0 ? missingIdentityAnchors : undefined,
+            defects: [
+              {
+                defectId: `def_provider_fail_${Date.now()}`,
+                frameIndex: 0,
+                timestampSeconds: 0,
+                region: 'global',
+                issueType: 'visual_artifact_defect',
+                severity: 'critical',
+                confidence: 1.0,
+                description: `Multimodal Visual QA provider failed in PRODUCTION mode: ${failureReason}.`,
+                suggestedFix: 'Check provider credentials, quota, and network connectivity.',
+              },
+            ],
+            retakeRecommendations: [
+              {
+                recommendationId: `rec_provider_fail_${Date.now()}`,
+                shotId: shot.id,
+                strategy: 'surgical_retake',
+                priority: 'high',
+                rationale: `Multimodal QA provider failure (${failureReason}) requires re-evaluation.`,
+              },
+            ],
+            evaluatedFramesCount: frames.length,
+            evaluatedAt: new Date().toISOString(),
+            evaluationMechanism: 'MULTIMODAL_PROVIDER',
+            metadata: {
+              providerFailure: true,
+              providerFailureReason: failureReason,
+            },
+          };
+        }
+        // If multimodal LLM fails in LOCAL/MOCK mode, fall back to truthful local metadata evaluation
       }
     }
 

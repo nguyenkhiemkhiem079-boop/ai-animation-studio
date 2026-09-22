@@ -62,10 +62,10 @@ export class ContinuityQAPipelineStep implements PipelineStep {
       for (const vReport of visualQAReports) {
         if (vReport.defects && Array.isArray(vReport.defects)) {
           for (const defect of vReport.defects) {
-            // Identity drift and visual artifacts are NEVER auto-repairable via simple editorial transition
+            // Identity drift, color drift, and visual defects cannot be physically auto-repaired
             const isAutoRepairable =
               defect.severity !== 'critical' &&
-              (defect.issueType === 'color_palette_drift' || defect.issueType === 'pacing_stalling');
+              defect.issueType === 'pacing_stalling';
 
             report.issues.push({
               issueId: defect.defectId,
@@ -127,7 +127,7 @@ export class ContinuityQAPipelineStep implements PipelineStep {
         id: `ASSET_QA_${finalReport.reportId}`,
         seriesId,
         type: 'qa_report',
-        status: 'approved_canon',
+        status: finalReport.overallPassed ? 'approved_canon' : 'candidate',
         name: `Continuity QA Report [${projectId}]`,
         contentHash: `hash_qa_${finalReport.reportId}`,
         storageUri: `.studio/qa/${finalReport.reportId}.json`,

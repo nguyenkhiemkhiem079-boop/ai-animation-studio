@@ -25,6 +25,37 @@ export interface VisualQAStepSummary {
   reports: VisualSemanticQAReport[];
 }
 
+function resolveAssetData(asset: any): { base64Data?: string; uri?: string; mimeType: string } {
+  const mimeType = asset.mimeType || 'image/png';
+  if (asset.metadata && typeof (asset.metadata as any).base64 === 'string') {
+    return { base64Data: (asset.metadata as any).base64, mimeType };
+  }
+  if (asset.metadata && typeof (asset.metadata as any).base64Data === 'string') {
+    return { base64Data: (asset.metadata as any).base64Data, mimeType };
+  }
+  if (asset.storageUri) {
+    if (fs.existsSync(asset.storageUri)) {
+      try {
+        const buf = fs.readFileSync(asset.storageUri);
+        return { base64Data: buf.toString('base64'), mimeType, uri: asset.storageUri };
+      } catch {
+        return { uri: asset.storageUri, mimeType };
+      }
+    }
+    const resolvedPath = path.resolve(asset.storageUri);
+    if (fs.existsSync(resolvedPath)) {
+      try {
+        const buf = fs.readFileSync(resolvedPath);
+        return { base64Data: buf.toString('base64'), mimeType, uri: resolvedPath };
+      } catch {
+        return { uri: resolvedPath, mimeType };
+      }
+    }
+    return { uri: asset.storageUri, mimeType };
+  }
+  return { mimeType };
+}
+
 export class VisualSemanticQAPipelineStep implements PipelineStep {
   public readonly id = 'visual_semantic_qa_step';
   public readonly name = 'Visual Semantic QA & Multimodal Continuity';
@@ -44,8 +75,9 @@ export class VisualSemanticQAPipelineStep implements PipelineStep {
   public async run(context: PipelineContext): Promise<Record<string, unknown>> {
     const { state, logger } = context;
     const projectId = (state.projectId as string) || 'default_project';
+    const executionMode = ((state.executionMode as string) || 'MOCK') as 'MOCK' | 'LOCAL' | 'PRODUCTION';
 
-    logger.info('Starting Visual Semantic QA & Multimodal Continuity step...', { projectId });
+    logger.info('Starting Visual Semantic QA & Multimodal Continuity step...', { projectId, executionMode });
 
     // 1. Gather Shots & Characters
     const productionScenes = state.productionScenes as ProductionScene[] | undefined;
@@ -72,29 +104,135 @@ export class VisualSemanticQAPipelineStep implements PipelineStep {
     let missingArtifactsCount = 0;
 
     for (const shot of shots) {
-      let videoPath = shotVideoMap[shot.id];
+      let videoPath: string | undefined = shotVideoMap[shot.id];
 
-      // Check legitimate candidate path specifically for this shot (never cross-shot smoke fallback)
-      if (!videoPath || !fs.existsSync(videoPath)) {
-        const candidatePaths = [
-          path.resolve('.studio', 'media', projectId, `${shot.id}.mp4`),
-          path.resolve('.studio', 'videos', projectId, `${shot.id}.mp4`),
-          path.resolve('.studio', 'videos', projectId, `${shot.id}_gen.mp4`),
-          path.resolve('.studio', 'smoke', 'media', `${shot.id}.mp4`),
-          path.resolve('.studio', 'smoke', 'golden', `${shot.id}.mp4`),
-        ];
-        for (const cp of candidatePaths) {
-          if (fs.existsSync(cp)) {
-            videoPath = cp;
-            break;
+      // In PRODUCTION mode: strictly use authoritative shotVideoMap or verified registered media artifact
+      // NEVER consume .studio/smoke/media or .studio/smoke/golden in production
+      if (executionMode === 'PRODUCTION') {
+        if (!videoPath || !fs.existsSync(videoPath) || fs.statSync(videoPath).size === 0) {
+          videoPath = undefined;
+        }
+      } else {
+        // LOCAL / MOCK candidate paths (strictly NO .studio/smoke/media or .studio/smoke/golden fallback)
+        if (!videoPath || !fs.existsSync(videoPath)) {
+          const candidatePaths = [
+            path.resolve('.studio', 'media', projectId, `${shot.id}.mp4`),
+            path.resolve('.studio', 'videos', projectId, `${shot.id}.mp4`),
+            path.resolve('.studio', 'videos', projectId, `${shot.id}_gen.mp4`),
+            path.resolve('.studio', 'renders', projectId, `${shot.id}.mp4`),
+          ];
+          for (const cp of candidatePaths) {
+            if (fs.existsSync(cp)) {
+              videoPath = cp;
+              break;
+            }
           }
         }
       }
 
-      // Resolve scene and location specifically for this shot (not always Scene 1)
+      // Resolve scene and location specifically for this shot (preserving multi-scene isolation)
       const scene = productionScenes?.find((sc) => sc.id === shot.sceneId);
       const sceneId = shot.sceneId ?? scene?.id;
-      const shotLocation = (scene && (scene as unknown as Record<string, string>)['locationId'] && locationMap[(scene as unknown as Record<string, string>)['locationId']]) ? locationMap[(scene as unknown as Record<string, string>)['locationId']] : defaultLocation;
+      const locationId = shot.environmentLocationId ?? (scene as any)?.locationId;
+      const shotLocation = (locationId && locationMap[locationId])
+        ? locationMap[locationId]
+        : (shot.sceneId ? undefined : defaultLocation);
+
+      // Resolve approved character and environment reference images
+      const referenceImages: Array<{
+        entityId: string;
+        role: string;
+        base64Data?: string;
+        uri?: string;
+        mimeType?: string;
+        status?: string;
+      }> = [];
+
+      // A. Character references from characterReferencePackets
+      const charPackets = state.characterReferencePackets as Record<string, any> | undefined;
+      const charPacket = charPackets?.[shot.id];
+      if (charPacket?.bindings && Array.isArray(charPacket.bindings)) {
+        for (const binding of charPacket.bindings) {
+          const charId = binding.characterId;
+          const actorIntent = shot.acting?.find((a) => a.characterId === charId);
+
+          // Roles to inspect
+          const candidateRoles: Array<{ roleName: string; asset?: any }> = [];
+
+          if (binding.roles?.CHARACTER_IDENTITY) {
+            candidateRoles.push(
+              { roleName: 'CHARACTER_IDENTITY', asset: binding.roles.CHARACTER_IDENTITY },
+              { roleName: 'turnaround_front', asset: binding.roles.CHARACTER_IDENTITY }
+            );
+          }
+          if (binding.roles?.CHARACTER_POSE) {
+            candidateRoles.push({ roleName: 'turnaround_side', asset: binding.roles.CHARACTER_POSE });
+          }
+          if (binding.roles?.EXPRESSION) {
+            candidateRoles.push({ roleName: 'expression_anchor', asset: binding.roles.EXPRESSION });
+          }
+
+          // Outfit reference
+          const outfitId = actorIntent?.outfitId || 'default';
+          if (binding.roles?.OUTFIT) {
+            candidateRoles.push({
+              roleName: `canonical_outfit_reference_${charId}_${outfitId}`,
+              asset: binding.roles.OUTFIT,
+            });
+            candidateRoles.push({
+              roleName: 'outfit_reference',
+              asset: binding.roles.OUTFIT,
+            });
+          }
+
+          for (const item of candidateRoles) {
+            if (!item.asset) continue;
+            let assetStatus = item.asset.status;
+            if (this.assetRegistry) {
+              const regAsset = await this.assetRegistry.findById(item.asset.id);
+              if (regAsset) {
+                assetStatus = regAsset.status;
+              }
+            }
+
+            const data = resolveAssetData(item.asset);
+            if (data.base64Data || data.uri) {
+              referenceImages.push({
+                entityId: charId,
+                role: item.roleName,
+                base64Data: data.base64Data,
+                uri: data.uri,
+                mimeType: data.mimeType,
+                status: assetStatus || 'candidate',
+              });
+            }
+          }
+        }
+      }
+
+      // B. World / Environment references from environmentReferencePackets
+      const envPackets = state.environmentReferencePackets as Record<string, any> | undefined;
+      const envPacket = envPackets?.[shot.id];
+      if (envPacket) {
+        if (envPacket.establishingBackdrop) {
+          let backdropStatus = envPacket.establishingBackdrop.status;
+          if (this.assetRegistry) {
+            const reg = await this.assetRegistry.findById(envPacket.establishingBackdrop.id);
+            if (reg) backdropStatus = reg.status;
+          }
+          const backdropData = resolveAssetData(envPacket.establishingBackdrop);
+          if (backdropData.base64Data || backdropData.uri) {
+            referenceImages.push({
+              entityId: envPacket.locationId ?? shot.sceneId ?? 'location',
+              role: 'canonical_location_reference',
+              base64Data: backdropData.base64Data,
+              uri: backdropData.uri,
+              mimeType: backdropData.mimeType,
+              status: backdropStatus || 'candidate',
+            });
+          }
+        }
+      }
 
       if (videoPath && fs.existsSync(videoPath)) {
         logger.info(`Evaluating visual continuity for shot "${shot.id}"...`, { videoPath, sceneId });
@@ -105,6 +243,8 @@ export class VisualSemanticQAPipelineStep implements PipelineStep {
           videoPath,
           characterProfiles: characters,
           locationProfile: shotLocation,
+          referenceImages,
+          executionMode,
         });
 
         reports.push(report);
@@ -116,11 +256,12 @@ export class VisualSemanticQAPipelineStep implements PipelineStep {
         // Register asset in AssetRegistry
         if (this.assetRegistry) {
           const seriesId = (state.seriesId as string) || 'default_series';
+          const isPassingCanon = report.passed && report.status !== 'FAIL' && report.status !== 'MISSING_ARTIFACT';
           await this.assetRegistry.register({
             id: `ASSET_VIS_QA_${report.reportId}`,
             seriesId,
             type: 'qa_report',
-            status: report.passed ? 'approved_canon' : 'candidate',
+            status: isPassingCanon ? 'approved_canon' : 'candidate',
             name: `Visual Semantic QA Report [${shot.id}]`,
             contentHash: `hash_${report.reportId}`,
             storageUri: reportPath,

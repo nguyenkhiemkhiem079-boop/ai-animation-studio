@@ -1,5 +1,7 @@
+import * as fs from 'node:fs';
 import { PipelineContext, PipelineStep } from '../pipeline/index.js';
 import { TimelineSequence } from '../domain/timeline.js';
+import { ShotContract } from '../domain/director.js';
 import { ExportManifest } from '../domain/export.js';
 import { IAssetRegistry } from '../asset-registry/index.js';
 import { ProductionSafetyError } from '../domain/execution-mode.js';
@@ -51,21 +53,35 @@ export class MasterExportPipelineStep implements PipelineStep {
         );
       }
 
-      // 2. Check for missing required video artifacts
+      // 2. Check visualQASummary.overallStatus === 'PASSED'
+      if (visualQASummary.overallStatus !== 'PASSED') {
+        throw new ProductionSafetyError(
+          `Master export blocked in PRODUCTION mode: Visual QA overall status is "${visualQASummary.overallStatus}". Expected "PASSED".`
+        );
+      }
+
+      // 3. Check for not evaluated shots
+      if (visualQASummary.notEvaluatedShots > 0) {
+        throw new ProductionSafetyError(
+          `Master export blocked in PRODUCTION mode: ${visualQASummary.notEvaluatedShots} shot(s) were not evaluated by Visual QA.`
+        );
+      }
+
+      // 4. Check for missing required video artifacts
       if (visualQASummary.missingArtifacts > 0) {
         throw new ProductionSafetyError(
           `Master export blocked in PRODUCTION mode: ${visualQASummary.missingArtifacts} required shot video artifact(s) are missing.`
         );
       }
 
-      // 3. Check for unresolved critical visual defects
+      // 5. Check for unresolved critical visual defects
       if (visualQASummary.criticalDefects > 0) {
         throw new ProductionSafetyError(
           `Master export blocked in PRODUCTION mode: ${visualQASummary.criticalDefects} unresolved critical visual defect(s) detected.`
         );
       }
 
-      // 4. Check for pending retakes
+      // 6. Check for pending retakes
       const pendingRetakes = visualQASummary.reports?.flatMap((r: any) => r.retakeRecommendations ?? []) ?? [];
       if (pendingRetakes.length > 0) {
         throw new ProductionSafetyError(
@@ -73,12 +89,79 @@ export class MasterExportPipelineStep implements PipelineStep {
         );
       }
 
-      // 5. Check continuity report for unresolved critical defects
+      // 7. Verify required coverage dimensions on every shot report
+      const shotContracts = (state.shotContracts as ShotContract[]) || [];
+      const productionScenes = state.productionScenes as any[] | undefined;
+      const allShots: ShotContract[] = [...shotContracts];
+      if (productionScenes) {
+        for (const sc of productionScenes) {
+          if (sc.shots) {
+            for (const s of sc.shots) {
+              if (!allShots.some((existing) => existing.id === s.id)) {
+                allShots.push(s);
+              }
+            }
+          }
+        }
+      }
+
+      const reports = visualQASummary.reports ?? [];
+      for (const report of reports) {
+        const shot = allShots.find((s) => s.id === report.shotId);
+        const hasCharacters = Boolean(
+          (shot?.acting && shot.acting.length > 0) ||
+          (report.missingIdentityAnchors && report.missingIdentityAnchors.length > 0) ||
+          typeof report.identityConsistencyScore === 'number'
+        );
+
+        if (hasCharacters) {
+          if (report.coverage?.identityVisual !== 'VERIFIED') {
+            throw new ProductionSafetyError(
+              `Master export blocked in PRODUCTION mode: Shot "${report.shotId}" contains character(s) but identityVisual coverage is "${report.coverage?.identityVisual ?? 'NOT_EVALUATED'}". Visual semantic identity verification is required.`
+            );
+          }
+        }
+
+        // Visible rendered motion / temporal artifact QA
+        if (report.coverage?.temporalArtifactVisual !== 'VERIFIED') {
+          throw new ProductionSafetyError(
+            `Master export blocked in PRODUCTION mode: Shot "${report.shotId}" requires temporal visual artifact coverage, but temporalArtifactVisual is "${report.coverage?.temporalArtifactVisual ?? 'NOT_EVALUATED'}".`
+          );
+        }
+
+        // Acting / action requirements
+        const hasAction = Boolean(shot?.acting && shot.acting.some((a: any) => a.actionPrompt || a.pose));
+        if (hasAction && report.coverage?.semanticAction !== 'VERIFIED') {
+          throw new ProductionSafetyError(
+            `Master export blocked in PRODUCTION mode: Shot "${report.shotId}" contains action requirements, but semanticAction coverage is "${report.coverage?.semanticAction ?? 'NOT_EVALUATED'}".`
+          );
+        }
+      }
+
+      // 8. Check continuity report for unresolved critical defects
       if (continuityReport) {
         const unresolvedCritical = continuityReport.issues?.filter((i: any) => i.severity === 'critical') ?? [];
         if (unresolvedCritical.length > 0 || continuityReport.overallPassed === false) {
           throw new ProductionSafetyError(
             `Master export blocked in PRODUCTION mode: Continuity QA has ${unresolvedCritical.length} unresolved critical defect(s).`
+          );
+        }
+      }
+
+      // 9. Verify authoritative shotVideoMap
+      if (!state.shotVideoMap) {
+        throw new ProductionSafetyError(
+          `Master export blocked in PRODUCTION mode: Authoritative shotVideoMap is missing from pipeline state.`
+        );
+      }
+      const shotVideoMap = state.shotVideoMap as Record<string, string>;
+      const videoClips = sequence.tracks.filter((t) => t.trackType === 'video').flatMap((t) => t.clips);
+      for (const clip of videoClips) {
+        const shotId = clip.clipId.replace(/_clip$/, '');
+        const videoPath = shotVideoMap[shotId] || shotVideoMap[clip.clipId] || shotVideoMap[clip.sourceAssetId];
+        if (!videoPath || !fs.existsSync(videoPath) || fs.statSync(videoPath).size === 0) {
+          throw new ProductionSafetyError(
+            `Master export blocked in PRODUCTION mode: Authoritative shotVideoMap is missing verified physical video artifact for shot "${shotId}".`
           );
         }
       }

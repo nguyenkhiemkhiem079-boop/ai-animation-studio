@@ -99,10 +99,18 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
     updatedAt: new Date().toISOString(),
   };
 
+  const redVideo = path.join(testDir, 'contract_test_video_red.mp4');
+  const blueVideo = path.join(testDir, 'contract_test_video_blue.mp4');
+
   beforeAll(() => {
     fs.mkdirSync(testDir, { recursive: true });
     const ffmpeg = MediaToolchainDoctor.getFfmpegPath();
-    execSync(`"${ffmpeg}" -y -f lavfi -i testsrc=size=320x180:rate=12 -t 1 -pix_fmt yuv420p -c:v libx264 "${testVideo}"`, {
+    // VIDEO A: rendered frames visibly RED
+    execSync(`"${ffmpeg}" -y -f lavfi -i color=c=red:size=320x180:rate=12 -t 1 -pix_fmt yuv420p -c:v libx264 "${redVideo}"`, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    // VIDEO B: rendered frames visibly BLUE
+    execSync(`"${ffmpeg}" -y -f lavfi -i color=c=blue:size=320x180:rate=12 -t 1 -pix_fmt yuv420p -c:v libx264 "${blueVideo}"`, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   });
@@ -178,7 +186,7 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
     const report = await evaluator.evaluateShotVideo({
       projectId: 'proj_contract',
       shot: testShot,
-      videoPath: testVideo,
+      videoPath: redVideo,
       characterProfiles: [redCharacter],
       referenceImages: [
         {
@@ -186,6 +194,7 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
           role: 'turnaround_front',
           base64Data: redPngBase64,
           mimeType: 'image/png',
+          status: 'approved_canon',
         },
       ],
       frameCount: 3,
@@ -207,6 +216,7 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
     expect(textParts.length).toBeGreaterThanOrEqual(1);
     // 1 canonical reference image + 3 extracted video frames = 4 image parts
     expect(imageParts.length).toBe(4);
+    expect(imageParts.length).toBeGreaterThan(3);
 
     for (const img of imageParts) {
       expect(img.dataBase64).toBeDefined();
@@ -261,7 +271,7 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
     const report = await evaluator.evaluateShotVideo({
       projectId: 'proj_contract',
       shot: testShot,
-      videoPath: testVideo,
+      videoPath: redVideo,
       characterProfiles: [redCharacter],
     });
 
@@ -270,8 +280,10 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
     expect(report.coverage?.identityVisual).toBe('NOT_EVALUATED');
   });
 
-  it('Step 22: Controlled fixture differentiation (matching vs mismatched identity frames)', async () => {
-    // Mock multimodal LLM that examines whether the reference matches the frame color
+  it('Step 22: Controlled fixture differentiation (constant RED reference against RED vs BLUE physical video)', async () => {
+    const ffmpeg = MediaToolchainDoctor.getFfmpegPath();
+
+    // Simulated multimodal vision provider that actually inspects canonical reference and extracted frame image bytes
     const visionSimulator: LLMProvider = {
       metadata: {
         id: 'sim-vision',
@@ -307,17 +319,44 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
       },
       generateStructured: async <T>(req: LLMStructuredRequest<T>): Promise<LLMStructuredResult<T>> => {
         const parts = (req.messages?.[0]?.content as any[]) ?? [];
-        const refImg = parts.find((p) => p.role?.includes('canonical_reference'));
-        const isRed = refImg?.dataBase64 === redPngBase64;
+        const refParts = parts.filter((p) => p.role?.includes('canonical_reference'));
+        const frameParts = parts.filter((p) => p.role?.includes('extracted_frame_'));
 
-        if (isRed) {
-          // Matching identity
+        expect(refParts.length).toBeGreaterThan(0);
+        expect(frameParts.length).toBeGreaterThan(0);
+
+        const refBuf = Buffer.from(refParts[0].dataBase64, 'base64');
+        const frameBuf = Buffer.from(frameParts[0].dataBase64, 'base64');
+
+        expect(refBuf.length).toBeGreaterThan(0);
+        expect(frameBuf.length).toBeGreaterThan(0);
+
+        // Decode pixel colors using ffmpeg stdin pipe inspection
+        const framePpm = execSync(`"${ffmpeg}" -y -i pipe:0 -vframes 1 -f image2pipe -vcodec rawvideo -pix_fmt rgb24 -`, {
+          input: frameBuf,
+          stdio: ['pipe', 'pipe', 'ignore'],
+        });
+        const refPpm = execSync(`"${ffmpeg}" -y -i pipe:0 -vframes 1 -f image2pipe -vcodec rawvideo -pix_fmt rgb24 -`, {
+          input: refBuf,
+          stdio: ['pipe', 'pipe', 'ignore'],
+        });
+
+        // Canonical reference check: red channel dominates
+        const refIsRed = refPpm[0] > 150 && refPpm[2] < 100;
+        expect(refIsRed).toBe(true); // Canonical reference is strictly RED in both runs
+
+        // Extracted frame check: inspect actual frame pixel bytes
+        const frameIsRed = framePpm[0] > 150 && framePpm[2] < 100;
+        const frameIsBlue = framePpm[2] > 150 && framePpm[0] < 100;
+
+        if (frameIsRed) {
+          // Frame matches canonical red reference
           return {
             data: {
-              identityConsistencyScore: 0.94,
-              spatialPerspectiveScore: 0.90,
-              visualDefectScore: 0.95,
-              overallVisualContinuityScore: 0.93,
+              identityConsistencyScore: 0.95,
+              spatialPerspectiveScore: 0.92,
+              visualDefectScore: 0.96,
+              overallVisualContinuityScore: 0.94,
               passed: true,
               defects: [],
               retakeRecommendations: [],
@@ -327,31 +366,31 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
             providerId: 'sim-vision',
             usage: { latencyMs: 15, retryCount: 0, costStatus: 'LOCAL_COST' },
           };
-        } else {
-          // Mismatched identity (blue hair instead of red)
+        } else if (frameIsBlue) {
+          // Frame is BLUE: identity drift defect against RED reference
           return {
             data: {
-              identityConsistencyScore: 0.42,
+              identityConsistencyScore: 0.35,
               spatialPerspectiveScore: 0.90,
-              visualDefectScore: 0.60,
-              overallVisualContinuityScore: 0.52,
+              visualDefectScore: 0.55,
+              overallVisualContinuityScore: 0.48,
               passed: false,
               defects: [
                 {
-                  defectId: 'def_drift_blue',
+                  defectId: 'def_identity_drift_blue',
                   frameIndex: 0,
                   timestampSeconds: 0.5,
                   region: 'face',
                   issueType: 'character_identity_drift',
                   severity: 'critical',
-                  confidence: 0.98,
-                  description: 'Severe character hair and palette drift: observed blue instead of canonical red.',
+                  confidence: 0.99,
+                  description: 'Character identity drift: rendered frame is visibly blue, contradicting canonical red identity anchor.',
                   suggestedFix: 'Retake shot with canonical red character turnaround.',
                 },
               ],
               retakeRecommendations: [
                 {
-                  recommendationId: 'rec_retake_blue',
+                  recommendationId: 'rec_drift_blue',
                   shotId: 'SHOT_CONTRACT_01',
                   strategy: 'surgical_retake',
                   priority: 'high',
@@ -364,6 +403,8 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
             providerId: 'sim-vision',
             usage: { latencyMs: 15, retryCount: 0, costStatus: 'LOCAL_COST' },
           };
+        } else {
+          throw new Error(`Unexpected frame colors: R=${framePpm[0]}, G=${framePpm[1]}, B=${framePpm[2]}`);
         }
       },
       execute: async () => {
@@ -373,44 +414,211 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
 
     const evaluator = new VisualSemanticQAEvaluator(visionSimulator);
 
-    // Run A: Matching reference
-    const reportMatch = await evaluator.evaluateShotVideo({
+    // RUN A: Canonical RED reference + RED rendered physical video => PASS
+    const reportA = await evaluator.evaluateShotVideo({
       projectId: 'proj_controlled',
       shot: testShot,
-      videoPath: testVideo,
+      videoPath: redVideo,
       characterProfiles: [redCharacter],
       referenceImages: [
         {
           entityId: 'char_red_operative',
-          role: 'front',
+          role: 'turnaround_front',
           base64Data: redPngBase64,
           mimeType: 'image/png',
+          status: 'approved_canon',
         },
       ],
     });
-    expect(reportMatch.passed).toBe(true);
-    expect(reportMatch.identityConsistencyScore).toBe(0.94);
-    expect(reportMatch.status).toBe('PASS');
 
-    // Run B: Mismatched reference (blue)
-    const reportMismatch = await evaluator.evaluateShotVideo({
+    expect(reportA.passed).toBe(true);
+    expect(reportA.identityConsistencyScore).toBe(0.95);
+    expect(reportA.status).toBe('PASS');
+    expect(reportA.coverage?.identityVisual).toBe('VERIFIED');
+
+    // RUN B: Canonical RED reference + BLUE rendered physical video => FAIL (character_identity_drift)
+    const reportB = await evaluator.evaluateShotVideo({
       projectId: 'proj_controlled',
       shot: testShot,
-      videoPath: testVideo,
+      videoPath: blueVideo,
       characterProfiles: [redCharacter],
       referenceImages: [
         {
           entityId: 'char_red_operative',
-          role: 'front',
-          base64Data: bluePngBase64,
+          role: 'turnaround_front',
+          base64Data: redPngBase64, // Unchanged canonical RED reference!
           mimeType: 'image/png',
+          status: 'approved_canon',
         },
       ],
     });
-    expect(reportMismatch.passed).toBe(false);
-    expect(reportMismatch.identityConsistencyScore).toBe(0.42);
-    expect(reportMismatch.status).toBe('FAIL');
-    expect(reportMismatch.defects.some((d) => d.issueType === 'character_identity_drift')).toBe(true);
+
+    expect(reportB.passed).toBe(false);
+    expect(reportB.identityConsistencyScore).toBe(0.35);
+    expect(reportB.status).toBe('FAIL');
+    expect(reportB.defects.some((d) => d.issueType === 'character_identity_drift')).toBe(true);
+  });
+
+  it('multimodal provider failure in PRODUCTION does not silently become pass', async () => {
+    const failingProvider: LLMProvider = {
+      metadata: {
+        id: 'failing-provider',
+        name: 'Failing Provider',
+        version: '1.0.0',
+        capabilities: ['llm', 'qa'],
+        supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA', 'VISION_QA'],
+        modelMapping: {
+          FAST: 'fail-model',
+          REASONING: 'fail-model',
+          STRUCTURED: 'fail-model',
+          QA: 'fail-model',
+          VISION_QA: 'fail-model',
+        },
+        supportedTasks: ['CONTINUITY_QA'],
+        isLocal: false,
+        costEstimateUsdPerInvocation: 0,
+        averageLatencyMs: 10,
+        supportsImages: true,
+        supportsMultimodalStructuredOutput: true,
+      },
+      healthCheck: async () => true,
+      diagnoseHealth: async (): Promise<LLMHealthReport> => ({
+        providerId: 'failing-provider',
+        name: 'Failing Provider',
+        status: 'AVAILABLE',
+        isLocal: false,
+        configured: true,
+        capabilities: ['llm', 'qa'],
+      }),
+      generateText: async (): Promise<LLMTextResult> => {
+        throw new Error('429 ResourceExhausted: rate limit exceeded');
+      },
+      generateStructured: async (): Promise<LLMStructuredResult<any>> => {
+        throw new Error('429 ResourceExhausted: rate limit exceeded');
+      },
+      execute: async () => {
+        throw new Error('Not implemented');
+      },
+    };
+
+    const evaluator = new VisualSemanticQAEvaluator(failingProvider);
+
+    // In PRODUCTION mode: Must fail closed with providerFailure metadata and NOT become PASS
+    const reportProd = await evaluator.evaluateShotVideo({
+      projectId: 'proj_prod_failure',
+      shot: testShot,
+      videoPath: redVideo,
+      characterProfiles: [redCharacter],
+      referenceImages: [
+        {
+          entityId: 'char_red_operative',
+          role: 'turnaround_front',
+          base64Data: redPngBase64,
+          mimeType: 'image/png',
+          status: 'approved_canon',
+        },
+      ],
+      executionMode: 'PRODUCTION',
+    });
+
+    expect(reportProd.passed).toBe(false);
+    expect(reportProd.status).toBe('FAIL');
+    expect(reportProd.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(reportProd.metadata?.providerFailure).toBe(true);
+    expect(reportProd.metadata?.providerFailureReason).toBe('QUOTA_EXCEEDED');
+
+    // In LOCAL mode: Can truthfully downgrade to LOCAL_MEDIA_METADATA
+    const reportLocal = await evaluator.evaluateShotVideo({
+      projectId: 'proj_local_failure',
+      shot: testShot,
+      videoPath: redVideo,
+      characterProfiles: [redCharacter],
+      executionMode: 'LOCAL',
+    });
+
+    expect(reportLocal.evaluationMechanism).toBe('LOCAL_MEDIA_METADATA');
+    expect(reportLocal.identityConsistencyScore).toBeNull();
+  });
+
+  it('candidate (unapproved) character reference cannot satisfy canonical identity verification', async () => {
+    const spyProvider: LLMProvider = {
+      metadata: {
+        id: 'spy-provider',
+        name: 'Spy Provider',
+        version: '1.0.0',
+        capabilities: ['llm', 'qa'],
+        supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA', 'VISION_QA'],
+        modelMapping: {
+          FAST: 'model',
+          REASONING: 'model',
+          STRUCTURED: 'model',
+          QA: 'model',
+          VISION_QA: 'model-vision',
+        },
+        supportedTasks: ['CONTINUITY_QA'],
+        isLocal: false,
+        costEstimateUsdPerInvocation: 0,
+        averageLatencyMs: 10,
+        supportsImages: true,
+        supportsMultimodalStructuredOutput: true,
+      },
+      healthCheck: async () => true,
+      diagnoseHealth: async (): Promise<LLMHealthReport> => ({
+        providerId: 'spy-provider',
+        name: 'Spy Provider',
+        status: 'AVAILABLE',
+        isLocal: false,
+        configured: true,
+        capabilities: ['llm', 'qa'],
+      }),
+      generateText: async (): Promise<LLMTextResult> => {
+        throw new Error('Not implemented');
+      },
+      generateStructured: async <T>(): Promise<LLMStructuredResult<T>> => {
+        return {
+          data: {
+            identityConsistencyScore: 0.95,
+            spatialPerspectiveScore: 0.90,
+            visualDefectScore: 0.90,
+            overallVisualContinuityScore: 0.92,
+            passed: true,
+            defects: [],
+            retakeRecommendations: [],
+          } as unknown as T,
+          rawText: '{}',
+          model: 'model-vision',
+          providerId: 'spy-provider',
+          usage: { latencyMs: 10, retryCount: 0, costStatus: 'FREE_TIER' },
+        };
+      },
+      execute: async () => {
+        throw new Error('Not implemented');
+      },
+    };
+
+    const evaluator = new VisualSemanticQAEvaluator(spyProvider);
+
+    // Reference has status: 'candidate' (NOT approved_canon)
+    const report = await evaluator.evaluateShotVideo({
+      projectId: 'proj_candidate_ref',
+      shot: testShot,
+      videoPath: redVideo,
+      characterProfiles: [redCharacter],
+      referenceImages: [
+        {
+          entityId: 'char_red_operative',
+          role: 'turnaround_front',
+          base64Data: redPngBase64,
+          mimeType: 'image/png',
+          status: 'candidate', // Unapproved!
+        },
+      ],
+      executionMode: 'PRODUCTION',
+    });
+
+    expect(report.missingIdentityAnchors).toContain('char_red_operative');
+    expect(report.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(report.identityConsistencyScore).toBeNull();
   });
 
   it('Step 2: GeminiProvider translates multimodal messages into GoogleGenAI contents with inlineData', () => {
