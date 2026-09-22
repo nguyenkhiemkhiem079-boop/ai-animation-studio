@@ -691,6 +691,232 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
     expect(report.identityConsistencyScore).toBeNull();
   });
 
+  it('strict canonical status enforcement (approved_canon -> accepted, candidate/undefined/draft -> rejected) & never sent to vision', async () => {
+    let capturedParts: LLMContentPart[] = [];
+    const spyProvider: LLMProvider = {
+      metadata: {
+        id: 'spy-provider',
+        name: 'Spy Provider',
+        version: '1.0.0',
+        capabilities: ['llm', 'qa'],
+        supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA', 'VISION_QA'],
+        modelMapping: { FAST: 'm', REASONING: 'm', STRUCTURED: 'm', QA: 'm', VISION_QA: 'm' },
+        supportedTasks: ['CONTINUITY_QA'],
+        isLocal: false,
+        costEstimateUsdPerInvocation: 0,
+        averageLatencyMs: 10,
+        supportsImages: true,
+        supportsMultimodalStructuredOutput: true,
+      },
+      healthCheck: async () => true,
+      diagnoseHealth: async () => ({ providerId: 'spy-provider', name: 'Spy Provider', status: 'AVAILABLE', isLocal: false, configured: true, capabilities: ['llm', 'qa'] }),
+      generateText: async () => { throw new Error('Not implemented'); },
+      generateStructured: async <T>(options: any) => {
+        capturedParts = options.messages[0].content;
+        return {
+          data: {
+            identityConsistencyScore: 0.95,
+            spatialPerspectiveScore: 0.90,
+            visualDefectScore: 0.90,
+            overallVisualContinuityScore: 0.92,
+            passed: true,
+            defects: [],
+            retakeRecommendations: [],
+          } as unknown as T,
+          rawText: '{}',
+          model: 'm',
+          providerId: 'spy-provider',
+          usage: { latencyMs: 10, retryCount: 0, costStatus: 'FREE_TIER' },
+        };
+      },
+      execute: async () => { throw new Error('Not implemented'); },
+    };
+
+    const evaluator = new VisualSemanticQAEvaluator(spyProvider);
+
+    // Case 1: approved_canon -> accepted & transmitted to vision
+    const reportApproved = await evaluator.evaluateShotVideo({
+      projectId: 'proj_canon',
+      shot: testShot,
+      videoPath: redVideo,
+      characterProfiles: [redCharacter],
+      referenceImages: [{ entityId: 'char_red_operative', role: 'turnaround_front', base64Data: redPngBase64, status: 'approved_canon' }],
+      executionMode: 'PRODUCTION',
+    });
+    expect(reportApproved.missingIdentityAnchors).toBeUndefined();
+    expect(reportApproved.coverage?.identityVisual).toBe('VERIFIED');
+    expect(capturedParts.some((p: any) => p.role?.includes('canonical_reference'))).toBe(true);
+
+    // Case 2: candidate -> rejected & NEVER sent to vision
+    capturedParts = [];
+    const reportCandidate = await evaluator.evaluateShotVideo({
+      projectId: 'proj_candidate',
+      shot: testShot,
+      videoPath: redVideo,
+      characterProfiles: [redCharacter],
+      referenceImages: [{ entityId: 'char_red_operative', role: 'turnaround_front', base64Data: redPngBase64, status: 'candidate' }],
+      executionMode: 'PRODUCTION',
+    });
+    expect(reportCandidate.missingIdentityAnchors).toContain('char_red_operative');
+    expect(reportCandidate.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(capturedParts.some((p: any) => p.role?.includes('canonical_reference'))).toBe(false);
+
+    // Case 3: undefined -> rejected & NEVER sent to vision
+    capturedParts = [];
+    const reportUndefined = await evaluator.evaluateShotVideo({
+      projectId: 'proj_undefined',
+      shot: testShot,
+      videoPath: redVideo,
+      characterProfiles: [redCharacter],
+      referenceImages: [{ entityId: 'char_red_operative', role: 'turnaround_front', base64Data: redPngBase64, status: undefined }],
+      executionMode: 'PRODUCTION',
+    });
+    expect(reportUndefined.missingIdentityAnchors).toContain('char_red_operative');
+    expect(reportUndefined.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(capturedParts.some((p: any) => p.role?.includes('canonical_reference'))).toBe(false);
+
+    // Case 4: draft -> rejected & NEVER sent to vision
+    capturedParts = [];
+    const reportDraft = await evaluator.evaluateShotVideo({
+      projectId: 'proj_draft',
+      shot: testShot,
+      videoPath: redVideo,
+      characterProfiles: [redCharacter],
+      referenceImages: [{ entityId: 'char_red_operative', role: 'turnaround_front', base64Data: redPngBase64, status: 'draft' }],
+      executionMode: 'PRODUCTION',
+    });
+    expect(reportDraft.missingIdentityAnchors).toContain('char_red_operative');
+    expect(reportDraft.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(capturedParts.some((p: any) => p.role?.includes('canonical_reference'))).toBe(false);
+  });
+
+  it('strict multimodal structured capability enforcement in PRODUCTION (true -> allowed, false -> fail closed, undefined -> fail closed)', async () => {
+    const createCapabilityProvider = (supportsMultimodalStructuredOutput?: boolean): LLMProvider => ({
+      metadata: {
+        id: 'cap-provider',
+        name: 'Capability Provider',
+        version: '1.0.0',
+        capabilities: ['llm', 'qa'],
+        supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA', 'VISION_QA'],
+        modelMapping: { FAST: 'm', REASONING: 'm', STRUCTURED: 'm', QA: 'm', VISION_QA: 'm' },
+        supportedTasks: ['CONTINUITY_QA'],
+        isLocal: false,
+        costEstimateUsdPerInvocation: 0,
+        averageLatencyMs: 10,
+        supportsImages: true,
+        supportsMultimodalStructuredOutput: supportsMultimodalStructuredOutput as any,
+      },
+      healthCheck: async () => true,
+      diagnoseHealth: async () => ({ providerId: 'cap-provider', name: 'Cap Provider', status: 'AVAILABLE', isLocal: false, configured: true, capabilities: ['llm', 'qa'] }),
+      generateText: async () => { throw new Error('Not implemented'); },
+      generateStructured: async <T>() => ({
+        data: {
+          identityConsistencyScore: 0.95,
+          spatialPerspectiveScore: 0.90,
+          visualDefectScore: 0.90,
+          overallVisualContinuityScore: 0.92,
+          passed: true,
+          defects: [],
+          retakeRecommendations: [],
+        } as unknown as T,
+        rawText: '{}',
+        model: 'm',
+        providerId: 'cap-provider',
+        usage: { latencyMs: 10, retryCount: 0, costStatus: 'FREE_TIER' },
+      }),
+      execute: async () => { throw new Error('Not implemented'); },
+    });
+
+    // 1. true -> allowed
+    const evalTrue = new VisualSemanticQAEvaluator(createCapabilityProvider(true));
+    const repTrue = await evalTrue.evaluateShotVideo({
+      projectId: 'proj_cap_true',
+      shot: testShot,
+      videoPath: redVideo,
+      executionMode: 'PRODUCTION',
+    });
+    expect(repTrue.passed).toBe(true);
+    expect(repTrue.evaluationMechanism).toBe('MULTIMODAL_PROVIDER');
+
+    // 2. false -> fail closed
+    const evalFalse = new VisualSemanticQAEvaluator(createCapabilityProvider(false));
+    const repFalse = await evalFalse.evaluateShotVideo({
+      projectId: 'proj_cap_false',
+      shot: testShot,
+      videoPath: redVideo,
+      executionMode: 'PRODUCTION',
+    });
+    expect(repFalse.passed).toBe(false);
+    expect(repFalse.status).toBe('FAIL');
+    expect(repFalse.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(repFalse.metadata?.providerFailureReason).toBe('PROVIDER_DOES_NOT_SUPPORT_MULTIMODAL_STRUCTURED_OUTPUT');
+
+    // 3. undefined -> fail closed
+    const evalUndef = new VisualSemanticQAEvaluator(createCapabilityProvider(undefined));
+    const repUndef = await evalUndef.evaluateShotVideo({
+      projectId: 'proj_cap_undef',
+      shot: testShot,
+      videoPath: redVideo,
+      executionMode: 'PRODUCTION',
+    });
+    expect(repUndef.passed).toBe(false);
+    expect(repUndef.status).toBe('FAIL');
+    expect(repUndef.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(repUndef.metadata?.providerFailureReason).toBe('PROVIDER_DOES_NOT_SUPPORT_MULTIMODAL_STRUCTURED_OUTPUT');
+  });
+
+  it('real malformed structured data returned through provider path fails schema validation and blocks PRODUCTION visual QA', async () => {
+    const malformedProvider: LLMProvider = {
+      metadata: {
+        id: 'malformed-provider',
+        name: 'Malformed Provider',
+        version: '1.0.0',
+        capabilities: ['llm', 'qa'],
+        supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA', 'VISION_QA'],
+        modelMapping: { FAST: 'm', REASONING: 'm', STRUCTURED: 'm', QA: 'm', VISION_QA: 'm' },
+        supportedTasks: ['CONTINUITY_QA'],
+        isLocal: false,
+        costEstimateUsdPerInvocation: 0,
+        averageLatencyMs: 10,
+        supportsImages: true,
+        supportsMultimodalStructuredOutput: true,
+      },
+      healthCheck: async () => true,
+      diagnoseHealth: async () => ({ providerId: 'malformed-provider', name: 'Malformed Provider', status: 'AVAILABLE', isLocal: false, configured: true, capabilities: ['llm', 'qa'] }),
+      generateText: async () => { throw new Error('Not implemented'); },
+      generateStructured: async <T>() => {
+        // Return structured payload that is corrupted/missing required fields (e.g. overallVisualContinuityScore is missing/invalid, passed is missing)
+        return {
+          data: {
+            identityConsistencyScore: 'not_a_number_corrupted',
+            // missing overallVisualContinuityScore, passed, defects, etc.
+          } as unknown as T,
+          rawText: '{"identityConsistencyScore":"not_a_number_corrupted"}',
+          model: 'm',
+          providerId: 'malformed-provider',
+          usage: { latencyMs: 10, retryCount: 0, costStatus: 'FREE_TIER' },
+        };
+      },
+      execute: async () => { throw new Error('Not implemented'); },
+    };
+
+    const evaluator = new VisualSemanticQAEvaluator(malformedProvider);
+    const report = await evaluator.evaluateShotVideo({
+      projectId: 'proj_malformed_test',
+      shot: testShot,
+      videoPath: redVideo,
+      executionMode: 'PRODUCTION',
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.status).toBe('FAIL');
+    expect(report.coverage?.identityVisual).toBe('NOT_EVALUATED');
+    expect(report.coverage?.temporalArtifactVisual).toBe('NOT_EVALUATED');
+    expect(report.coverage?.semanticAction).toBe('NOT_EVALUATED');
+    expect(report.metadata?.providerFailure).toBe(true);
+    expect(report.metadata?.providerFailureReason).toBe('INVALID_REQUEST');
+  });
+
   it('Step 2: GeminiProvider translates multimodal messages into GoogleGenAI contents with inlineData', () => {
     const gemini = new GeminiProvider({ apiKey: 'AIzaFakeTestKeyForUnitTestingOnly12345678' });
     const converted = gemini.convertMessagesToGeminiContents([

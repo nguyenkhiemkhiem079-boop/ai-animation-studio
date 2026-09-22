@@ -56,7 +56,7 @@ function categorizeProviderFailure(err: any): string {
   if (msg.includes('network') || msg.includes('econnrefused') || msg.includes('ehostunreach') || msg.includes('enotfound')) {
     return 'NETWORK_ERROR';
   }
-  if (msg.includes('400') || msg.includes('invalid') || msg.includes('schema') || msg.includes('bad request')) {
+  if (msg.includes('400') || msg.includes('invalid') || msg.includes('schema') || msg.includes('bad request') || msg.includes('zod')) {
     return 'INVALID_REQUEST';
   }
   return 'SERVER_ERROR';
@@ -268,7 +268,7 @@ export class VisualSemanticQAEvaluator {
         const hasApprovedRef = referenceImages.some(
           (r) =>
             (r.entityId === act.characterId || (char && r.entityId === char.id)) &&
-            (r.status === undefined || r.status === 'approved_canon') &&
+            r.status === 'approved_canon' &&
             (r.role.includes('identity') || r.role.includes('turnaround') || r.role.includes('face') || r.role === 'CHARACTER_IDENTITY')
         );
         if (!hasApprovedRef) {
@@ -288,7 +288,7 @@ export class VisualSemanticQAEvaluator {
             (r) =>
               (r.entityId === act.characterId || r.role.includes(act.characterId)) &&
               (r.role.includes('outfit') || r.role.includes(act.outfitId!)) &&
-              (r.status === undefined || r.status === 'approved_canon')
+              r.status === 'approved_canon'
           );
           if (!hasOutfitRef) {
             missingOutfitReference = true;
@@ -300,9 +300,15 @@ export class VisualSemanticQAEvaluator {
     }
 
     // Text-only provider or missing multimodal provider safety in PRODUCTION mode
-    const supportsMultimodalStructured = Boolean((this.llm?.metadata as any)?.supportsMultimodalStructuredOutput ?? true);
+    // Requirement: supportsMultimodalStructuredOutput === true is required explicitly.
+    // PRODUCTION behavior: true -> allowed, false -> fail closed, undefined -> fail closed.
+    const supportsMultimodalStructured = (this.llm?.metadata as any)?.supportsMultimodalStructuredOutput === true;
     if (executionMode === 'PRODUCTION' && (!this.llm || !isLlmConfigured || !supportsImages || !supportsMultimodalStructured)) {
-      const reason = !this.llm || !isLlmConfigured ? 'NO_MULTIMODAL_PROVIDER_CONFIGURED' : 'PROVIDER_DOES_NOT_SUPPORT_IMAGES';
+      const reason = !this.llm || !isLlmConfigured
+        ? 'NO_MULTIMODAL_PROVIDER_CONFIGURED'
+        : !supportsImages
+          ? 'PROVIDER_DOES_NOT_SUPPORT_IMAGES'
+          : 'PROVIDER_DOES_NOT_SUPPORT_MULTIMODAL_STRUCTURED_OUTPUT';
       return {
         reportId: `vis_qa_${shot.id}_${Date.now()}`,
         projectId,
@@ -395,9 +401,9 @@ export class VisualSemanticQAEvaluator {
         // Assemble multimodal message parts: text prompt + canonical references + frame images
         const contentParts: LLMContentPart[] = [{ type: 'text', text: textPrompt }];
 
-        // Attach canonical reference images
+        // Attach canonical reference images (strictly approved_canon only)
         for (const ref of referenceImages) {
-          if (ref.base64Data || ref.uri) {
+          if (ref.status === 'approved_canon' && (ref.base64Data || ref.uri)) {
             contentParts.push({
               type: 'image',
               mimeType: ref.mimeType ?? 'image/png',
@@ -435,7 +441,7 @@ export class VisualSemanticQAEvaluator {
           projectId,
         });
 
-        const output = result.data;
+        const output = VisualQAOutputSchema.parse(result.data);
 
         // Outfit reference penalty if required but missing
         if (missingOutfitReference) {
