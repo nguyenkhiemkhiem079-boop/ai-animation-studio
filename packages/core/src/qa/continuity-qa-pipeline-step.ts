@@ -51,7 +51,7 @@ export class ContinuityQAPipelineStep implements PipelineStep {
     // 2. Run Continuity Evaluation
     const report = ContinuityQAEvaluator.evaluate({
       projectId,
-      sceneId: productionScenes?.[0]?.id,
+      sceneId: (state.activeSceneId as string) || productionScenes?.[0]?.id,
       shots,
       timelineSequence,
     });
@@ -62,6 +62,11 @@ export class ContinuityQAPipelineStep implements PipelineStep {
       for (const vReport of visualQAReports) {
         if (vReport.defects && Array.isArray(vReport.defects)) {
           for (const defect of vReport.defects) {
+            // Identity drift and visual artifacts are NEVER auto-repairable via simple editorial transition
+            const isAutoRepairable =
+              defect.severity !== 'critical' &&
+              (defect.issueType === 'color_palette_drift' || defect.issueType === 'pacing_stalling');
+
             report.issues.push({
               issueId: defect.defectId,
               shotId: vReport.shotId,
@@ -69,7 +74,8 @@ export class ContinuityQAPipelineStep implements PipelineStep {
               severity: defect.severity,
               message: `[Visual Semantic QA] ${defect.description}`,
               suggestedFix: defect.suggestedFix,
-              autoRepairable: true,
+              autoRepairable: isAutoRepairable,
+              isResolved: false,
               metadata: {
                 region: defect.region,
                 confidence: defect.confidence,

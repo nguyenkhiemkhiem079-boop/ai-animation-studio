@@ -11,6 +11,8 @@ import {
   LLMErrorCategory,
   LLMUsageMetadata,
   LLMHealthReport,
+  LLMMessage,
+  LLMContentPart,
 } from './llm-provider.js';
 import { ModelPolicy } from './model-policy.js';
 import { LLMCache } from './llm-cache.js';
@@ -93,7 +95,7 @@ export class GeminiProvider implements LLMProvider {
       isLocal: false,
       costEstimateUsdPerInvocation: 0.0, // Free-tier-first
       averageLatencyMs: 800,
-      supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA'],
+      supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA', 'VISION_QA'],
       modelMapping: this.modelPolicy.getAllMappings(),
       supportedTasks: [
         'STORY_ANALYSIS',
@@ -104,6 +106,8 @@ export class GeminiProvider implements LLMProvider {
         'CONTINUITY_QA',
         'GENERAL_REASONING',
       ],
+      supportsImages: true,
+      supportsMultimodalStructuredOutput: true,
     };
   }
 
@@ -273,11 +277,8 @@ export class GeminiProvider implements LLMProvider {
     // 2. Enforce execution mode safety
     this.assertExecutionReadiness(request.taskType);
 
-    // 3. Assemble messages
-    const msgs = request.messages && request.messages.length > 0
-      ? request.messages
-      : [{ role: 'user' as const, content: request.prompt || '' }];
-    const contents = msgs.map((m) => `${m.role === 'model' ? 'Model' : 'User'}: ${m.content}`).join('\n\n');
+    // 3. Assemble messages (supporting text and multimodal content)
+    const contents = this.convertMessagesToGeminiContents(request.messages, request.prompt);
 
     let attempt = 0;
     let lastErr: any;
@@ -377,14 +378,9 @@ export class GeminiProvider implements LLMProvider {
     // 2. Enforce execution mode safety
     this.assertExecutionReadiness(request.taskType);
 
-    // 3. Prepare responseSchema
+    // 3. Prepare responseSchema & assemble contents
     const openApiSchema = convertZodToJsonSchema(request.responseSchema);
-    const msgs = request.messages && request.messages.length > 0
-      ? request.messages
-      : [{ role: 'user' as const, content: request.prompt || '' }];
-    const contents = msgs
-      .map((m) => `${m.role === 'model' ? 'Model' : 'User'}: ${m.content}`)
-      .join('\n\n');
+    const contents = this.convertMessagesToGeminiContents(request.messages, request.prompt);
 
     let attempt = 0;
     let lastErr: any;
@@ -577,5 +573,61 @@ export class GeminiProvider implements LLMProvider {
     const exp = Math.min(this.maxBackoffMs, this.initialBackoffMs * Math.pow(2, attempt));
     const jitter = Math.random() * 200;
     return exp + jitter;
+  }
+
+  /**
+   * Converts provider-neutral LLMMessages into official @google/genai contents.
+   * If only text is present, returns formatted text strings.
+   * If multimodal parts (images) are present, formats as Content[] with inlineData / fileData.
+   */
+  public convertMessagesToGeminiContents(
+    messages?: LLMMessage[],
+    prompt?: string
+  ): any {
+    const msgs = messages && messages.length > 0
+      ? messages
+      : [{ role: 'user' as const, content: prompt || '' }];
+
+    const hasMultimodal = msgs.some((m) => Array.isArray(m.content));
+
+    if (!hasMultimodal) {
+      return msgs
+        .map((m) => `${m.role === 'model' ? 'Model' : 'User'}: ${m.content}`)
+        .join('\n\n');
+    }
+
+    return msgs.map((m) => {
+      const role = m.role === 'model' ? 'model' : 'user';
+      let parts: any[] = [];
+      if (typeof m.content === 'string') {
+        parts = [{ text: m.content }];
+      } else if (Array.isArray(m.content)) {
+        parts = m.content.map((part) => {
+          if (part.type === 'text') {
+            return { text: part.text };
+          }
+          if (part.type === 'image') {
+            if (part.dataBase64) {
+              return {
+                inlineData: {
+                  mimeType: part.mimeType,
+                  data: part.dataBase64,
+                },
+              };
+            }
+            if (part.uri) {
+              return {
+                fileData: {
+                  fileUri: part.uri,
+                  mimeType: part.mimeType,
+                },
+              };
+            }
+          }
+          return { text: '' };
+        });
+      }
+      return { role, parts };
+    });
   }
 }

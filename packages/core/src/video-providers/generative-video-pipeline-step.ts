@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { PipelineContext, PipelineStep } from '../pipeline/index.js';
 import { ProductionScene, ShotContract } from '../domain/director.js';
 import {
@@ -19,6 +21,7 @@ import { MockVideoProvider } from './mock-video-provider.js';
 import { ContinuationEngine } from './continuation-engine.js';
 import { IAssetRegistry } from '../asset-registry/index.js';
 import { ValidationError } from '../errors/index.js';
+import { ProductionSafetyError } from '../domain/execution-mode.js';
 
 export interface GenerativeVideoStepSummary {
   totalGenerativeShots: number;
@@ -108,6 +111,9 @@ export class GenerativeVideoPipelineStep implements PipelineStep {
     let precedingShot: ShotContract | undefined;
     let precedingOutput: VideoGenerationOutput | undefined;
 
+    const executionMode = (state.executionMode as string) || 'MOCK';
+    const shotVideoMap: Record<string, string> = { ...((state.shotVideoMap as Record<string, string>) || {}) };
+
     for (const strategy of generativeStrategies) {
       const shot = shotMap.get(strategy.shotId);
       if (!shot) continue;
@@ -160,6 +166,21 @@ export class GenerativeVideoPipelineStep implements PipelineStep {
       const result: GenerationResult = await orchestrator.dispatchJob(job, shot);
 
       if (result.status === 'completed' || result.status === 'cached') {
+        // Step 20: In PRODUCTION mode, mock providers and nonexistent physical artifacts are forbidden
+        if (executionMode === 'PRODUCTION') {
+          if (result.providerId.toLowerCase().includes('mock')) {
+            throw new ProductionSafetyError(
+              `GenerativeVideoPipelineStep: MockVideoProvider cannot satisfy real video generation for shot "${shot.id}" in PRODUCTION mode.`
+            );
+          }
+          const candidateUri = (result as any).outputVideoUri || path.resolve('.studio', 'videos', projectId, `${shot.id}_gen.mp4`);
+          if (!fs.existsSync(candidateUri) || fs.statSync(candidateUri).size === 0) {
+            throw new ProductionSafetyError(
+              `GenerativeVideoPipelineStep: No physical video artifact found on disk at "${candidateUri}" for shot "${shot.id}" in PRODUCTION mode.`
+            );
+          }
+        }
+
         completedShots++;
         if (result.wasCached) cachedShots++;
         totalCostUsd += result.actualCostUsd;
@@ -168,11 +189,21 @@ export class GenerativeVideoPipelineStep implements PipelineStep {
         const outputAssetId = result.outputAssetId ?? `ASSET_GEN_VIDEO_${shot.id}`;
         const terminalFrameAssetId = `FRAME_TERMINAL_${shot.id}`;
 
+        const videoUri = (result as any).outputVideoUri || path.resolve('.studio', 'videos', projectId, `${shot.id}_gen.mp4`);
+        const physicalExists = fs.existsSync(videoUri) && fs.statSync(videoUri).size > 0;
+        const actualSizeBytes = physicalExists ? fs.statSync(videoUri).size : 0;
+
+        // Step 21: Register verified physical video into authoritative shotVideoMap
+        if (physicalExists) {
+          shotVideoMap[shot.id] = videoUri;
+          shotVideoMap[outputAssetId] = videoUri;
+        }
+
         const videoOutput: VideoGenerationOutput = {
           assetId: outputAssetId,
           shotId: shot.id,
           providerId: result.providerId,
-          videoUri: `.studio/videos/${projectId}/${shot.id}_gen.mp4`,
+          videoUri,
           terminalFrameAssetId,
           terminalFrameUri: `.studio/videos/${projectId}/${shot.id}_terminal.png`,
           resolution: { width: 1920, height: 1080 },
@@ -203,7 +234,7 @@ export class GenerativeVideoPipelineStep implements PipelineStep {
             contentHash: `hash_${outputAssetId}`,
             storageUri: videoOutput.videoUri,
             mimeType: 'video/mp4',
-            sizeBytes: 1024 * 1024,
+            sizeBytes: actualSizeBytes,
             entityId: shot.id,
             version: 1,
             metadata: {
@@ -222,6 +253,8 @@ export class GenerativeVideoPipelineStep implements PipelineStep {
         precedingOutput = undefined;
       }
     }
+
+    state.shotVideoMap = shotVideoMap;
 
     const summary: GenerativeVideoStepSummary = {
       totalGenerativeShots: generativeStrategies.length,

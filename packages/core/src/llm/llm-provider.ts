@@ -46,12 +46,27 @@ export interface LLMUsageMetadata {
   actualCostUsd?: number;
 }
 
-export interface LLMMessage {
-  role: 'user' | 'model' | 'system';
-  content: string;
+export interface LLMTextPart {
+  type: 'text';
+  text: string;
 }
 
-export type LLMModelRole = 'FAST' | 'REASONING' | 'STRUCTURED' | 'QA';
+export interface LLMImagePart {
+  type: 'image';
+  mimeType: string;
+  dataBase64?: string;
+  uri?: string;
+  role?: string;
+}
+
+export type LLMContentPart = LLMTextPart | LLMImagePart;
+
+export interface LLMMessage {
+  role: 'user' | 'model' | 'system';
+  content: string | LLMContentPart[];
+}
+
+export type LLMModelRole = 'FAST' | 'REASONING' | 'STRUCTURED' | 'QA' | 'VISION_QA';
 
 export interface LLMTextRequest {
   taskType: LLMTaskType;
@@ -110,6 +125,8 @@ export interface LLMProviderMetadata extends ProviderMetadata {
   supportedRoles: LLMModelRole[];
   modelMapping: Record<LLMModelRole, string>;
   supportedTasks: LLMTaskType[];
+  supportsImages?: boolean;
+  supportsMultimodalStructuredOutput?: boolean;
 }
 
 export interface LLMHealthReport extends ProviderHealthReport {

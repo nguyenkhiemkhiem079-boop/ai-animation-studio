@@ -2,6 +2,7 @@ import { PipelineContext, PipelineStep } from '../pipeline/index.js';
 import { TimelineSequence } from '../domain/timeline.js';
 import { ExportManifest } from '../domain/export.js';
 import { IAssetRegistry } from '../asset-registry/index.js';
+import { ProductionSafetyError } from '../domain/execution-mode.js';
 import { Html5PlayerPackager } from './html5-player-packager.js';
 import { NLEInterchangeExporter } from './nle-interchange-exporter.js';
 import { VideoRenderer } from './video-renderer.js';
@@ -36,6 +37,53 @@ export class MasterExportPipelineStep implements PipelineStep {
       );
     }
 
+    const executionMode = (state.executionMode as string) || 'MOCK';
+
+    // Step 18: Quality Gate inspection in PRODUCTION mode
+    if (executionMode === 'PRODUCTION') {
+      const visualQASummary = state.visualQASummary as any;
+      const continuityReport = state.continuityReport as any;
+
+      // 1. Check if required visual QA step evaluated
+      if (!visualQASummary) {
+        throw new ProductionSafetyError(
+          `Master export blocked in PRODUCTION mode: Required Visual QA step has not been evaluated.`
+        );
+      }
+
+      // 2. Check for missing required video artifacts
+      if (visualQASummary.missingArtifacts > 0) {
+        throw new ProductionSafetyError(
+          `Master export blocked in PRODUCTION mode: ${visualQASummary.missingArtifacts} required shot video artifact(s) are missing.`
+        );
+      }
+
+      // 3. Check for unresolved critical visual defects
+      if (visualQASummary.criticalDefects > 0) {
+        throw new ProductionSafetyError(
+          `Master export blocked in PRODUCTION mode: ${visualQASummary.criticalDefects} unresolved critical visual defect(s) detected.`
+        );
+      }
+
+      // 4. Check for pending retakes
+      const pendingRetakes = visualQASummary.reports?.flatMap((r: any) => r.retakeRecommendations ?? []) ?? [];
+      if (pendingRetakes.length > 0) {
+        throw new ProductionSafetyError(
+          `Master export blocked in PRODUCTION mode: ${pendingRetakes.length} retake recommendation(s) are pending execution.`
+        );
+      }
+
+      // 5. Check continuity report for unresolved critical defects
+      if (continuityReport) {
+        const unresolvedCritical = continuityReport.issues?.filter((i: any) => i.severity === 'critical') ?? [];
+        if (unresolvedCritical.length > 0 || continuityReport.overallPassed === false) {
+          throw new ProductionSafetyError(
+            `Master export blocked in PRODUCTION mode: Continuity QA has ${unresolvedCritical.length} unresolved critical defect(s).`
+          );
+        }
+      }
+    }
+
     // 1. Generate HTML5 Interactive Player Bundle
     const html5Content = Html5PlayerPackager.package({ sequence });
 
@@ -44,7 +92,6 @@ export class MasterExportPipelineStep implements PipelineStep {
     const edlContent = NLEInterchangeExporter.exportEdl(sequence);
 
     // 3. Compile or Render Master Video
-    const executionMode = (state.executionMode as string) || 'MOCK';
     let videoManifest: ExportManifest;
     let masterVideoPath: string | undefined;
 

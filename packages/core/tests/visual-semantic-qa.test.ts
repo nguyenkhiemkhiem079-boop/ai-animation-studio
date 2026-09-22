@@ -151,12 +151,13 @@ describe('Phase 17 — Multimodal Visual Semantic Continuity QA', () => {
     });
 
     expect(report.passed).toBe(true);
-    expect(report.evaluationMechanism).toBe('DETERMINISTIC_LOCAL');
+    expect(report.evaluationMechanism).toBe('LOCAL_MEDIA_METADATA');
     expect(report.overallVisualContinuityScore).toBeGreaterThanOrEqual(0.85);
-    expect(report.identityConsistencyScore).toBeGreaterThanOrEqual(0.85);
+    // LOCAL_MEDIA_METADATA CANNOT verify pixel-level identity — identityConsistencyScore must be null
+    expect(report.identityConsistencyScore).toBeNull();
     expect(report.spatialPerspectiveScore).toBeGreaterThanOrEqual(0.85);
     expect(report.evaluatedFramesCount).toBe(3);
-    expect(report.defects.length).toBe(0);
+    expect(report.defects.filter((d) => d.severity === 'critical').length).toBe(0);
   });
 
   it('4. detects spatial perspective defect on portrait video in landscape context', async () => {
@@ -192,7 +193,7 @@ describe('Phase 17 — Multimodal Visual Semantic Continuity QA', () => {
   // 3. Mock Multimodal Gemini Provider
   it('6. evaluates video using mock multimodal LLM structured response', async () => {
     const mockLlm: any = {
-      metadata: { id: 'mock-gemini', name: 'Mock Gemini' },
+      metadata: { id: 'mock-gemini', name: 'Mock Gemini', supportsImages: true },
       isConfigured: () => true,
       getLastModelUsed: () => 'gemini-2.0-flash',
       generateStructured: async () => ({
@@ -218,7 +219,8 @@ describe('Phase 17 — Multimodal Visual Semantic Continuity QA', () => {
     });
 
     expect(report.passed).toBe(true);
-    expect(report.evaluationMechanism).toBe('MULTIMODAL_GEMINI');
+    // Genuine multimodal: MULTIMODAL_PROVIDER (provider-neutral) — not MULTIMODAL_GEMINI
+    expect(report.evaluationMechanism).toBe('MULTIMODAL_PROVIDER');
     expect(report.overallVisualContinuityScore).toBe(0.94);
     expect(report.metadata?.modelUsed).toBe('gemini-2.0-flash');
   });
@@ -282,10 +284,16 @@ describe('Phase 17 — Multimodal Visual Semantic Continuity QA', () => {
       shots: [testShot],
     });
 
+    // Phase 17.1: character_identity_drift CANNOT be resolved by cross dissolve.
+    // A retake must be PROPOSED but the issue remains UNRESOLVED.
     expect(result.appliedActions.length).toBe(1);
-    expect(result.appliedActions[0].strategy).toBe('insert_transition');
-    expect(result.repairedSequence.transitions[0].type).toBe('cross_dissolve');
-    expect(result.repairedSequence.transitions[0].duration).toBe(0.5);
+    expect(result.appliedActions[0].strategy).toBe('trigger_retake');
+    expect(result.appliedActions[0].status).toBe('PROPOSED');
+    // The issue is still present in remainingIssues — NOT resolved
+    expect(result.remainingIssues.length).toBe(1);
+    expect(result.remainingIssues[0].type).toBe('character_identity_drift');
+    // isResolved is still false
+    expect(result.remainingIssues[0].isResolved ?? false).toBe(false);
   });
 
   // 5. Pipeline Step Integration

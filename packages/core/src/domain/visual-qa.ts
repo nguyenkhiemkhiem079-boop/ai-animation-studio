@@ -59,6 +59,24 @@ export const RetakeRecommendationSchema = z.object({
 });
 export type RetakeRecommendation = z.infer<typeof RetakeRecommendationSchema>;
 
+export const VisualQAStatusSchema = z.enum([
+  'PASS',
+  'WARN',
+  'FAIL',
+  'NOT_EVALUATED',
+  'MISSING_ARTIFACT',
+]);
+export type VisualQAStatus = z.infer<typeof VisualQAStatusSchema>;
+
+export const VisualEvaluationCoverageSchema = z.object({
+  artifactIntegrity: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']),
+  spatialFormat: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']),
+  identityVisual: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']),
+  temporalArtifactVisual: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']),
+  semanticAction: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']),
+});
+export type VisualEvaluationCoverage = z.infer<typeof VisualEvaluationCoverageSchema>;
+
 export const VisualSemanticQAReportSchema = z.object({
   reportId: z.string(),
   projectId: z.string(),
@@ -66,16 +84,25 @@ export const VisualSemanticQAReportSchema = z.object({
   shotId: z.string(),
   assetId: z.string().optional(),
   videoUri: z.string(),
-  identityConsistencyScore: z.number().min(0).max(1),
-  spatialPerspectiveScore: z.number().min(0).max(1),
-  visualDefectScore: z.number().min(0).max(1),
-  overallVisualContinuityScore: z.number().min(0).max(1),
+  identityConsistencyScore: z.number().min(0).max(1).nullable(),
+  spatialPerspectiveScore: z.number().min(0).max(1).nullable(),
+  visualDefectScore: z.number().min(0).max(1).nullable(),
+  overallVisualContinuityScore: z.number().min(0).max(1).nullable(),
   passed: z.boolean(),
+  status: VisualQAStatusSchema.default('PASS'),
+  coverage: VisualEvaluationCoverageSchema.optional(),
+  missingIdentityAnchors: z.array(z.string()).optional(),
   defects: z.array(VisualDefectItemSchema).default([]),
   retakeRecommendations: z.array(RetakeRecommendationSchema).default([]),
   evaluatedFramesCount: z.number().int().nonnegative(),
   evaluatedAt: z.string().datetime().default(() => new Date().toISOString()),
-  evaluationMechanism: z.enum(['MULTIMODAL_GEMINI', 'DETERMINISTIC_LOCAL']),
+  evaluationMechanism: z.enum([
+    'MULTIMODAL_PROVIDER',
+    'MULTIMODAL_GEMINI',
+    'LOCAL_MEDIA_METADATA',
+    'DETERMINISTIC_LOCAL',
+    'NOT_EVALUATED',
+  ]),
   metadata: z.record(z.unknown()).optional(),
 });
 export type VisualSemanticQAReport = z.infer<typeof VisualSemanticQAReportSchema>;

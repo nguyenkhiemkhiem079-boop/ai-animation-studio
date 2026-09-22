@@ -9,12 +9,19 @@ import { LLMProvider } from '../llm/llm-provider.js';
 import { VisualSemanticQAEvaluator } from './visual-semantic-qa-evaluator.js';
 
 export interface VisualQAStepSummary {
-  evaluatedShotsCount: number;
-  passedShotsCount: number;
-  failedShotsCount: number;
+  totalShots: number;
+  evaluatedShots: number;
+  evaluatedShotsCount: number; // alias for backwards compatibility
+  missingArtifacts: number;
+  notEvaluatedShots: number;
+  passedShots: number;
+  passedShotsCount: number; // alias for backwards compatibility
+  failedShots: number;
+  failedShotsCount: number; // alias for backwards compatibility
   totalDefects: number;
   criticalDefects: number;
-  averageVisualScore: number;
+  averageVisualScore: number | null;
+  overallStatus: 'PASSED' | 'FAILED' | 'INCOMPLETE';
   reports: VisualSemanticQAReport[];
 }
 
@@ -52,26 +59,29 @@ export class VisualSemanticQAPipelineStep implements PipelineStep {
     }
 
     const characters = (state.resolvedCharacters as CharacterDNA[]) || [];
-    const location = (state.resolvedLocation as LocationDNA) || undefined;
+    const defaultLocation = (state.resolvedLocation as LocationDNA) || undefined;
+    const locationMap = (state.resolvedLocations as Record<string, LocationDNA>) || {};
 
-    // 2. Identify Video Files for each Shot
-    // Sources: state.shotVideoMap, state.videoOutputs, or search in .studio/media / .studio/smoke
+    // 2. Identify Video Files for each Shot from authoritative shotVideoMap
     const shotVideoMap: Record<string, string> = (state.shotVideoMap as Record<string, string>) || {};
     const reports: VisualSemanticQAReport[] = [];
 
     const reportsDir = path.resolve('.studio', 'qa', 'visual');
     fs.mkdirSync(reportsDir, { recursive: true });
 
+    let missingArtifactsCount = 0;
+
     for (const shot of shots) {
       let videoPath = shotVideoMap[shot.id];
 
-      // Check fallback paths
+      // Check legitimate candidate path specifically for this shot (never cross-shot smoke fallback)
       if (!videoPath || !fs.existsSync(videoPath)) {
         const candidatePaths = [
           path.resolve('.studio', 'media', projectId, `${shot.id}.mp4`),
+          path.resolve('.studio', 'videos', projectId, `${shot.id}.mp4`),
+          path.resolve('.studio', 'videos', projectId, `${shot.id}_gen.mp4`),
           path.resolve('.studio', 'smoke', 'media', `${shot.id}.mp4`),
           path.resolve('.studio', 'smoke', 'golden', `${shot.id}.mp4`),
-          path.resolve('.studio', 'smoke', 'media', 'shot_01.mp4'), // fixture fallback in smoke tests
         ];
         for (const cp of candidatePaths) {
           if (fs.existsSync(cp)) {
@@ -81,15 +91,20 @@ export class VisualSemanticQAPipelineStep implements PipelineStep {
         }
       }
 
+      // Resolve scene and location specifically for this shot (not always Scene 1)
+      const scene = productionScenes?.find((sc) => sc.id === shot.sceneId);
+      const sceneId = shot.sceneId ?? scene?.id;
+      const shotLocation = (scene && (scene as unknown as Record<string, string>)['locationId'] && locationMap[(scene as unknown as Record<string, string>)['locationId']]) ? locationMap[(scene as unknown as Record<string, string>)['locationId']] : defaultLocation;
+
       if (videoPath && fs.existsSync(videoPath)) {
-        logger.info(`Evaluating visual continuity for shot "${shot.id}"...`, { videoPath });
+        logger.info(`Evaluating visual continuity for shot "${shot.id}"...`, { videoPath, sceneId });
         const report = await this.evaluator.evaluateShotVideo({
           projectId,
-          sceneId: productionScenes?.[0]?.id,
+          sceneId,
           shot,
           videoPath,
           characterProfiles: characters,
-          locationProfile: location,
+          locationProfile: shotLocation,
         });
 
         reports.push(report);
@@ -122,28 +137,105 @@ export class VisualSemanticQAPipelineStep implements PipelineStep {
           });
         }
       } else {
-        logger.warn(`No rendered video found for shot "${shot.id}". Skipping visual frame evaluation.`, { shotId: shot.id });
+        // Step 10: Missing video is NOT skipped silently - generate explicit failure report
+        missingArtifactsCount++;
+        logger.error(`No rendered video found for shot "${shot.id}". Generating explicit MISSING_ARTIFACT failure report.`);
+        const missingReport: VisualSemanticQAReport = {
+          reportId: `vis_qa_missing_${shot.id}_${Date.now()}`,
+          projectId,
+          sceneId,
+          shotId: shot.id,
+          videoUri: videoPath || '',
+          identityConsistencyScore: null,
+          spatialPerspectiveScore: null,
+          visualDefectScore: 0.0,
+          overallVisualContinuityScore: 0.0,
+          passed: false,
+          status: 'MISSING_ARTIFACT',
+          coverage: {
+            artifactIntegrity: 'FAILED',
+            spatialFormat: 'NOT_EVALUATED',
+            identityVisual: 'NOT_EVALUATED',
+            temporalArtifactVisual: 'NOT_EVALUATED',
+            semanticAction: 'NOT_EVALUATED',
+          },
+          defects: [
+            {
+              defectId: `def_missing_${Date.now()}`,
+              frameIndex: 0,
+              timestampSeconds: 0,
+              region: 'global',
+              issueType: 'visual_artifact_defect',
+              severity: 'critical',
+              confidence: 1.0,
+              description: `Required video artifact for shot "${shot.id}" is missing or unrendered.`,
+              suggestedFix: 'Render or generate video artifact for this shot.',
+            },
+          ],
+          retakeRecommendations: [
+            {
+              recommendationId: `rec_missing_${Date.now()}`,
+              shotId: shot.id,
+              strategy: 'surgical_retake',
+              priority: 'high',
+              rationale: 'Missing video deliverable requires generation.',
+            },
+          ],
+          evaluatedFramesCount: 0,
+          evaluatedAt: new Date().toISOString(),
+          evaluationMechanism: 'LOCAL_MEDIA_METADATA',
+        };
+
+        reports.push(missingReport);
+
+        const reportPath = path.join(reportsDir, `${missingReport.reportId}.json`);
+        fs.writeFileSync(reportPath, JSON.stringify(missingReport, null, 2), 'utf-8');
       }
     }
 
     // 3. Compute Summary
-    const evaluatedCount = reports.length;
+    const totalShots = shots.length;
+    const evaluatedCount = reports.filter((r) => r.status !== 'MISSING_ARTIFACT' && r.status !== 'NOT_EVALUATED').length;
     const passedCount = reports.filter((r) => r.passed).length;
-    const failedCount = evaluatedCount - passedCount;
+    const failedCount = reports.filter((r) => !r.passed).length;
+    const notEvaluatedShots = totalShots - evaluatedCount;
+
     const allDefects = reports.flatMap((r) => r.defects);
     const criticalDefects = allDefects.filter((d) => d.severity === 'critical').length;
-    const avgScore =
-      evaluatedCount > 0
-        ? Number((reports.reduce((acc, r) => acc + r.overallVisualContinuityScore, 0) / evaluatedCount).toFixed(2))
-        : 1.0;
+
+    // Step 11: If evaluated count is 0, average score is null (NOT 1.0)
+    let avgScore: number | null = null;
+    if (evaluatedCount > 0) {
+      const validScores = reports
+        .filter((r) => r.overallVisualContinuityScore !== null && r.status !== 'MISSING_ARTIFACT')
+        .map((r) => r.overallVisualContinuityScore as number);
+      if (validScores.length > 0) {
+        avgScore = Number((validScores.reduce((acc, s) => acc + s, 0) / validScores.length).toFixed(2));
+      }
+    }
+
+    let overallStatus: 'PASSED' | 'FAILED' | 'INCOMPLETE' = 'PASSED';
+    if (evaluatedCount === 0 || notEvaluatedShots > 0) {
+      overallStatus = evaluatedCount === 0 ? 'INCOMPLETE' : 'FAILED';
+    }
+    if (criticalDefects > 0 || failedCount > 0 || missingArtifactsCount > 0) {
+      overallStatus = 'FAILED';
+    }
 
     const summary: VisualQAStepSummary = {
+      totalShots,
+      evaluatedShots: evaluatedCount,
       evaluatedShotsCount: evaluatedCount,
+      missingArtifacts: missingArtifactsCount,
+      notEvaluatedShots,
+      passedShots: passedCount,
       passedShotsCount: passedCount,
+      failedShots: failedCount,
       failedShotsCount: failedCount,
       totalDefects: allDefects.length,
       criticalDefects,
       averageVisualScore: avgScore,
+      overallStatus,
       reports,
     };
 
@@ -152,9 +244,12 @@ export class VisualSemanticQAPipelineStep implements PipelineStep {
     state.visualQASummary = summary;
 
     logger.info('Visual Semantic QA & Multimodal Continuity step completed.', {
-      evaluatedShotsCount: evaluatedCount,
-      passedShotsCount: passedCount,
+      totalShots,
+      evaluatedShots: evaluatedCount,
+      passedShots: passedCount,
+      missingArtifacts: missingArtifactsCount,
       averageVisualScore: avgScore,
+      overallStatus,
     });
 
     return {

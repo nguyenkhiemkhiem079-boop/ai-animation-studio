@@ -8,22 +8,27 @@ import {
   InMemoryAssetRegistry,
   defaultLogger,
   MediaToolchainDoctor,
+  ProductionSafetyError,
 } from '../src/index.js';
 
-describe('Phase 17 — Full End-to-End Stress Test with Multimodal Visual QA', () => {
+describe('Phase 17.1 — E2E Reality & Production Gate Stress Test', () => {
   const testDir = path.resolve('.studio', 'tests', 'phase17-stress');
   const shot1Video = path.join(testDir, 'SHOT_SC01_SH01.mp4');
   const shot2Video = path.join(testDir, 'SHOT_SC01_SH02.mp4');
+  const shot3Video = path.join(testDir, 'SHOT_SC02_SH01.mp4');
 
   beforeAll(() => {
     fs.mkdirSync(testDir, { recursive: true });
     const ffmpeg = MediaToolchainDoctor.getFfmpegPath();
 
-    // Generate real test videos for shots
+    // Generate real test video containers for shots
     execSync(`"${ffmpeg}" -y -f lavfi -i testsrc=size=320x180:rate=12 -t 1 -pix_fmt yuv420p -c:v libx264 "${shot1Video}"`, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     execSync(`"${ffmpeg}" -y -f lavfi -i testsrc=size=320x180:rate=12 -t 1 -pix_fmt yuv420p -c:v libx264 "${shot2Video}"`, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    execSync(`"${ffmpeg}" -y -f lavfi -i testsrc=size=320x180:rate=12 -t 1 -pix_fmt yuv420p -c:v libx264 "${shot3Video}"`, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   });
@@ -36,18 +41,7 @@ describe('Phase 17 — Full End-to-End Stress Test with Multimodal Visual QA', (
     }
   });
 
-  it('executes full 12-step master pipeline under multi-scene stress with real video and visual QA', async () => {
-    const storage = new MemoryStorage();
-    const assetRegistry = new InMemoryAssetRegistry();
-
-    const pipeline = StudioPipelineFactory.createPipeline({
-      storage,
-      assetRegistry,
-      logger: defaultLogger,
-      autoRepairContinuity: true,
-    });
-
-    const multiSceneStory = `SCENE 1 - COMMAND DECK - NIGHT
+  const multiSceneStory = `SCENE 1 - COMMAND DECK - NIGHT
 Commander Kaito stands at the central tactical console, eyes fixed on the sensor readout.
 KAITO
 Sensors confirm the breach. Prepare defensive countermeasures.
@@ -60,14 +54,27 @@ Elena rushes down the metallic hallway as alarm klaxons flash crimson.
 ELENA
 All hands, battle stations!`;
 
+  it('MEDIA_STRUCTURE_E2E: executes full 12-step pipeline under multi-scene stress with real video verification', async () => {
+    const storage = new MemoryStorage();
+    const assetRegistry = new InMemoryAssetRegistry();
+
+    const pipeline = StudioPipelineFactory.createPipeline({
+      storage,
+      assetRegistry,
+      logger: defaultLogger,
+      autoRepairContinuity: true,
+    });
+
     const initialState = {
       projectId: 'proj_stress_17',
       seriesId: 'series_stress_17',
       sourceText: multiSceneStory,
       sourceDocumentId: 'doc_stress_17',
+      executionMode: 'LOCAL',
       shotVideoMap: {
         SHOT_SC01_SH01: shot1Video,
         SHOT_SC01_SH02: shot2Video,
+        SHOT_SC02_SH01: shot3Video,
       },
     };
 
@@ -102,8 +109,9 @@ All hands, battle stations!`;
     expect(Array.isArray(context.state.visualQAReports)).toBe(true);
     expect(context.state.visualQASummary).toBeDefined();
     const visSummary = context.state.visualQASummary as any;
-    expect(visSummary.evaluatedShotsCount).toBeGreaterThanOrEqual(2);
-    expect(visSummary.averageVisualScore).toBeGreaterThanOrEqual(0.8);
+    expect(visSummary.evaluatedShots).toBeGreaterThanOrEqual(2);
+    expect(visSummary.missingArtifacts).toBe(0);
+    expect(visSummary.overallStatus).toBe('PASSED');
 
     // 4. Verify Continuity QA & Auto-Repair
     expect(context.state.continuityReport).toBeDefined();
@@ -131,5 +139,36 @@ All hands, battle stations!`;
     const assets = await assetRegistry.query({ seriesId: 'series_stress_17' });
     const qaReports = assets.filter((a) => a.type === 'qa_report');
     expect(qaReports.length).toBeGreaterThanOrEqual(2);
+  }, 120000);
+
+  it('MULTIMODAL_VISUAL_QA_E2E: blocks Master Export in PRODUCTION mode when required video artifact is missing', async () => {
+    const storage = new MemoryStorage();
+    const assetRegistry = new InMemoryAssetRegistry();
+
+    const pipeline = StudioPipelineFactory.createPipeline({
+      storage,
+      assetRegistry,
+      logger: defaultLogger,
+      autoRepairContinuity: true,
+    });
+
+    const initialState = {
+      projectId: 'proj_prod_blocked',
+      seriesId: 'series_prod_blocked',
+      sourceText: multiSceneStory,
+      sourceDocumentId: 'doc_prod_blocked',
+      executionMode: 'PRODUCTION', // PRODUCTION mode activates hard safety gate
+      shotVideoMap: {
+        // Deliberately missing SHOT_SC02_SH01
+        SHOT_SC01_SH01: shot1Video,
+        SHOT_SC01_SH02: shot2Video,
+      },
+    };
+
+    // ProductionSafetyError is thrown from a pipeline step and wrapped in PipelineError.
+    // Verify that the underlying cause is indeed a PRODUCTION_SAFETY_VIOLATION.
+    await expect(pipeline.execute('proj_prod_blocked', initialState)).rejects.toThrow(
+      'PRODUCTION_SAFETY_VIOLATION'
+    );
   }, 30000);
 });

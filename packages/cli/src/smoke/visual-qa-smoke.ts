@@ -27,10 +27,10 @@ export interface VisualQASmokeReport {
   };
   visualQA: {
     reportId: string;
-    identityConsistencyScore: number;
-    spatialPerspectiveScore: number;
-    visualDefectScore: number;
-    overallVisualContinuityScore: number;
+    identityConsistencyScore: number | null;
+    spatialPerspectiveScore: number | null;
+    visualDefectScore: number | null;
+    overallVisualContinuityScore: number | null;
     passed: boolean;
     defectsCount: number;
     mechanism: string;
@@ -42,7 +42,7 @@ export interface VisualQASmokeReport {
 }
 
 export async function runVisualQASmoke(outputDir = '.studio/smoke/visual-qa'): Promise<VisualQASmokeReport> {
-  console.log('🔬 Starting Phase 17 Visual Semantic QA & Continuity Smoke Test...\n');
+  console.log('🔬 Starting Phase 17.1 Visual Semantic QA & Continuity Reality Smoke Test...\n');
 
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -172,27 +172,40 @@ export async function runVisualQASmoke(outputDir = '.studio/smoke/visual-qa'): P
 
   console.log(` - Report ID: ${qaReport.reportId}`);
   console.log(` - Mechanism: ${qaReport.evaluationMechanism}`);
-  console.log(` - Identity Score: ${(qaReport.identityConsistencyScore * 100).toFixed(1)}%`);
-  console.log(` - Spatial Score : ${(qaReport.spatialPerspectiveScore * 100).toFixed(1)}%`);
-  console.log(` - Defect Score  : ${(qaReport.visualDefectScore * 100).toFixed(1)}%`);
-  console.log(` - Overall Score : ${(qaReport.overallVisualContinuityScore * 100).toFixed(1)}%`);
+  console.log(` - Identity Score: ${qaReport.identityConsistencyScore !== null ? (qaReport.identityConsistencyScore * 100).toFixed(1) + '%' : 'null (Truthful Offline Metadata Mode)'}`);
+  console.log(` - Spatial Score : ${qaReport.spatialPerspectiveScore !== null ? (qaReport.spatialPerspectiveScore * 100).toFixed(1) + '%' : 'N/A'}`);
+  console.log(` - Defect Score  : ${qaReport.visualDefectScore !== null ? (qaReport.visualDefectScore * 100).toFixed(1) + '%' : 'N/A'}`);
+  console.log(` - Overall Score : ${qaReport.overallVisualContinuityScore !== null ? (qaReport.overallVisualContinuityScore * 100).toFixed(1) + '%' : 'N/A'}`);
   console.log(` - Evaluation Passed: ${qaReport.passed ? 'YES ✅' : 'NO ❌'}`);
+  console.log(` - Coverage: ${JSON.stringify(qaReport.coverage)}`);
 
   // 5. Test Auto-Repair Integration
-  console.log('\n5️⃣ Testing Auto-Repair Integration with Visual Continuity Defect...');
+  console.log('\n5️⃣ Testing Truthful Auto-Repair Integration...');
   const mockContinuityReport: ContinuityQAReport = {
     reportId: `qa_report_test_${Date.now()}`,
     projectId: 'proj_smoke_visual_qa',
     issues: [
       {
+        issueId: 'iss_180_01',
+        shotId: 'SHOT_VIS_02',
+        relatedShotId: 'SHOT_VIS_01',
+        type: 'screen_direction_180',
+        severity: 'warning',
+        message: '180-degree screen direction flip between shots.',
+        suggestedFix: 'Insert cross-dissolve transition.',
+        autoRepairable: true,
+        isResolved: false,
+      },
+      {
         issueId: 'iss_vis_drift_01',
         shotId: 'SHOT_VIS_02',
         relatedShotId: 'SHOT_VIS_01',
         type: 'character_identity_drift',
-        severity: 'warning',
+        severity: 'critical',
         message: '[Visual Semantic QA] Character face drift detected across shot boundary.',
-        suggestedFix: 'Insert cross-dissolve transition.',
-        autoRepairable: true,
+        suggestedFix: 'Surgical retake required.',
+        autoRepairable: false,
+        isResolved: false,
       },
     ],
     repairActions: [],
@@ -271,14 +284,15 @@ export async function runVisualQASmoke(outputDir = '.studio/smoke/visual-qa'): P
 
   console.log(` - Auto-Repair Applied ${repairResult.appliedActions.length} action(s):`);
   for (const act of repairResult.appliedActions) {
-    console.log(`   • [${act.strategy}] ${act.description}`);
+    console.log(`   • [${act.strategy}] (${act.status}) ${act.description}`);
   }
 
   const updatedTransition = repairResult.repairedSequence.transitions[0];
   console.log(` - Repaired Transition: type="${updatedTransition.type}", duration=${updatedTransition.duration}s ✅`);
+  console.log(` - Remaining Unresolved Issues: ${repairResult.remainingIssues.length} (Critical identity drift preserved) ✅`);
 
   console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('🏆 PHASE 17 VISUAL SEMANTIC QA SMOKE TEST PASSED!');
+  console.log('🏆 PHASE 17.1 VISUAL SEMANTIC QA REALITY SMOKE TEST PASSED!');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
   return {

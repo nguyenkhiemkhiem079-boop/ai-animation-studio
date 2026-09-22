@@ -27,12 +27,13 @@ export class MockLLMProvider implements LLMProvider {
       isLocal: true,
       costEstimateUsdPerInvocation: 0.0,
       averageLatencyMs: 5,
-      supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA'],
+      supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA', 'VISION_QA'],
       modelMapping: {
         FAST: 'mock-fast',
         REASONING: 'mock-reasoning',
         STRUCTURED: 'mock-structured',
         QA: 'mock-qa',
+        VISION_QA: 'mock-vision-qa',
       },
       supportedTasks: [
         'STORY_ANALYSIS',

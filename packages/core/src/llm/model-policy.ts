@@ -5,6 +5,7 @@ export interface ModelPolicyConfig {
   reasoningModel?: string;
   structuredModel?: string;
   qaModel?: string;
+  visionQaModel?: string;
 }
 
 export class ModelPolicy {
@@ -13,6 +14,7 @@ export class ModelPolicy {
     REASONING: 'gemini-3.5-flash',
     STRUCTURED: 'gemini-3.5-flash',
     QA: 'gemini-3.5-flash',
+    VISION_QA: 'gemini-3.5-flash',
   };
 
   private modelMapping: Record<LLMModelRole, string>;
@@ -35,6 +37,12 @@ export class ModelPolicy {
         config.qaModel ??
         process.env.GEMINI_MODEL_QA ??
         ModelPolicy.DEFAULT_MODELS.QA,
+      VISION_QA:
+        config.visionQaModel ??
+        process.env.GEMINI_MODEL_VISION_QA ??
+        config.qaModel ??
+        process.env.GEMINI_MODEL_QA ??
+        ModelPolicy.DEFAULT_MODELS.VISION_QA,
     };
   }
 
@@ -59,6 +67,7 @@ export function getCentralizedModelPolicy(): {
   reasoning: string;
   structured: string;
   qa: string;
+  visionQa: string;
 } {
   const policy = new ModelPolicy();
   return {
@@ -66,6 +75,7 @@ export function getCentralizedModelPolicy(): {
     reasoning: policy.getModelForRole('REASONING'),
     structured: policy.getModelForRole('STRUCTURED'),
     qa: policy.getModelForRole('QA'),
+    visionQa: policy.getModelForRole('VISION_QA'),
   };
 }
 

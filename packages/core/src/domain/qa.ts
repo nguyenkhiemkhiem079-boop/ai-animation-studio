@@ -28,6 +28,7 @@ export const ContinuityCheckResultSchema = z.object({
   message: z.string(),
   suggestedFix: z.string(),
   autoRepairable: z.boolean().default(false),
+  isResolved: z.boolean().optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 export type ContinuityCheckResult = z.infer<typeof ContinuityCheckResultSchema>;
@@ -43,12 +44,16 @@ export const RepairStrategySchema = z.enum([
 ]);
 export type RepairStrategy = z.infer<typeof RepairStrategySchema>;
 
+export const RepairActionStatusSchema = z.enum(['PROPOSED', 'APPLIED', 'VERIFIED', 'FAILED']);
+export type RepairActionStatus = z.infer<typeof RepairActionStatusSchema>;
+
 export const RepairActionSchema = z.object({
   actionId: z.string(),
   issueId: z.string(),
   strategy: RepairStrategySchema,
   description: z.string(),
   applied: z.boolean().default(false),
+  status: RepairActionStatusSchema.default('PROPOSED'),
   timestamp: z.string().datetime().default(() => new Date().toISOString()),
   details: z.record(z.unknown()).optional(),
 });

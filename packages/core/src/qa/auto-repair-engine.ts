@@ -4,6 +4,7 @@ import {
   ContinuityCheckResult,
   ContinuityQAReport,
   RepairAction,
+  RepairActionStatus,
   RepairStrategy,
 } from '../domain/qa.js';
 
@@ -23,6 +24,8 @@ export interface AutoRepairResult {
 export class AutoRepairEngine {
   /**
    * Automatically applies targeted repairs for auto-repairable continuity issues.
+   * Truthful QA: Transitions do NOT resolve character identity drift or underlying spatial defects.
+   * Retake recommendations are PROPOSED until a verified replacement artifact exists.
    */
   public static repair(options: AutoRepairOptions): AutoRepairResult {
     const { report, timelineSequence, shots } = options;
@@ -61,6 +64,7 @@ export class AutoRepairEngine {
                 strategy: 'insert_transition',
                 description: `Softened 180-degree jump between ${issue.relatedShotId} and ${issue.shotId} with a 0.5s cross dissolve.`,
                 applied: true,
+                status: 'APPLIED',
                 timestamp: new Date().toISOString(),
               });
               repaired = true;
@@ -87,6 +91,7 @@ export class AutoRepairEngine {
                 strategy: 'match_lighting',
                 description: `Mitigated lighting jump between ${issue.relatedShotId} and ${issue.shotId} using a 0.6s cross dissolve blend.`,
                 applied: true,
+                status: 'APPLIED',
                 timestamp: new Date().toISOString(),
               });
               repaired = true;
@@ -110,6 +115,7 @@ export class AutoRepairEngine {
                   strategy: 'trigger_retake',
                   description: `Synchronized character "${meta.characterId}" outfit in shot ${issue.shotId} to canonical "${meta.outfitA}".`,
                   applied: true,
+                  status: 'APPLIED',
                   timestamp: new Date().toISOString(),
                 });
                 repaired = true;
@@ -132,6 +138,7 @@ export class AutoRepairEngine {
                 strategy: 'insert_buffer_shot',
                 description: `Applied 8% digital push-in transform to shot "${issue.shotId}" to break visual monotony.`,
                 applied: true,
+                status: 'APPLIED',
                 timestamp: new Date().toISOString(),
               });
               repaired = true;
@@ -159,6 +166,7 @@ export class AutoRepairEngine {
                 strategy: 'adjust_audio_duck',
                 description: `Extended video clip "${vClip.name}" by ${overhang.toFixed(2)}s to contain dialogue audio.`,
                 applied: true,
+                status: 'APPLIED',
                 timestamp: new Date().toISOString(),
               });
               repaired = true;
@@ -168,43 +176,24 @@ export class AutoRepairEngine {
         }
 
         case 'character_identity_drift': {
-          // Soften character drift across adjacent shots with a cross dissolve or trigger retake
-          if (issue.relatedShotId && issue.shotId) {
-            const trans = seq.transitions.find(
-              (t) =>
-                t.fromClipId.includes(issue.relatedShotId!) &&
-                t.toClipId.includes(issue.shotId)
-            );
-            if (trans) {
-              trans.type = 'cross_dissolve';
-              trans.duration = 0.5;
-              appliedActions.push({
-                actionId: `act_repair_${issue.issueId}`,
-                issueId: issue.issueId,
-                strategy: 'insert_transition',
-                description: `Softened character identity drift between ${issue.relatedShotId} and ${issue.shotId} with a 0.5s cross dissolve blend.`,
-                applied: true,
-                timestamp: new Date().toISOString(),
-              });
-              repaired = true;
-            }
-          }
-          if (!repaired) {
-            appliedActions.push({
-              actionId: `act_retake_${issue.issueId}`,
-              issueId: issue.issueId,
-              strategy: 'trigger_retake',
-              description: `Recommended surgical retake for shot "${issue.shotId}" to realign character face with canonical turnaround DNA.`,
-              applied: true,
-              timestamp: new Date().toISOString(),
-            });
-            repaired = true;
-          }
+          // Step 15: Cross dissolve does NOT repair character identity drift!
+          // Retake recommendation is created as PROPOSED, and the issue remains UNRESOLVED.
+          appliedActions.push({
+            actionId: `act_retake_${issue.issueId}`,
+            issueId: issue.issueId,
+            strategy: 'trigger_retake',
+            description: `Proposed surgical retake for shot "${issue.shotId}" to realign character face with canonical turnaround DNA.`,
+            applied: false,
+            status: 'PROPOSED',
+            timestamp: new Date().toISOString(),
+          });
+          repaired = false; // Issue remains unresolved until replacement video is rendered and verified
           break;
         }
 
         case 'spatial_perspective_mismatch': {
-          // Soften perspective angle mismatch with a 0.6s cross dissolve
+          // Step 15: Editorial cross dissolve may be inserted as a transition mitigation,
+          // but the underlying spatial perspective defect remains UNRESOLVED until re-rendered.
           if (issue.relatedShotId && issue.shotId) {
             const trans = seq.transitions.find(
               (t) =>
@@ -215,43 +204,67 @@ export class AutoRepairEngine {
               trans.type = 'cross_dissolve';
               trans.duration = 0.6;
               appliedActions.push({
-                actionId: `act_repair_${issue.issueId}`,
+                actionId: `act_mitigate_${issue.issueId}`,
                 issueId: issue.issueId,
                 strategy: 'insert_transition',
-                description: `Softened spatial perspective mismatch between ${issue.relatedShotId} and ${issue.shotId} with a 0.6s cross dissolve.`,
+                description: `Mitigated transition perspective jump between ${issue.relatedShotId} and ${issue.shotId} with a 0.6s cross dissolve, but underlying camera perspective remains unresolved.`,
                 applied: true,
+                status: 'APPLIED',
                 timestamp: new Date().toISOString(),
               });
-              repaired = true;
             }
           }
+          repaired = false; // Underlying spatial defect is NOT resolved
           break;
         }
 
         case 'color_palette_drift': {
-          appliedActions.push({
-            actionId: `act_repair_${issue.issueId}`,
-            issueId: issue.issueId,
-            strategy: 'color_grade_compensation',
-            description: `Applied color grade compensation curve to shot "${issue.shotId}" to restore scene lighting temperature.`,
-            applied: true,
-            timestamp: new Date().toISOString(),
-          });
-          repaired = true;
+          // Step 15: Apply actual color grade compensation to timeline clip if present
+          const videoTrack = seq.tracks.find((t) => t.trackType === 'video');
+          const clip = videoTrack?.clips.find((c) => c.clipId.includes(issue.shotId));
+          if (clip) {
+            (clip as any).colorGrading = {
+              lut: 'neutral_rec709_compensation',
+              temperatureOffset: -500,
+            };
+            appliedActions.push({
+              actionId: `act_repair_${issue.issueId}`,
+              issueId: issue.issueId,
+              strategy: 'color_grade_compensation',
+              description: `Applied color grade compensation curve to shot "${issue.shotId}" to restore scene lighting temperature.`,
+              applied: true,
+              status: 'APPLIED',
+              timestamp: new Date().toISOString(),
+            });
+            repaired = true;
+          } else {
+            appliedActions.push({
+              actionId: `act_propose_${issue.issueId}`,
+              issueId: issue.issueId,
+              strategy: 'color_grade_compensation',
+              description: `Proposed color grade compensation curve for shot "${issue.shotId}".`,
+              applied: false,
+              status: 'PROPOSED',
+              timestamp: new Date().toISOString(),
+            });
+            repaired = false;
+          }
           break;
         }
 
         case 'temporal_visual_flicker':
         case 'visual_artifact_defect': {
+          // Step 15: Retake required, issue remains unresolved until replacement video exists and passes QA
           appliedActions.push({
             actionId: `act_retake_${issue.issueId}`,
             issueId: issue.issueId,
             strategy: 'trigger_retake',
             description: `Flagged visual artifact in shot "${issue.shotId}" for seed variation retake.`,
-            applied: true,
+            applied: false,
+            status: 'PROPOSED',
             timestamp: new Date().toISOString(),
           });
-          repaired = true;
+          repaired = false;
           break;
         }
 

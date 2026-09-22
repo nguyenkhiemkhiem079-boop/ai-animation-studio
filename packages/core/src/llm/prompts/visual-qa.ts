@@ -8,11 +8,11 @@ import {
 export const VISUAL_QA_PROMPT_VERSION = 'v1.0.0';
 
 export const VisualQAOutputSchema = z.object({
-  identityConsistencyScore: z.number().min(0).max(1).default(1.0),
-  spatialPerspectiveScore: z.number().min(0).max(1).default(1.0),
-  visualDefectScore: z.number().min(0).max(1).default(1.0),
-  overallVisualContinuityScore: z.number().min(0).max(1).default(1.0),
-  passed: z.boolean().default(true),
+  identityConsistencyScore: z.number().min(0).max(1).nullable(),
+  spatialPerspectiveScore: z.number().min(0).max(1),
+  visualDefectScore: z.number().min(0).max(1),
+  overallVisualContinuityScore: z.number().min(0).max(1),
+  passed: z.boolean(),
   defects: z
     .array(
       z.object({

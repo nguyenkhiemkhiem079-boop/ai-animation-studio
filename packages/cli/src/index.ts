@@ -145,8 +145,44 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const { runVisualQASmoke } = await import('./smoke/visual-qa-smoke.js');
         await runVisualQASmoke();
         return 0;
+      } else if (subCommand === 'visual-qa-live') {
+        if (process.env.RUN_LIVE_PROVIDER_TESTS !== 'true') {
+          console.log('⚠️  Live visual QA smoke skipped: RUN_LIVE_PROVIDER_TESTS=true environment variable required.');
+          return 0;
+        }
+        console.log('🌐 Executing LIVE Gemini Visual Semantic QA smoke...');
+        const gemini = new GeminiProvider();
+        if (!gemini.isConfigured()) {
+          console.error('❌ GEMINI_API_KEY is not configured in environment.');
+          return 1;
+        }
+        const samplePng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+        const start = Date.now();
+        const res = await gemini.generateStructured({
+          taskType: 'CONTINUITY_QA',
+          modelRole: 'VISION_QA',
+          systemInstruction: 'You are a visual tester. Verify whether you see an image input.',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Analyze this test image and return a valid visual QA structured output.' },
+                { type: 'image', mimeType: 'image/png', dataBase64: samplePng },
+              ],
+            },
+          ],
+          responseSchema: (await import('@ai-studio/core')).VisualQAOutputSchema,
+          schemaName: 'VisualQAOutput',
+        });
+        const latencyMs = Date.now() - start;
+        console.log(`✅ Live Visual QA call succeeded!`);
+        console.log(` - Model: ${res.model}`);
+        console.log(` - Latency: ${latencyMs}ms`);
+        console.log(` - Usage: ${JSON.stringify(res.usage)}`);
+        console.log(` - Output: ${JSON.stringify(res.data)}`);
+        return 0;
       } else {
-        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow, visual-qa`);
+        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow, visual-qa, visual-qa-live`);
         return 1;
       }
     }
@@ -2350,17 +2386,43 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         }
       }
 
+      const modeIdx = args.indexOf('--mode');
+      let executionMode: 'MOCK' | 'LOCAL' | 'PRODUCTION' = 'LOCAL';
+      if (modeIdx !== -1 && args[modeIdx + 1]) {
+        const rawMode = args[modeIdx + 1].toUpperCase();
+        if (rawMode === 'MOCK' || rawMode === 'LOCAL' || rawMode === 'PRODUCTION') {
+          executionMode = rawMode;
+        } else {
+          console.error(`Invalid --mode "${args[modeIdx + 1]}". Supported: MOCK, LOCAL, PRODUCTION`);
+          return 1;
+        }
+      } else {
+        console.log('ℹ️  No --mode specified. Defaulting to LOCAL mode (deterministic animation + local media verification).');
+        console.log('   Supported modes: MOCK, LOCAL, PRODUCTION (e.g. studio run story.txt --mode production)');
+      }
+
       console.log(`🚀 Launching AI Animation Studio Production Pipeline for Project "${projectId}"...`);
+      console.log(` - Execution Mode: ${executionMode}`);
       console.log(` - Series ID: ${seriesId}`);
       console.log(` - Source Story: ${storyFile}`);
       if (resumeFromCheckpointId) {
         console.log(` - Resuming from Checkpoint: ${resumeFromCheckpointId}`);
       }
 
+      // Configure LLM provider if available
+      const gemini = new GeminiProvider({ executionMode });
+      const llm = gemini.isConfigured() ? gemini : undefined;
+      if (llm) {
+        console.log(` - Multimodal LLM: Configured (${gemini.metadata.name}) ✅`);
+      } else {
+        console.log(` - Multimodal LLM: Not configured (offline LOCAL_MEDIA_METADATA QA mode)`);
+      }
+
       const assetRegistry = new FileSystemAssetRegistry(storage);
       const pipeline = StudioPipelineFactory.createPipeline({
         storage,
         assetRegistry,
+        llm,
       });
 
       const initialState = {
@@ -2369,6 +2431,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         rawScript: storyContent,
         sourceText: storyContent,
         scriptTitle: path.basename(storyFile),
+        executionMode,
       };
 
       const context = await pipeline.execute(projectId, initialState, { resumeFromCheckpointId });
@@ -2385,7 +2448,8 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       await storage.writeJson(`.studio/projects/${projectId}/production_summary.json`, summary);
 
       console.log(`\n🎉 Production Pipeline Complete for Project "${projectId}"!`);
-      console.log(` - Steps Completed: ${context.completedStepIds.length} / 11`);
+      console.log(` - Execution Mode: ${executionMode} ${executionMode === 'MOCK' ? '⚠️ [MOCK DELIVERABLES - SYNTHETIC TEST ARTIFACTS]' : '✅'}`);
+      console.log(` - Steps Completed: ${context.completedStepIds.length} / 12`);
       console.log(` - Total Duration : ${summary.totalDurationSeconds.toFixed(2)}s`);
       console.log(` - Total Shots    : ${summary.totalShots}`);
       console.log(`\n💰 Cost & Financial Savings (Deterministic Animation First):`);
