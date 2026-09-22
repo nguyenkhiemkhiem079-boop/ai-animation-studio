@@ -139,7 +139,7 @@ All hands, battle stations!`;
     const assets = await assetRegistry.query({ seriesId: 'series_stress_17' });
     const qaReports = assets.filter((a) => a.type === 'qa_report');
     expect(qaReports.length).toBeGreaterThanOrEqual(2);
-  }, 120000);
+  }, 240000);
 
   it('MULTIMODAL_VISUAL_QA_E2E: blocks Master Export in PRODUCTION mode when required video artifact is missing', async () => {
     const storage = new MemoryStorage();

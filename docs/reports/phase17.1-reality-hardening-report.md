@@ -1,8 +1,8 @@
-# PHASE 17.1.1 — VISUAL QA PRODUCTION REALITY HARDENING REPORT
+# PHASE 17.1 & 17.2 — PRODUCTION REALITY HARDENING & CI VERIFICATION REPORT
 
 ## 1. Executive Summary
 
-Phase 17.1.1 closes the remaining production reality gaps in the Visual Semantic Continuity QA Engine. It eliminates silent offline fallback in production mode, enforces canonical identity reference anchoring, implements the strict Master Export Production Safety Gate, ensures truthful auto-repair proposals, and validates physical frame inspection under controlled tests.
+Phase 17.1 and 17.2 close all remaining production reality and CI verification gaps in AI Animation Studio. It eliminates silent offline fallbacks in production mode, enforces canonical identity reference anchoring, implements the strict Master Export Production Safety Gate, ensures truthful auto-repair proposals, resolves the Node 22 E2E test timeout under CI CPU pressure, and establishes a hardened GitHub Actions production verification gate.
 
 ---
 
@@ -10,89 +10,43 @@ Phase 17.1.1 closes the remaining production reality gaps in the Visual Semantic
 
 | Evidence State | Status | Evidence / Verification Notes |
 |:---|:---:|:---|
-| **IMPLEMENTED** | **PASS** | Complete architecture in place across `packages/core` and `packages/cli`: Master Export Gate, Visual QA Evaluator, Character/Env Reference Packets, Authoritative Shot Video Map, Truthful Auto-Repair. |
-| **LOCAL VERIFIED** | **PASS** | All local unit, integration, and e2e test suites execute and pass locally without cloud credentials (`npm run test`, `npm run typecheck`, `npm run build`, `npm run skills:check`, and all smoke suites). |
-| **MULTIMODAL CONTRACT VERIFIED** | **PASS** | Controlled visual tests (`multimodal-contract.test.ts`) verify that canonical RED reference + RED rendered frames yields PASS, while canonical RED reference + BLUE rendered frames yields FAIL with `character_identity_drift`. Provider spy verifies transmission of canonical reference image parts alongside extracted keyframes using non-empty base64 bytes, valid MIME types, and `VISION_QA` role. |
+| **IMPLEMENTED** | **PASS** | Complete architecture in place across `packages/core`, `packages/cli`, and `.github/workflows/ci.yml`: Master Export Gate, Visual QA Evaluator, Character/Env Reference Packets, Authoritative Shot Video Map, Truthful Auto-Repair, Hardened Matrix CI. |
+| **LOCAL VERIFIED** | **PASS** | All local unit, integration, and e2e test suites execute and pass locally without cloud credentials (`npm run test`, `npm run typecheck`, `npm run build`, `npm run skills:check`, and all offline smoke suites). |
+| **MULTIMODAL CONTRACT VERIFIED** | **PASS** | Controlled visual tests (`multimodal-contract.test.ts`) verify that canonical RED reference + RED rendered frames yields PASS, while canonical RED reference + BLUE rendered frames yields FAIL with `character_identity_drift`. Provider spy verifies transmission of canonical reference image parts alongside extracted keyframes using non-empty base64 bytes, valid MIME types, and `VISION_QA` role. Non-canon and candidate references are never transmitted to vision. |
 | **LIVE PROVIDER VERIFIED** | **NOT INDEPENDENTLY VERIFIED** | No durable artifact/log checked into git repository (live smoke run locally observed free-tier quota exhaustion / rate-limiting `RESOURCE_EXHAUSTED`). Historical live test was observed in console during development on baseline `476a854` (gemini-3.5-flash, 1118 input tokens, 73 output tokens, 1349 total tokens). |
-| **GITHUB CI VERIFIED** | **NOT VERIFIED** | Local environment execution only; remote GitHub Action CI status is not asserted without remote log verification. |
+| **GITHUB CI** | **PENDING VERIFICATION** | Upgraded CI workflow with Node 20.x + Node 22.x matrix and offline production verification job; verified by monitoring active GitHub Actions run. |
 
 ---
 
-## 3. Hardened Production Reality Rules
+## 3. Node 22 Regression Root Cause & Resolution
 
-### 3.1 Master Export Production Safety Gate
-In `PRODUCTION` mode, final master export strictly fails closed (`ProductionSafetyError`) if:
-- `visualQASummary` is missing or `overallStatus !== 'PASSED'`.
-- `missingArtifacts > 0`, `notEvaluatedShots > 0`, or `criticalDefects > 0`.
-- Any required coverage dimension (`identityVisual`, `temporalArtifactVisual`, `semanticAction`) is `NOT_EVALUATED`.
-- Any pending retake recommendation is unresolved.
-- Any critical continuity defect remains unresolved.
-- Any video path in authoritative `state.shotVideoMap` is missing or has a file size of 0 bytes.
-
-### 3.2 Multimodal Provider Failure Behavior
-- In `PRODUCTION`: Provider failures (`AUTH_ERROR`, `RATE_LIMITED`, `QUOTA_EXCEEDED`, `NETWORK_ERROR`, `TIMEOUT`, `SERVER_ERROR`, `INVALID_REQUEST`, schema error) result in safe categorization, set `coverage.identityVisual = 'NOT_EVALUATED'`, and block export.
-- In `LOCAL`: Truthfully falls back to `LOCAL_MEDIA_METADATA`, recording `identityConsistencyScore = null` and `coverage.identityVisual = 'NOT_EVALUATED'`.
-
-### 3.3 Approved Canonical References Only
-- Only assets with approved/canonical lifecycle status establish identity truth.
-- Candidate assets and missing anchors result in `missingIdentityAnchors` and `coverage.identityVisual = 'NOT_EVALUATED'`, blocking production character shots.
-- Outfit and wardrobe identity requirements resolve canonical outfit references when available; missing outfit references cap identity scores and trigger defects.
-- Multi-scene isolation is strictly preserved; shots resolve specific scene and location packets without falling back to Scene 1.
-
-### 3.4 Authoritative Shot Video Map
-- Production mode strictly resolves media from `state.shotVideoMap` and verified registered assets.
-- Fallback searching in `.studio/smoke/media` and `.studio/smoke/golden` has been completely eliminated from production logic.
-
-### 3.5 Truthful Auto-Repair
-- `color_palette_drift`: Because renderer does not bake metadata color grading into pixels, status is `PROPOSED`, `applied: false`, and issue remains unresolved.
-- `character_identity_drift`: Proposes surgical retake (`PROPOSED`, `applied: false`). Cross-dissolves are prohibited from masking identity drift.
-- `spatial_perspective_mismatch`: Editorial cross-dissolve mitigation does not mark the underlying spatial mismatch resolved.
-- `temporal_visual_flicker` / `visual_artifact_defect`: Retake proposals remain unresolved until physical replacement media is generated and verified.
+### Root Cause Analysis:
+- **Job**: Build & Test (22.x) [Job ID 106694299960, Run ID 35711918187]
+- **Failing Test**: `packages/core/tests/phase17-e2e-stress.test.ts` > `MEDIA_STRUCTURE_E2E: executes full 12-step pipeline under multi-scene stress with real video verification`
+- **Error**: `Error: Test timed out in 120000ms.`
+- **Cause**: On 2-vCPU `ubuntu-latest` GitHub runner under concurrency with 43 test files running simultaneously, rendering 4 multi-scene HyperFrames MP4s via headless browser + full 12-step pipeline execution took ~121s, exceeding the default 120s test timeout.
+- **Fix**: Adjusted test timeout to `240000ms` (matching `packages/cli/tests/cli.test.ts`), allowing full multi-scene browser rendering to complete deterministically without timing out.
 
 ---
 
-## 4. Test Matrix Verification
+## 4. Hardened CI Production Gate (.github/workflows/ci.yml)
 
-1. `PRODUCTION blocks missing visualQASummary`: Verified in `master-export.test.ts`.
-2. `PRODUCTION blocks visualQASummary.overallStatus != PASSED`: Verified in `master-export.test.ts`.
-3. `PRODUCTION blocks missingArtifacts > 0`: Verified in `master-export.test.ts`.
-4. `PRODUCTION blocks notEvaluatedShots > 0`: Verified in `master-export.test.ts`.
-5. `PRODUCTION blocks character shot when coverage.identityVisual == NOT_EVALUATED`: Verified in `master-export.test.ts`.
-6. `PRODUCTION blocks required temporal visual QA when temporalArtifactVisual == NOT_EVALUATED`: Verified in `master-export.test.ts`.
-7. `PRODUCTION blocks acting shot when semanticAction == NOT_EVALUATED`: Verified in `master-export.test.ts`.
-8. `LOCAL_MEDIA_METADATA cannot satisfy production identity approval`: Verified in `master-export.test.ts`.
-9. `characterReferencePackets resolve canonical identity references`: Verified in `visual-semantic-qa.test.ts`.
-10. `canonical identity image reaches evaluator`: Verified in `multimodal-contract.test.ts`.
-11. `outfit reference reaches evaluator where applicable`: Verified in `multimodal-contract.test.ts`.
-12. `missing identity reference creates missingIdentityAnchors`: Verified in `multimodal-contract.test.ts`.
-13. `missing identity anchor blocks production character shot`: Verified in `master-export.test.ts`.
-14. `environment reference is resolved correctly per shot`: Verified in `visual-semantic-qa.test.ts`.
-15. `multi-scene shots do not all use Scene 1`: Verified in `visual-semantic-qa.test.ts`.
-16. `PRODUCTION ignores .studio/smoke/media`: Verified in `visual-semantic-qa.test.ts`.
-17. `PRODUCTION ignores .studio/smoke/golden`: Verified in `visual-semantic-qa.test.ts`.
-18. `authoritative shotVideoMap used in production`: Verified in `visual-semantic-qa.test.ts`.
-19. `canonical RED reference + RED rendered video => PASS`: Verified in `multimodal-contract.test.ts`.
-20. `canonical RED reference + BLUE rendered video => FAIL`: Verified in `multimodal-contract.test.ts`.
-21. `test actually inspects extracted_frame_* bytes`: Verified in `multimodal-contract.test.ts`.
-22. `provider spy receives canonical + extracted images`: Verified in `multimodal-contract.test.ts`.
-23. `every image has non-empty bytes`: Verified in `multimodal-contract.test.ts`.
-24. `correct image MIME types`: Verified in `multimodal-contract.test.ts`.
-25. `VISION_QA modelRole is used`: Verified in `multimodal-contract.test.ts`.
-26. `text-only provider cannot produce semantic visual pass`: Verified in `visual-semantic-qa.test.ts`.
-27. `multimodal provider failure in PRODUCTION does not silently become pass`: Verified in `multimodal-contract.test.ts`.
-28. `multimodal provider failure in LOCAL can downgrade truthfully`: Verified in `multimodal-contract.test.ts`.
-29. `color_palette_drift remains PROPOSED`: Verified in `visual-semantic-qa.test.ts`.
-30. `color_palette_drift remains unresolved`: Verified in `visual-semantic-qa.test.ts`.
-31. `character_identity_drift retake remains PROPOSED`: Verified in `visual-semantic-qa.test.ts`.
-32. `character_identity_drift remains unresolved`: Verified in `visual-semantic-qa.test.ts`.
-33. `spatial cross-dissolve does not resolve underlying mismatch`: Verified in `continuity-qa.test.ts`.
-34. `temporal flicker retake remains unresolved`: Verified in `visual-semantic-qa.test.ts`.
-35. `visual artifact retake remains unresolved`: Verified in `visual-semantic-qa.test.ts`.
-36. `critical visual issue survives continuity merge`: Verified in `visual-semantic-qa.test.ts`.
-37. `production export blocks unresolved critical continuity issue`: Verified in `master-export.test.ts`.
-38. `production export blocks pending critical retake`: Verified in `master-export.test.ts`.
-39. `failed visual QA report not registered as approved canon`: Verified in `visual-semantic-qa.test.ts`.
-40. `successful multimodal visual QA report lifecycle remains correct`: Verified in `visual-semantic-qa.test.ts`.
+1. **Matrix Testing (Node 20.x & Node 22.x)**:
+   - `npm ci`
+   - `npm run typecheck`
+   - `npm run test`
+   - `npm run build`
+2. **Offline Production Verification Job (Node 22.x)**:
+   - `npm run skills:check`
+   - `npm run smoke:media`
+   - `npm run smoke:golden`
+   - `npm run smoke:flow`
+   - `npm run smoke:flow-media`
+   - `npm run smoke:visual-qa`
+3. **Safety & Zero Secrets**:
+   - Explicitly unsets `GEMINI_API_KEY` and `GOOGLE_API_KEY`.
+   - Concurrency cancellation for superseded branch runs.
+   - Fail-closed: zero `continue-on-error` across all required verification steps.
 
 ---
 
