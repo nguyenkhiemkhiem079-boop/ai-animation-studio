@@ -14,7 +14,7 @@ Phase 17.1 and 17.2 close all remaining production reality and CI verification g
 | **LOCAL VERIFIED** | **PASS** | All local unit, integration, and e2e test suites execute and pass locally without cloud credentials (`npm run test`, `npm run typecheck`, `npm run build`, `npm run skills:check`, and all offline smoke suites). |
 | **MULTIMODAL CONTRACT VERIFIED** | **PASS** | Controlled visual tests (`multimodal-contract.test.ts`) verify that canonical RED reference + RED rendered frames yields PASS, while canonical RED reference + BLUE rendered frames yields FAIL with `character_identity_drift`. Provider spy verifies transmission of canonical reference image parts alongside extracted keyframes using non-empty base64 bytes, valid MIME types, and `VISION_QA` role. Non-canon and candidate references are never transmitted to vision. |
 | **LIVE PROVIDER VERIFIED** | **NOT INDEPENDENTLY VERIFIED** | No durable artifact/log checked into git repository (live smoke run locally observed free-tier quota exhaustion / rate-limiting `RESOURCE_EXHAUSTED`). Historical live test was observed in console during development on baseline `476a854` (gemini-3.5-flash, 1118 input tokens, 73 output tokens, 1349 total tokens). |
-| **GITHUB CI** | **PENDING VERIFICATION** | Upgraded CI workflow with Node 20.x + Node 22.x matrix and offline production verification job; verified by monitoring active GitHub Actions run. |
+| **GITHUB CI** | **VERIFIED** | GitHub Actions Run ID `35713786220` on commit `ec52bbfb65df1fe9409826213fd1fdbc3ffc19f9` passed all jobs and steps: `Build & Test (20.x)` SUCCESS, `Build & Test (22.x)` SUCCESS, and `Offline Production Verification & Smokes (Node 22.x)` SUCCESS. |
 
 ---
 
