@@ -101,6 +101,8 @@ export const VisualSemanticQAReportSchema = z.object({
     'MULTIMODAL_GEMINI',
     'LOCAL_MEDIA_METADATA',
     'DETERMINISTIC_LOCAL',
+    'OFFLINE_TEST_DOUBLE',
+    'MOCK',
     'NOT_EVALUATED',
   ]),
   metadata: z.record(z.unknown()).optional(),

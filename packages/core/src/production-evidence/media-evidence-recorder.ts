@@ -12,7 +12,7 @@ export interface RecordMediaOptions {
   assetId: string;
   filePath: string;
   provenance: string;
-  generationSource: 'HYPERFRAMES' | 'FLOW_ASSISTED' | 'LIVE_PROVIDER' | 'IMPORTED';
+  generationSource: 'HYPERFRAMES' | 'FLOW_ASSISTED' | 'LIVE_PROVIDER' | 'IMPORTED' | 'SIMULATED_FLOW';
   executionMode?: 'MOCK' | 'LOCAL' | 'PRODUCTION';
   requireVideo?: boolean;
 }

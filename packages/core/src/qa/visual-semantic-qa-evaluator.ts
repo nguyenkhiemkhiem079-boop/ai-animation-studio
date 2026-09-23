@@ -299,6 +299,72 @@ export class VisualSemanticQAEvaluator {
       }
     }
 
+    const providerTrust = (this.llm?.metadata as any)?.providerTrust ?? (
+      this.llm?.metadata?.id === 'gemini-2.5-flash' || this.llm?.metadata?.id === 'gemini-1.5-flash'
+        ? 'LIVE_EXTERNAL'
+        : this.llm?.metadata?.id === 'offline-deterministic-double'
+          ? 'OFFLINE_TEST_DOUBLE'
+          : this.llm?.metadata?.isLocal
+            ? 'MOCK'
+            : 'LIVE_EXTERNAL'
+    );
+
+    if (executionMode === 'PRODUCTION' && providerTrust === 'MOCK') {
+      return {
+        reportId: `vis_qa_${shot.id}_${Date.now()}`,
+        projectId,
+        sceneId,
+        shotId: shot.id,
+        assetId,
+        videoUri: videoPath,
+        identityConsistencyScore: null,
+        spatialPerspectiveScore: 0.0,
+        visualDefectScore: 0.0,
+        overallVisualContinuityScore: 0.0,
+        passed: false,
+        status: 'FAIL',
+        coverage: {
+          artifactIntegrity: 'VERIFIED',
+          spatialFormat: 'NOT_EVALUATED',
+          identityVisual: 'NOT_EVALUATED',
+          temporalArtifactVisual: 'NOT_EVALUATED',
+          semanticAction: 'NOT_EVALUATED',
+        },
+        missingIdentityAnchors: missingIdentityAnchors.length > 0 ? missingIdentityAnchors : undefined,
+        defects: [
+          {
+            defectId: `def_mock_${Date.now()}`,
+            frameIndex: 0,
+            timestampSeconds: 0,
+            region: 'global',
+            issueType: 'visual_artifact_defect',
+            severity: 'critical',
+            confidence: 1.0,
+            description: `Provider trust level "${providerTrust}" is not eligible for production semantic verification.`,
+            suggestedFix: 'Configure an authorized live multimodal vision provider with LIVE_EXTERNAL or LOCAL_REAL trust.',
+          },
+        ],
+        retakeRecommendations: [
+          {
+            recommendationId: `rec_mock_${Date.now()}`,
+            shotId: shot.id,
+            strategy: 'surgical_retake',
+            priority: 'high',
+            rationale: 'Mock or untrusted provider used in PRODUCTION execution mode.',
+          },
+        ],
+        evaluatedFramesCount: frames.length,
+        evaluatedAt: new Date().toISOString(),
+        evaluationMechanism: 'MOCK',
+        metadata: {
+          providerFailure: true,
+          providerFailureReason: 'UNTRUSTED_OR_MOCK_PROVIDER_IN_PRODUCTION',
+          providerTrust,
+          isSynthetic: true,
+        },
+      };
+    }
+
     // Text-only provider or missing multimodal provider safety in PRODUCTION mode
     // Requirement: supportsMultimodalStructuredOutput === true is required explicitly.
     // PRODUCTION behavior: true -> allowed, false -> fail closed, undefined -> fail closed.
@@ -479,13 +545,18 @@ export class VisualSemanticQAEvaluator {
             : 'PASS'
           : 'FAIL';
 
+        const isProductionMode = executionMode === 'PRODUCTION';
+        const isOfflineDouble = providerTrust === 'OFFLINE_TEST_DOUBLE';
+
         const coverage: VisualEvaluationCoverage = {
           artifactIntegrity: 'VERIFIED',
           spatialFormat: 'VERIFIED',
-          identityVisual: identityVisualCoverage,
-          temporalArtifactVisual: 'VERIFIED',
-          semanticAction: 'VERIFIED',
+          identityVisual: (isProductionMode && isOfflineDouble) ? 'NOT_EVALUATED' : identityVisualCoverage,
+          temporalArtifactVisual: (isProductionMode && isOfflineDouble) ? 'NOT_EVALUATED' : 'VERIFIED',
+          semanticAction: (isProductionMode && isOfflineDouble) ? 'NOT_EVALUATED' : 'VERIFIED',
         };
+
+        const evaluationMechanism = isOfflineDouble ? 'OFFLINE_TEST_DOUBLE' : 'MULTIMODAL_PROVIDER';
 
         const modelUsed =
           (this.llm as any)?.getLastModelUsed?.() ??
@@ -512,10 +583,12 @@ export class VisualSemanticQAEvaluator {
           retakeRecommendations: output.retakeRecommendations,
           evaluatedFramesCount: frames.length,
           evaluatedAt: new Date().toISOString(),
-          evaluationMechanism: 'MULTIMODAL_PROVIDER',
+          evaluationMechanism,
           metadata: {
             modelUsed,
             latencyMs: result.usage?.latencyMs,
+            providerTrust,
+            isSynthetic: isOfflineDouble || providerTrust === 'MOCK',
           },
         };
       } catch (err: any) {
@@ -727,6 +800,10 @@ export class VisualSemanticQAEvaluator {
       evaluatedFramesCount: frames.length,
       evaluatedAt: new Date().toISOString(),
       evaluationMechanism: 'LOCAL_MEDIA_METADATA',
+      metadata: {
+        isSynthetic: true,
+        providerTrust: 'LOCAL_REAL',
+      },
     };
   }
 }

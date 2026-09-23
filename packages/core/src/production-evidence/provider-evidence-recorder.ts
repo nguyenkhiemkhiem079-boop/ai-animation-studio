@@ -3,6 +3,7 @@ import {
   ProviderExecutionEvidence,
   ProviderExecutionEvidenceSchema,
   ProviderErrorCategory,
+  ProviderTrustLevel,
 } from '../domain/production-run.js';
 
 export interface ProviderExecutionInput {
@@ -12,6 +13,7 @@ export interface ProviderExecutionInput {
   providerName: string;
   providerRole: string;
   actualModel: string;
+  providerTrust?: ProviderTrustLevel;
   requestStartedAt: string;
   requestCompletedAt: string;
   latencyMs: number;
@@ -38,10 +40,10 @@ export class ProviderEvidenceRecorder {
     let text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 
     // Redact API Keys, Bearer tokens, passwords, cookies
-    text = text.replace(/AIza[0-9A-Za-z-_]{35}/g, 'AIza...[REDACTED_API_KEY]');
-    text = text.replace(/(api[_-]?key|secret|token|password|auth|authorization)["']?\s*[:=]\s*["']?([^"',\s\\]+)/gi, '$1: "[REDACTED]"');
-    text = text.replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED_TOKEN]');
-    text = text.replace(/Cookie:\s*[^;\r\n]+/gi, 'Cookie: [REDACTED_COOKIE]');
+    text = text.replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_API_KEY]');
+    text = text.replace(/sk-[0-9A-Za-z-_]{32,}/g, '[REDACTED_API_KEY]');
+    text = text.replace(/bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED_TOKEN]');
+    text = text.replace(/"(key|apiKey|password|secret|token)":\s*"[^"]+"/gi, '"$1": "[REDACTED]"');
 
     return text;
   }
@@ -86,6 +88,7 @@ export class ProviderEvidenceRecorder {
       providerName: input.providerName,
       providerRole: input.providerRole,
       actualModel: input.actualModel,
+      providerTrust: input.providerTrust ?? 'UNKNOWN',
       requestStartedAt: input.requestStartedAt,
       requestCompletedAt: input.requestCompletedAt,
       latencyMs: input.latencyMs,

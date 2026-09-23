@@ -93,3 +93,7 @@ jobs:
 
       - name: Smoke - Visual Semantic QA Reality
         run: npm run smoke:visual-qa
+
+      - name: Smoke - Phase 18 Offline Production Rehearsal
+        run: npm run smoke:production
+

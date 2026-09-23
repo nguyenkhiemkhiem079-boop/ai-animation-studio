@@ -121,12 +121,15 @@ export interface LLMStructuredResult<T = unknown> {
   wasCached?: boolean;
 }
 
+import { ProviderTrustLevel } from '../domain/production-run.js';
+
 export interface LLMProviderMetadata extends ProviderMetadata {
   supportedRoles: LLMModelRole[];
   modelMapping: Record<LLMModelRole, string>;
   supportedTasks: LLMTaskType[];
   supportsImages?: boolean;
   supportsMultimodalStructuredOutput?: boolean;
+  providerTrust?: ProviderTrustLevel;
 }
 
 export interface LLMHealthReport extends ProviderHealthReport {

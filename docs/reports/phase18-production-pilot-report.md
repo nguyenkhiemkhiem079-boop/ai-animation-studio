@@ -1,78 +1,75 @@
-# Phase 18 — Real Production Pilot & Live Provider Evidence Report
+# Phase 18 — Production Evidence Truth & Hardening Report
 
 ## 1. Executive Summary
 
-Phase 18 transitions AI Animation Studio from offline static contract validation to a resumable real-production execution system producing independently auditable evidence for actual provider requests, physical media files, automated QA scoring, human approval boundaries, and final master delivery.
+Phase 18 and Phase 18.1 establish strict **Production Truth Hardening** across the AI Animation Studio pipeline. Under Phase 18.1 standards:
+**NO SYNTHETIC EVIDENCE MAY SATISFY PRODUCTION ACCEPTANCE.**
+
+Deterministic doubles, mock providers, simulated Flow downloads, and automated smoke approvals may satisfy local regression and offline production rehearsals (`OFFLINE_REHEARSAL_VERIFIED`), but they are permanently blocked from producing `MASTER_PRODUCTION_VERIFIED` for a genuine production acceptance run.
 
 ---
 
-## 2. Six-Level Verification Status Table
+## 2. Truthful Production Verification Matrix
 
-| Verification Level | Status | Details |
+| Verification Category | Status | Truthful Evidence & Justification |
 | :--- | :--- | :--- |
-| **IMPLEMENTED** | **PASS** | 15-state `ProductionRun` domain model, durable evidence store, 13-point `ProductionMasterVerifier`, `ProductionLeakDetector`, `DeterministicOfflineLLMDouble`, CLI commands, Studio UI monitor. |
-| **LOCAL_VERIFIED** | **PASS** | Full offline regression gate: 45 test files (388 tests) passing; `smoke:media`, `smoke:golden`, `smoke:flow`, `smoke:flow-media`, `smoke:visual-qa` all passing. |
-| **CI_VERIFIED** | **PASS** | Typecheck and build passing with 0 warnings/errors. Offline CI gate verifies entire pipeline using deterministic provider doubles at the network boundary without consuming live quota. |
-| **LIVE_PROVIDER_VERIFIED** | **NOT VERIFIED — QUOTA_EXCEEDED** | Live Gemini 3.5 Flash request reached Google AI Studio endpoint and truthfully returned HTTP 429 `RESOURCE_EXHAUSTED` (free tier rate/quota limit reached). Truthful error evidence recorded. System correctly transitioned to `WAITING_FOR_PROVIDER` while preserving completed work. |
-| **REAL_MEDIA_VERIFIED** | **PASS** | Real MP4 video files rendered via headless HyperFrames Chrome bridge and imported via FFmpeg; verified by FFprobe (1920x1080 @ 24fps, H.264/AAC), non-zero bytes, cryptographic SHA-256 checksums recorded. |
-| **MASTER_PRODUCTION_VERIFIED** | **MASTER_PRODUCTION_VERIFIED** | Canonical story pilot executed from script to final deliverable; all 3 shots verified and approved into Canon; timeline assembled; continuity QA evaluated; playable master video verified on disk against all 13 production checks. |
+| **IMPLEMENTED** | **PASS** | 15-state `ProductionRun` state machine, durable evidence store, hardened 14-point `ProductionMasterVerifier`, `ProductionLeakDetector`, explicit `ProviderTrustLevel`, `ApprovalType`, and `SIMULATED_FLOW` tagging. |
+| **LOCAL VERIFIED** | **PASS** | Full local regression gate: 45+ test files passing; local media toolchains, golden video renderers, Flow bridges, and frame extractors verified locally. |
+| **CI VERIFIED** | **PASS** | Clean compilation (0 type errors, 0 lint/schema violations), hermetic builds across Node 20.x & 22.x, and automated offline production rehearsal gate in GitHub Actions. |
+| **OFFLINE PRODUCTION REHEARSAL** | **PASS (`OFFLINE_REHEARSAL_VERIFIED`)** | Safe offline execution running the canonical pilot story end-to-end with `DeterministicOfflineLLMDouble`, simulated Flow media, and automated test approvals. Proves state transitions, resume capability, physical MP4 rendering, SHA-256 checksums, timeline assembly, and multi-track audio mixing. |
+| **LIVE PROVIDER VERIFIED** | **NOT VERIFIED / QUOTA EXCEEDED** | Live Gemini 2.5/1.5 Flash requests reached Google AI Studio endpoint and truthfully returned HTTP 429 `RESOURCE_EXHAUSTED` (free-tier quota exhaustion). Truthful error evidence recorded. Does NOT fabricate success or fallback to mock data under `PRODUCTION` mode. |
+| **REAL FLOW MEDIA VERIFIED** | **NOT VERIFIED (SIMULATED_FLOW)** | Current pilot runs utilize deterministic FFmpeg-generated test videos tagged explicitly as `generationSource: SIMULATED_FLOW`. Real Google Flow provider output requires user download with genuine external provenance. |
+| **HUMAN APPROVAL VERIFIED** | **NOT VERIFIED (AUTOMATED_TEST)** | Approvals in smoke suites use `approvalType: AUTOMATED_TEST`. Genuine `MASTER_PRODUCTION_VERIFIED` strictly requires `approvalType: HUMAN` by an interactive director/reviewer. |
+| **MASTER PRODUCTION VERIFIED** | **NOT VERIFIED** | Correctly blocked and marked `NOT VERIFIED` until all genuine production-truth criteria (live multimodal vision QA, real external Flow media, and human director approval) are simultaneously satisfied. |
 
 ---
 
-## 3. Canonical Production Pilot Evidence
+## 3. Canonical Offline Rehearsal Evidence
 
 - **Story**: `"Minh bước vào căn phòng tối. Cậu nhìn thấy một con bướm trắng bay quanh ngọn nến."`
-- **Run ID**: `run_pilot_smoke_1790133835480`
+- **Rehearsal Mode**: `OFFLINE_REHEARSAL` (`allowRehearsal: true`)
+- **Run ID**: `run_pilot_smoke_*`
 - **Project ID**: `proj_pilot_smoke`
 - **Series ID**: `series_pilot_smoke`
 
-### Shot Pipeline & Routing:
+### Shot Pipeline & Truthful Provenance:
 1. **Shot 1 (`SHOT_SCENE_01_SH01`)**:
-   - Route: Deterministic HyperFrames
-   - Physical File: `.studio/production/proj_pilot_smoke/run_pilot_smoke_1790133835480/renders/SHOT_SCENE_01_SH01.mp4`
-   - Visual QA: Evaluated & Passed (Identity: 95%, Spatial: 95%, Defect: 95%, Overall: 95%)
-   - Approval: Approved into Canon (`CANON_SHOT_SCENE_01_SH01`) by Lead Director
+   - Route: Deterministic HyperFrames (`HYPERFRAMES`)
+   - Physical File: Headless Chrome rendered 1920x1080 @ 24fps MP4
+   - Approval: `AUTOMATED_TEST` (Smoke Harness Sign-off)
+   - Visual QA Mechanism: `OFFLINE_TEST_DOUBLE` (Synthetic Semantic Coverage: `NOT_EVALUATED`)
+
 2. **Shot 2 (`SHOT_SCENE_01_SH02`)**:
    - Route: Google Flow Assisted Handoff (`NEEDS_USER_ACTION`)
-   - Download Simulated: `.studio/production/proj_pilot_smoke/run_pilot_smoke_1790133835480/flow_downloads/SHOT_SCENE_01_SH02_flow_generated.mp4`
-   - Physical Verification: 1280x720 H.264 MP4, SHA-256 computed
-   - Visual QA: Evaluated & Passed
-   - Approval: Approved into Canon (`CANON_SHOT_SCENE_01_SH02`)
+   - Generation Source: `SIMULATED_FLOW` (FFmpeg blue test video, explicitly tagged)
+   - Approval: `AUTOMATED_TEST` (Smoke Harness Sign-off)
+   - Visual QA Mechanism: `OFFLINE_TEST_DOUBLE`
+
 3. **Shot 3 (`SHOT_SCENE_01_SH03`)**:
    - Route: Google Flow Assisted Handoff (`NEEDS_USER_ACTION`)
-   - Download Simulated: `.studio/production/proj_pilot_smoke/run_pilot_smoke_1790133835480/flow_downloads/SHOT_SCENE_01_SH03_flow_generated.mp4`
-   - Physical Verification: 1280x720 H.264 MP4, SHA-256 computed
-   - Visual QA: Evaluated & Passed
-   - Approval: Approved into Canon (`CANON_SHOT_SCENE_01_SH03`)
+   - Generation Source: `SIMULATED_FLOW` (FFmpeg blue test video, explicitly tagged)
+   - Approval: `AUTOMATED_TEST` (Smoke Harness Sign-off)
+   - Visual QA Mechanism: `OFFLINE_TEST_DOUBLE`
 
-### Final Master Deliverable Verification:
-- **Master Video File**: `.studio/production/proj_pilot_smoke/run_pilot_smoke_1790133835480/master/master.mp4`
-- **Size**: `35,543` bytes
-- **SHA-256 Checksum**: `283115d7a59fcb4ae4bbc1c20a56ce25f79c4f5957c3aad44674f89d384019b0`
-- **Resolution**: `1920x1080`
-- **Codec**: `h264` (video), `aac` (audio)
-- **Gate Result**: `MASTER_PRODUCTION_VERIFIED`
-
-### Durable Evidence Artifacts Verified:
-- `production-run.json`: EXISTS & VALIDATED ✅
-- `media-evidence.json`: EXISTS & VALIDATED ✅
-- `qa-evidence.json`: EXISTS & VALIDATED ✅
-- `approval-evidence.json`: EXISTS & VALIDATED ✅
-- `master-evidence.json`: EXISTS & VALIDATED ✅
+### Final Rehearsal Deliverable Verification:
+- **Master Video File**: `.studio/production/proj_pilot_smoke/run_pilot_smoke_*/master/master.mp4`
+- **Physical Verification**: Valid H.264 video stream, AAC stereo audio, non-zero bytes
+- **Gate Result**: `OFFLINE_REHEARSAL_VERIFIED` (Truthfully reflects rehearsal status)
+- **Production Truth Gate**: Correctly withheld `MASTER_PRODUCTION_VERIFIED` due to synthetic double, simulated media, and automated approval.
 
 ---
 
 ## 4. Live Provider Execution & Quota Handling
 
-When executing live provider verification via `npm run smoke:production-live`:
+When executing live provider verification via `npm run smoke:production-live` (opt-in with `RUN_LIVE_PROVIDER_TESTS=true`):
 - **Provider**: Google Gemini (Google AI Studio)
-- **Role**: `STRUCTURED`
+- **Role**: `STRUCTURED` / `VISION_QA`
 - **Endpoint**: `generativelanguage.googleapis.com`
 - **Result**: `RESOURCE_EXHAUSTED` (HTTP 429)
-- **Classification**: `QUOTA_EXCEEDED` / `RATE_LIMITED`
+- **Classification**: `QUOTA_EXCEEDED`
 - **Studio Behavior**:
   - Did NOT generate mock results
-  - Did NOT treat quota exhaustion as code failure
+  - Did NOT treat HTTP 429 as live verification success
   - Safely transitioned run to `WAITING_FOR_PROVIDER`
   - Persisted completed work and sanitized failure evidence
   - Provided exact resume command: `studio production resume <runId>`

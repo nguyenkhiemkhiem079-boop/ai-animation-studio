@@ -44,6 +44,7 @@ export class MockLLMProvider implements LLMProvider {
         'CONTINUITY_QA',
         'GENERAL_REASONING',
       ],
+      providerTrust: 'MOCK',
     };
   }
 

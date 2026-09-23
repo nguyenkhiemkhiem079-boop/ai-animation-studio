@@ -8,6 +8,7 @@ import {
 } from '../domain/production-run.js';
 import { ProductionSafetyError } from '../domain/execution-mode.js';
 import { ProductionLeakDetector } from './production-leak-detector.js';
+import { ShotContract } from '../domain/director.js';
 
 export interface MasterVerificationInput {
   run: ProductionRun;
@@ -16,11 +17,19 @@ export interface MasterVerificationInput {
   manifestId: string;
   sequenceId: string;
   continuityReport?: any;
+  timelineSequence?: any;
+  shotVideoMap?: Record<string, string>;
+  shots?: ShotContract[];
+  allowRehearsal?: boolean;
 }
 
 export interface MasterVerificationResult {
   passed: boolean;
-  status: 'MASTER_PRODUCTION_VERIFIED' | 'FAILED_VERIFICATION';
+  status:
+    | 'MASTER_PRODUCTION_VERIFIED'
+    | 'OFFLINE_REHEARSAL_VERIFIED'
+    | 'LOCAL_PRODUCTION_PIPELINE_VERIFIED'
+    | 'FAILED_VERIFICATION';
   evidence?: MasterProductionEvidence;
   checksSummary: Record<string, boolean>;
   reasons: string[];
@@ -28,8 +37,9 @@ export interface MasterVerificationResult {
 
 export class ProductionMasterVerifier {
   /**
-   * Performs an exhaustive 13-point production verification audit.
-   * If any check fails, returns FAILED_VERIFICATION and reasons without fabricating pass.
+   * Performs an exhaustive production verification audit.
+   * In PRODUCTION mode, synthetic, offline, test doubles, mock providers, and automated approvals
+   * MUST NEVER produce MASTER_PRODUCTION_VERIFIED.
    */
   public static verify(input: MasterVerificationInput): MasterVerificationResult {
     const {
@@ -39,116 +49,260 @@ export class ProductionMasterVerifier {
       manifestId,
       sequenceId,
       continuityReport,
+      timelineSequence,
+      shotVideoMap,
+      shots,
+      allowRehearsal = false,
     } = input;
 
     const reasons: string[] = [];
     const checksSummary: Record<string, boolean> = {
-      everyShotHasAuthoritativeMedia: true,
-      everyMediaFilePhysicallyExists: true,
-      everyMediaPassesArtifactVerifier: true,
-      mediaCryptographicChecksumValid: true,
-      zeroTestOrSmokeLeakage: true,
-      visualSemanticCoverageEvaluated: true,
-      noUnresolvedCriticalVisualDefects: true,
-      noPendingRetakes: true,
-      allCandidatesApprovedIntoCanon: true,
-      timelineUsesApprovedCanonMedia: true,
-      continuityQAMeetsProductionCriteria: true,
-      finalMasterFilePhysicallyExistsAndNonZero: true,
-      finalMasterFFprobeValidStream: true,
+      everyShotHasAuthoritativeMedia: false,
+      everyMediaFilePhysicallyExists: false,
+      everyMediaPassesArtifactVerifier: false,
+      mediaCryptographicChecksumValid: false,
+      zeroTestOrSmokeLeakage: false,
+      allCandidatesApprovedIntoCanon: false,
+      humanApprovalVerified: false,
+      noSimulatedMediaInProduction: false,
+      timelineUsesApprovedCanonMedia: false,
+      qaPassedAndDefectFree: false,
+      visualSemanticCoverageEvaluated: false,
+      continuityQAMeetsProductionCriteria: false,
+      finalMasterFilePhysicallyExistsAndNonZero: false,
+      finalMasterFFprobeValidStream: false,
     };
 
-    // 1. Every required shot has authoritative media in run.mediaEvidence
+    if (requiredShotIds.length === 0) {
+      reasons.push('No required shots provided for production verification.');
+      return {
+        passed: false,
+        status: 'FAILED_VERIFICATION',
+        checksSummary,
+        reasons,
+      };
+    }
+
+    let allShotsHaveMedia = true;
+    let allMediaFilesExist = true;
+    let allMediaPassArtifact = true;
+    let allChecksumsValid = true;
+    let zeroLeakage = true;
+    let allApprovedIntoCanon = true;
+    let allHumanApproved = true;
+    let noSimulatedFlow = true;
+    let allQaPassedAndDefectFree = true;
+    let allSemanticCoverageVerified = true;
+    let allTimelineMediaValid = true;
+
     for (const shotId of requiredShotIds) {
       const media = run.mediaEvidence[shotId];
       if (!media) {
-        checksSummary.everyShotHasAuthoritativeMedia = false;
+        allShotsHaveMedia = false;
+        allMediaFilesExist = false;
+        allMediaPassArtifact = false;
+        allChecksumsValid = false;
         reasons.push(`Shot "${shotId}" is missing authoritative media evidence in ProductionRun.`);
         continue;
       }
 
-      // 2. Physical file exists
+      // Check 2: Physical existence
       if (!fs.existsSync(media.physicalPath)) {
-        checksSummary.everyMediaFilePhysicallyExists = false;
+        allMediaFilesExist = false;
+        allMediaPassArtifact = false;
+        allChecksumsValid = false;
         reasons.push(`Authoritative media for shot "${shotId}" not found on disk at "${media.physicalPath}".`);
         continue;
       }
-
-      // 3. ArtifactVerifier checks
-      const verif = ArtifactVerifier.verify(media.physicalPath, { requireVideoStream: true });
-      if (!verif.exists || !verif.nonEmpty || !verif.hasVideoStream) {
-        checksSummary.everyMediaPassesArtifactVerifier = false;
-        reasons.push(`Authoritative media for shot "${shotId}" failed ArtifactVerifier: ${verif.error || 'Invalid media'}.`);
+      const fileStat = fs.statSync(media.physicalPath);
+      if (fileStat.size === 0) {
+        allMediaFilesExist = false;
+        reasons.push(`Authoritative media for shot "${shotId}" at "${media.physicalPath}" is empty (0 bytes).`);
       }
 
-      // 4. Cryptographic SHA-256 match
+      // Check 3: ArtifactVerifier
+      const verif = ArtifactVerifier.verify(media.physicalPath, { requireVideoStream: true });
+      if (!verif.exists || !verif.nonEmpty || !verif.hasVideoStream) {
+        allMediaPassArtifact = false;
+        reasons.push(`Authoritative media for shot "${shotId}" failed ArtifactVerifier: ${verif.error || 'Invalid video stream'}.`);
+      }
+
+      // Check 4: Cryptographic SHA-256 match
       if (verif.checksumSha256 !== media.sha256) {
-        checksSummary.mediaCryptographicChecksumValid = false;
+        allChecksumsValid = false;
         reasons.push(
           `Checksum mismatch for shot "${shotId}": recorded ${media.sha256}, disk computed ${verif.checksumSha256}.`
         );
       }
 
-      // 5. Leakage check
+      // Check 5: Leakage check
       if (run.mode === 'PRODUCTION') {
         if (ProductionLeakDetector.isTestOrSmokeArtifact(media.physicalPath)) {
-          checksSummary.zeroTestOrSmokeLeakage = false;
+          zeroLeakage = false;
           reasons.push(
             `Authoritative media for shot "${shotId}" at "${media.physicalPath}" leaks from a test/smoke/fixture directory in PRODUCTION mode.`
           );
         }
       }
 
-      // 6. Visual Semantic QA evaluated
+      // Check 6 & 7: Approval checks
+      const approval = run.approvalEvidence[shotId];
+      if (!approval || approval.status !== 'APPROVED') {
+        allApprovedIntoCanon = false;
+        reasons.push(`Shot "${shotId}" candidate asset has not been approved into Canon.`);
+      }
+      if (!approval || approval.approvalType !== 'HUMAN') {
+        allHumanApproved = false;
+        reasons.push(
+          `Shot "${shotId}" approval type is "${approval?.approvalType || 'NONE'}", but genuine production master requires HUMAN approval.`
+        );
+      }
+
+      // Check 8: No simulated Flow media in genuine production
+      if (media.generationSource === 'SIMULATED_FLOW') {
+        noSimulatedFlow = false;
+        reasons.push(
+          `Shot "${shotId}" uses simulated Flow media (SIMULATED_FLOW) which cannot satisfy real production truth.`
+        );
+      }
+
+      // Check 9: Timeline uses approved canonical media
+      let boundTimelinePath: string | undefined;
+      if (shotVideoMap) {
+        boundTimelinePath = shotVideoMap[`clip_v1_${shotId}`] || shotVideoMap[shotId];
+      } else if (timelineSequence) {
+        for (const track of timelineSequence.tracks || []) {
+          for (const clip of track.clips || []) {
+            if (
+              clip.metadata?.shotId === shotId ||
+              clip.clipId === `clip_v1_${shotId}` ||
+              clip.clipId === shotId
+            ) {
+              boundTimelinePath = clip.sourceVideoUri || clip.videoUri || clip.mediaPath;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!boundTimelinePath) {
+        allTimelineMediaValid = false;
+        reasons.push(`Timeline does not contain a verified media binding for shot "${shotId}".`);
+      } else if (!fs.existsSync(boundTimelinePath)) {
+        allTimelineMediaValid = false;
+        reasons.push(`Timeline media for shot "${shotId}" does not exist at "${boundTimelinePath}".`);
+      } else {
+        const timelineArtifact = ArtifactVerifier.verify(boundTimelinePath, { requireVideoStream: true });
+        if (!timelineArtifact.exists || !timelineArtifact.nonEmpty || !timelineArtifact.hasVideoStream) {
+          allTimelineMediaValid = false;
+          reasons.push(`Timeline media for shot "${shotId}" at "${boundTimelinePath}" is not a valid video artifact.`);
+        } else if (timelineArtifact.checksumSha256 !== media.sha256) {
+          allTimelineMediaValid = false;
+          reasons.push(
+            `Timeline media for shot "${shotId}" checksum mismatch: timeline file has ${timelineArtifact.checksumSha256}, expected approved canonical ${media.sha256}.`
+          );
+        }
+      }
+
+      // Check 10 & 11: QA evaluation and semantic coverage
       const qa = run.qaEvidence[shotId];
       if (!qa) {
-        checksSummary.visualSemanticCoverageEvaluated = false;
+        allQaPassedAndDefectFree = false;
+        allSemanticCoverageVerified = false;
         reasons.push(`Visual QA evidence missing for shot "${shotId}".`);
       } else {
+        // QA structural pass
+        if (!qa.passed) {
+          allQaPassedAndDefectFree = false;
+          reasons.push(`Visual QA for shot "${shotId}" has passed=false.`);
+        }
+        if (qa.overallStatus === 'FAIL' || qa.overallStatus === 'NOT_EVALUATED' || qa.overallStatus === 'MISSING_ARTIFACT') {
+          allQaPassedAndDefectFree = false;
+          reasons.push(`Visual QA for shot "${shotId}" has overallStatus="${qa.overallStatus}".`);
+        }
         if (qa.criticalDefects > 0) {
-          checksSummary.noUnresolvedCriticalVisualDefects = false;
+          allQaPassedAndDefectFree = false;
           reasons.push(`Shot "${shotId}" has ${qa.criticalDefects} unresolved critical visual defect(s).`);
         }
         if (qa.retakesRecommended > 0) {
-          checksSummary.noPendingRetakes = false;
+          allQaPassedAndDefectFree = false;
           reasons.push(`Shot "${shotId}" has ${qa.retakesRecommended} pending retake recommendation(s).`);
         }
-      }
 
-      // 7. Human approval
-      const approval = run.approvalEvidence[shotId];
-      if (!approval || approval.status !== 'APPROVED') {
-        checksSummary.allCandidatesApprovedIntoCanon = false;
-        reasons.push(`Shot "${shotId}" candidate asset has not been approved by a human into Canon.`);
+        // Production semantic coverage eligibility
+        const isSyntheticQa =
+          qa.isSynthetic === true ||
+          qa.mechanism === 'LOCAL_MEDIA_METADATA' ||
+          qa.mechanism === 'OFFLINE_TEST_DOUBLE' ||
+          qa.mechanism === 'MOCK';
+        const isEligibleProvider = qa.providerTrust === 'LIVE_EXTERNAL' || qa.providerTrust === 'LOCAL_REAL';
+
+        if (isSyntheticQa || !isEligibleProvider) {
+          allSemanticCoverageVerified = false;
+          reasons.push(
+            `QA evidence for shot "${shotId}" used mechanism "${qa.mechanism}" with trust "${qa.providerTrust || 'UNKNOWN'}", which cannot establish production semantic truth.`
+          );
+        }
+
+        // Semantic coverage by shot characteristics
+        const shotContract = shots?.find((s) => s.id === shotId);
+        const hasCharacters = Boolean(shotContract?.acting && shotContract.acting.length > 0);
+        const hasMotion = Boolean(shotContract ? (shotContract.frame?.durationSeconds ?? 0) > 0 : true);
+        const hasAction = Boolean(shotContract?.acting && shotContract.acting.length > 0) || shotContract?.purpose === 'action';
+
+        const coverage = (qa.coverage as any) || {};
+        if (hasCharacters && coverage.identityVisual !== 'VERIFIED') {
+          allSemanticCoverageVerified = false;
+          reasons.push(
+            `Shot "${shotId}" has characters present, but visual identity coverage is "${coverage.identityVisual || 'NOT_EVALUATED'}".`
+          );
+        }
+        if (hasMotion && coverage.temporalArtifactVisual !== 'VERIFIED') {
+          allSemanticCoverageVerified = false;
+          reasons.push(
+            `Shot "${shotId}" has rendered motion, but temporal artifact coverage is "${coverage.temporalArtifactVisual || 'NOT_EVALUATED'}".`
+          );
+        }
+        if (hasAction && coverage.semanticAction !== 'VERIFIED') {
+          allSemanticCoverageVerified = false;
+          reasons.push(
+            `Shot "${shotId}" has action/acting, but semantic action coverage is "${coverage.semanticAction || 'NOT_EVALUATED'}".`
+          );
+        }
       }
     }
 
-    // 8. Continuity QA check
-    if (continuityReport) {
-      if (continuityReport.overallPassed === false) {
-        checksSummary.continuityQAMeetsProductionCriteria = false;
-        reasons.push(`Continuity QA overall status failed.`);
+    checksSummary.everyShotHasAuthoritativeMedia = allShotsHaveMedia;
+    checksSummary.everyMediaFilePhysicallyExists = allMediaFilesExist;
+    checksSummary.everyMediaPassesArtifactVerifier = allMediaPassArtifact;
+    checksSummary.mediaCryptographicChecksumValid = allChecksumsValid;
+    checksSummary.zeroTestOrSmokeLeakage = zeroLeakage;
+    checksSummary.allCandidatesApprovedIntoCanon = allApprovedIntoCanon;
+    checksSummary.humanApprovalVerified = allHumanApproved;
+    checksSummary.noSimulatedMediaInProduction = noSimulatedFlow;
+    checksSummary.timelineUsesApprovedCanonMedia = allTimelineMediaValid;
+    checksSummary.qaPassedAndDefectFree = allQaPassedAndDefectFree;
+    checksSummary.visualSemanticCoverageEvaluated = allSemanticCoverageVerified;
+
+    // Check 12: Continuity QA
+    if (!continuityReport) {
+      checksSummary.continuityQAMeetsProductionCriteria = false;
+      reasons.push('Continuity QA report is missing. Continuity verification is required for production.');
+    } else {
+      let contPassed = true;
+      if (continuityReport.overallPassed !== true) {
+        contPassed = false;
+        reasons.push('Continuity QA overall status failed.');
       }
       const criticals = continuityReport.issues?.filter((i: any) => i.severity === 'critical') ?? [];
       if (criticals.length > 0) {
-        checksSummary.continuityQAMeetsProductionCriteria = false;
+        contPassed = false;
         reasons.push(`Continuity QA has ${criticals.length} unresolved critical defect(s).`);
       }
+      checksSummary.continuityQAMeetsProductionCriteria = contPassed;
     }
 
-    // 9. Final master file existence and non-zero size
-    if (!fs.existsSync(masterVideoPath)) {
-      checksSummary.finalMasterFilePhysicallyExistsAndNonZero = false;
-      reasons.push(`Final master video file does not exist at "${masterVideoPath}".`);
-    } else {
-      const stats = fs.statSync(masterVideoPath);
-      if (stats.size === 0) {
-        checksSummary.finalMasterFilePhysicallyExistsAndNonZero = false;
-        reasons.push(`Final master video file at "${masterVideoPath}" is empty (0 bytes).`);
-      }
-    }
-
-    // 10. FFprobe analysis of master
+    // Check 13: Final master file existence and non-zero size
     let masterSha256 = '';
     let masterDuration = 1.0;
     let masterWidth = 1920;
@@ -158,59 +312,127 @@ export class ProductionMasterVerifier {
     let masterFps: number | null = null;
     let masterSizeBytes = 0;
 
-    if (checksSummary.finalMasterFilePhysicallyExistsAndNonZero) {
-      const masterVerif = ArtifactVerifier.verify(masterVideoPath, { requireVideoStream: true });
-      if (!masterVerif.hasVideoStream || !masterVerif.checksumSha256) {
-        checksSummary.finalMasterFFprobeValidStream = false;
-        reasons.push(`Final master video file at "${masterVideoPath}" does not contain a valid playable video stream.`);
-      } else {
-        masterSha256 = masterVerif.checksumSha256;
-        masterDuration = masterVerif.durationSeconds && masterVerif.durationSeconds > 0 ? masterVerif.durationSeconds : 1.0;
-        masterWidth = masterVerif.width || 1920;
-        masterHeight = masterVerif.height || 1080;
-        masterVideoCodec = masterVerif.videoCodec || 'h264';
-        masterAudioCodec = masterVerif.audioCodec ?? null;
-        masterFps = masterVerif.fps ?? null;
-        masterSizeBytes = masterVerif.sizeBytes ?? 0;
-      }
-    } else {
+    if (!fs.existsSync(masterVideoPath)) {
+      checksSummary.finalMasterFilePhysicallyExistsAndNonZero = false;
       checksSummary.finalMasterFFprobeValidStream = false;
+      reasons.push(`Final master video file does not exist at "${masterVideoPath}".`);
+    } else {
+      const stats = fs.statSync(masterVideoPath);
+      if (stats.size === 0) {
+        checksSummary.finalMasterFilePhysicallyExistsAndNonZero = false;
+        checksSummary.finalMasterFFprobeValidStream = false;
+        reasons.push(`Final master video file at "${masterVideoPath}" is empty (0 bytes).`);
+      } else {
+        checksSummary.finalMasterFilePhysicallyExistsAndNonZero = true;
+
+        // Check 14: FFprobe analysis of master
+        const masterVerif = ArtifactVerifier.verify(masterVideoPath, { requireVideoStream: true });
+        if (!masterVerif.hasVideoStream || !masterVerif.checksumSha256) {
+          checksSummary.finalMasterFFprobeValidStream = false;
+          reasons.push(
+            `Final master video file at "${masterVideoPath}" does not contain a valid playable video stream.`
+          );
+        } else {
+          checksSummary.finalMasterFFprobeValidStream = true;
+          masterSha256 = masterVerif.checksumSha256;
+          masterDuration =
+            masterVerif.durationSeconds && masterVerif.durationSeconds > 0
+              ? masterVerif.durationSeconds
+              : 1.0;
+          masterWidth = masterVerif.width || 1920;
+          masterHeight = masterVerif.height || 1080;
+          masterVideoCodec = masterVerif.videoCodec || 'h264';
+          masterAudioCodec = masterVerif.audioCodec ?? null;
+          masterFps = masterVerif.fps ?? null;
+          masterSizeBytes = masterVerif.sizeBytes ?? 0;
+        }
+      }
     }
 
-    const allPassed = Object.values(checksSummary).every(Boolean) && reasons.length === 0;
+    const structuralPassed =
+      checksSummary.everyShotHasAuthoritativeMedia &&
+      checksSummary.everyMediaFilePhysicallyExists &&
+      checksSummary.everyMediaPassesArtifactVerifier &&
+      checksSummary.mediaCryptographicChecksumValid &&
+      checksSummary.allCandidatesApprovedIntoCanon &&
+      checksSummary.timelineUsesApprovedCanonMedia &&
+      checksSummary.qaPassedAndDefectFree &&
+      checksSummary.finalMasterFilePhysicallyExistsAndNonZero &&
+      checksSummary.finalMasterFFprobeValidStream;
 
-    if (!allPassed) {
+    const productionTruthPassed =
+      structuralPassed &&
+      checksSummary.zeroTestOrSmokeLeakage &&
+      checksSummary.humanApprovalVerified &&
+      checksSummary.noSimulatedMediaInProduction &&
+      checksSummary.visualSemanticCoverageEvaluated &&
+      checksSummary.continuityQAMeetsProductionCriteria;
+
+    if (productionTruthPassed) {
+      const evidence: MasterProductionEvidence = {
+        manifestId,
+        sequenceId,
+        masterVideoPath: path.resolve(masterVideoPath),
+        masterSha256,
+        sizeBytes: masterSizeBytes,
+        durationSeconds: masterDuration,
+        width: masterWidth,
+        height: masterHeight,
+        videoCodec: masterVideoCodec,
+        audioCodec: masterAudioCodec,
+        fps: masterFps,
+        verifiedAt: new Date().toISOString(),
+        verificationStatus: 'MASTER_PRODUCTION_VERIFIED',
+        checksSummary,
+      };
+
       return {
-        passed: false,
-        status: 'FAILED_VERIFICATION',
+        passed: true,
+        status: 'MASTER_PRODUCTION_VERIFIED',
+        evidence: MasterProductionEvidenceSchema.parse(evidence),
+        checksSummary,
+        reasons: [],
+      };
+    }
+
+    if (structuralPassed && allowRehearsal) {
+      const rehearsalStatus =
+        run.mode === 'LOCAL'
+          ? 'LOCAL_PRODUCTION_PIPELINE_VERIFIED'
+          : 'OFFLINE_REHEARSAL_VERIFIED';
+
+      const evidence: MasterProductionEvidence = {
+        manifestId,
+        sequenceId,
+        masterVideoPath: path.resolve(masterVideoPath),
+        masterSha256,
+        sizeBytes: masterSizeBytes,
+        durationSeconds: masterDuration,
+        width: masterWidth,
+        height: masterHeight,
+        videoCodec: masterVideoCodec,
+        audioCodec: masterAudioCodec,
+        fps: masterFps,
+        verifiedAt: new Date().toISOString(),
+        verificationStatus: rehearsalStatus,
+        failureReason: reasons.join('; '),
+        checksSummary,
+      };
+
+      return {
+        passed: true,
+        status: rehearsalStatus,
+        evidence: MasterProductionEvidenceSchema.parse(evidence),
         checksSummary,
         reasons,
       };
     }
 
-    const evidence: MasterProductionEvidence = {
-      manifestId,
-      sequenceId,
-      masterVideoPath: path.resolve(masterVideoPath),
-      masterSha256,
-      sizeBytes: masterSizeBytes,
-      durationSeconds: masterDuration,
-      width: masterWidth,
-      height: masterHeight,
-      videoCodec: masterVideoCodec,
-      audioCodec: masterAudioCodec,
-      fps: masterFps,
-      verifiedAt: new Date().toISOString(),
-      verificationStatus: 'MASTER_PRODUCTION_VERIFIED',
-      checksSummary,
-    };
-
     return {
-      passed: true,
-      status: 'MASTER_PRODUCTION_VERIFIED',
-      evidence: MasterProductionEvidenceSchema.parse(evidence),
+      passed: false,
+      status: 'FAILED_VERIFICATION',
       checksSummary,
-      reasons: [],
+      reasons,
     };
   }
 

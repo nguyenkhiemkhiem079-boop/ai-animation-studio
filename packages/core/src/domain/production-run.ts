@@ -94,6 +94,28 @@ export const ProviderErrorCategorySchema = z.enum([
 export type ProviderErrorCategory = z.infer<typeof ProviderErrorCategorySchema>;
 
 /**
+ * Trust Classification for Provider Provenance
+ */
+export const ProviderTrustLevelSchema = z.enum([
+  'LIVE_EXTERNAL',
+  'LOCAL_REAL',
+  'OFFLINE_TEST_DOUBLE',
+  'MOCK',
+  'UNKNOWN',
+]);
+export type ProviderTrustLevel = z.infer<typeof ProviderTrustLevelSchema>;
+
+/**
+ * Approval Classification
+ */
+export const ApprovalTypeSchema = z.enum([
+  'HUMAN',
+  'AUTOMATED_TEST',
+  'SYSTEM',
+]);
+export type ApprovalType = z.infer<typeof ApprovalTypeSchema>;
+
+/**
  * Sanitized Provider Execution Evidence
  */
 export const ProviderExecutionEvidenceSchema = z.object({
@@ -104,6 +126,7 @@ export const ProviderExecutionEvidenceSchema = z.object({
   providerName: z.string().min(1),
   providerRole: z.string().min(1),
   actualModel: z.string().min(1),
+  providerTrust: ProviderTrustLevelSchema.default('UNKNOWN'),
   requestStartedAt: z.string().datetime(),
   requestCompletedAt: z.string().datetime(),
   latencyMs: z.number().nonnegative(),
@@ -144,7 +167,7 @@ export const ProductionMediaEvidenceSchema = z.object({
   fps: z.number().positive().nullable().default(null),
   verificationTimestamp: z.string().datetime(),
   provenance: z.string().min(1),
-  generationSource: z.enum(['HYPERFRAMES', 'FLOW_ASSISTED', 'LIVE_PROVIDER', 'IMPORTED']),
+  generationSource: z.enum(['HYPERFRAMES', 'FLOW_ASSISTED', 'LIVE_PROVIDER', 'IMPORTED', 'SIMULATED_FLOW']),
   approvalStatus: z.enum(['PENDING', 'APPROVED', 'REJECTED']).default('PENDING'),
   rejectionReason: z.string().optional(),
 });
@@ -159,6 +182,8 @@ export const ProductionQAEvidenceSchema = z.object({
   overallStatus: z.enum(['PASS', 'WARN', 'FAIL', 'NOT_EVALUATED', 'MISSING_ARTIFACT']),
   passed: z.boolean(),
   mechanism: z.string(),
+  providerTrust: ProviderTrustLevelSchema.optional(),
+  isSynthetic: z.boolean().default(false),
   scores: z.object({
     identity: z.number().min(0).max(1).nullable(),
     spatial: z.number().min(0).max(1).nullable(),
@@ -174,13 +199,18 @@ export const ProductionQAEvidenceSchema = z.object({
 export type ProductionQAEvidence = z.infer<typeof ProductionQAEvidenceSchema>;
 
 /**
- * Human Approval Evidence
+ * Human / Automated Approval Evidence
  */
 export const ProductionApprovalEvidenceSchema = z.object({
   shotId: z.string().min(1),
   candidateAssetId: z.string().min(1),
   canonicalAssetId: z.string().optional(),
   status: z.enum(['APPROVED', 'REJECTED']),
+  approvalType: ApprovalTypeSchema.default('HUMAN'),
+  actorId: z.string().optional(),
+  actorDisplayName: z.string().optional(),
+  approvalSource: z.string().optional(),
+  interactive: z.boolean().default(false),
   decidedBy: z.string().min(1),
   decidedAt: z.string().datetime(),
   notes: z.string().optional(),
@@ -203,7 +233,12 @@ export const MasterProductionEvidenceSchema = z.object({
   audioCodec: z.string().nullable().default(null),
   fps: z.number().positive().nullable().default(null),
   verifiedAt: z.string().datetime(),
-  verificationStatus: z.enum(['MASTER_PRODUCTION_VERIFIED', 'FAILED_VERIFICATION']),
+  verificationStatus: z.enum([
+    'MASTER_PRODUCTION_VERIFIED',
+    'OFFLINE_REHEARSAL_VERIFIED',
+    'LOCAL_PRODUCTION_PIPELINE_VERIFIED',
+    'FAILED_VERIFICATION',
+  ]),
   failureReason: z.string().optional(),
   checksSummary: z.record(z.boolean()).default({}),
 });

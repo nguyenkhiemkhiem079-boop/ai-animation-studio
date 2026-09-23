@@ -98,7 +98,13 @@ export class ProductionOrchestrator {
   /**
    * Executes or resumes a production run through the full lifecycle.
    */
-  public async execute(projectId: string, runId: string): Promise<ProductionRun> {
+  public async execute(
+    projectId: string,
+    runId: string,
+    options?: {
+      allowRehearsal?: boolean;
+    }
+  ): Promise<ProductionRun> {
     const existing = await this.repository.findById(projectId, runId);
     if (!existing) {
       throw new Error(`Production run "${runId}" not found for project "${projectId}".`);
@@ -303,12 +309,26 @@ export class ProductionOrchestrator {
           executionMode: sm.mode,
         });
 
+        const providerTrust =
+          (report.metadata as any)?.providerTrust ??
+          (this.llm?.metadata as any)?.providerTrust ??
+          'UNKNOWN';
+        const isSynthetic =
+          Boolean((report.metadata as any)?.isSynthetic) ||
+          report.evaluationMechanism === 'OFFLINE_TEST_DOUBLE' ||
+          report.evaluationMechanism === 'LOCAL_MEDIA_METADATA' ||
+          report.evaluationMechanism === 'MOCK' ||
+          providerTrust === 'OFFLINE_TEST_DOUBLE' ||
+          providerTrust === 'MOCK';
+
         sm.recordQAEvidence({
           shotId,
           reportId: report.reportId,
           overallStatus: report.status,
           passed: report.passed,
           mechanism: report.evaluationMechanism,
+          providerTrust,
+          isSynthetic,
           scores: {
             identity: report.identityConsistencyScore,
             spatial: report.spatialPerspectiveScore,
@@ -429,6 +449,10 @@ export class ProductionOrchestrator {
       manifestId: renderResult.manifest.manifestId,
       sequenceId: sequence.sequenceId,
       continuityReport,
+      shotVideoMap,
+      timelineSequence: sequence,
+      shots: plannedShots,
+      allowRehearsal: sm.mode !== 'PRODUCTION' || Boolean(options?.allowRehearsal),
     });
 
     sm.recordMasterEvidence(masterEvidence);
@@ -454,7 +478,11 @@ export class ProductionOrchestrator {
     projectId: string,
     runId: string,
     shotId: string,
-    videoPath: string
+    videoPath: string,
+    options?: {
+      generationSource?: 'HYPERFRAMES' | 'FLOW_ASSISTED' | 'LIVE_PROVIDER' | 'IMPORTED' | 'SIMULATED_FLOW';
+      provenance?: string;
+    }
   ): Promise<ProductionRun> {
     const run = await this.repository.findById(projectId, runId);
     if (!run) throw new Error(`Production run "${runId}" not found.`);
@@ -467,8 +495,8 @@ export class ProductionOrchestrator {
       shotId,
       assetId: `ASSET_IMPORT_${shotId}_${Date.now()}`,
       filePath: videoPath,
-      provenance: `External Media Import: ${path.basename(videoPath)}`,
-      generationSource: 'IMPORTED',
+      provenance: options?.provenance ?? `External Media Import: ${path.basename(videoPath)}`,
+      generationSource: options?.generationSource ?? 'IMPORTED',
       executionMode: sm.mode,
     });
 
@@ -515,12 +543,26 @@ export class ProductionOrchestrator {
       executionMode: sm.mode,
     });
 
+    const providerTrust =
+      (report.metadata as any)?.providerTrust ??
+      (this.llm?.metadata as any)?.providerTrust ??
+      'UNKNOWN';
+    const isSynthetic =
+      Boolean((report.metadata as any)?.isSynthetic) ||
+      report.evaluationMechanism === 'OFFLINE_TEST_DOUBLE' ||
+      report.evaluationMechanism === 'LOCAL_MEDIA_METADATA' ||
+      report.evaluationMechanism === 'MOCK' ||
+      providerTrust === 'OFFLINE_TEST_DOUBLE' ||
+      providerTrust === 'MOCK';
+
     sm.recordQAEvidence({
       shotId,
       reportId: report.reportId,
       overallStatus: report.status,
       passed: report.passed,
       mechanism: report.evaluationMechanism,
+      providerTrust,
+      isSynthetic,
       scores: {
         identity: report.identityConsistencyScore,
         spatial: report.spatialPerspectiveScore,
@@ -556,7 +598,14 @@ export class ProductionOrchestrator {
     runId: string,
     shotId: string,
     decidedBy: string = 'Director / Human Reviewer',
-    notes?: string
+    notes?: string,
+    options?: {
+      approvalType?: 'HUMAN' | 'AUTOMATED_TEST' | 'SYSTEM';
+      actorId?: string;
+      actorDisplayName?: string;
+      approvalSource?: string;
+      interactive?: boolean;
+    }
   ): Promise<ProductionRun> {
     const run = await this.repository.findById(projectId, runId);
     if (!run) throw new Error(`Production run "${runId}" not found.`);
@@ -579,6 +628,11 @@ export class ProductionOrchestrator {
       candidateAssetId: media.assetId,
       canonicalAssetId: `CANON_${shotId}`,
       status: 'APPROVED',
+      approvalType: options?.approvalType ?? 'HUMAN',
+      actorId: options?.actorId,
+      actorDisplayName: options?.actorDisplayName,
+      approvalSource: options?.approvalSource,
+      interactive: options?.interactive ?? false,
       decidedBy,
       decidedAt: new Date().toISOString(),
       notes,
@@ -623,6 +677,8 @@ export class ProductionOrchestrator {
       shotId,
       candidateAssetId: media.assetId,
       status: 'REJECTED',
+      approvalType: 'HUMAN',
+      interactive: false,
       decidedBy,
       decidedAt: new Date().toISOString(),
       notes: reason,

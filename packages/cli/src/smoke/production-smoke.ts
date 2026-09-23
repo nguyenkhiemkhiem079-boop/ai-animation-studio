@@ -41,7 +41,7 @@ export async function runProductionSmoke(): Promise<number> {
 
   // 2. Initial execution
   console.log('\n2️⃣ Executing ProductionRun Initial Pipeline (Preflight -> Story -> Planning -> Shot 1)...');
-  const executedRun = await orchestrator.execute(projectId, run.runId);
+  const executedRun = await orchestrator.execute(projectId, run.runId, { allowRehearsal: true });
   console.log(` - Current Stage : ${executedRun.currentStage}`);
   console.log(` - Status        : ${executedRun.status} ✅`);
   console.log(` - Target Shot   : ${executedRun.currentShotId || 'N/A'}`);
@@ -55,7 +55,15 @@ export async function runProductionSmoke(): Promise<number> {
       projectId,
       run.runId,
       shot1Id,
-      'Lead Director (Smoke Automated Sign-off)'
+      'Lead Director (Smoke Automated Sign-off)',
+      undefined,
+      {
+        approvalType: 'AUTOMATED_TEST',
+        actorId: 'smoke-runner',
+        actorDisplayName: 'Automated Smoke Harness',
+        approvalSource: 'production-smoke.ts',
+        interactive: false,
+      }
     );
     console.log(` - Status after Approval: ${approvedRun.status} ✅`);
     console.log(` - Canon Asset ID: ${approvedRun.approvalEvidence[shot1Id]?.canonicalAssetId}`);
@@ -63,7 +71,7 @@ export async function runProductionSmoke(): Promise<number> {
 
   // 4. Continue execution through all subsequent shots
   console.log('\n4️⃣ Resuming Pipeline for Subsequent Shot(s)...');
-  let currentRun = await orchestrator.execute(projectId, run.runId);
+  let currentRun = await orchestrator.execute(projectId, run.runId, { allowRehearsal: true });
 
   while (currentRun.status === 'NEEDS_USER_ACTION' && currentRun.currentShotId) {
     const shotId = currentRun.currentShotId;
@@ -85,28 +93,50 @@ export async function runProductionSmoke(): Promise<number> {
     }
 
     console.log(` - Simulated Flow Download Path: ${flowDownloadPath}`);
-    console.log(' - Importing media via orchestrator.importShotMedia...');
-    const importedRun = await orchestrator.importShotMedia(projectId, run.runId, shotId, flowDownloadPath);
+    console.log(' - Importing media via orchestrator.importShotMedia with SIMULATED_FLOW provenance...');
+    const importedRun = await orchestrator.importShotMedia(
+      projectId,
+      run.runId,
+      shotId,
+      flowDownloadPath,
+      {
+        generationSource: 'SIMULATED_FLOW',
+        provenance: 'Simulated Flow Download (FFmpeg blue test pattern)',
+      }
+    );
     console.log(` - Status after Import & Visual QA: ${importedRun.status} ✅`);
 
-    console.log(`\n6️⃣ Human Approval Boundary for Imported Shot "${shotId}"...`);
+    console.log(`\n6️⃣ Automated Test Approval Boundary for Imported Shot "${shotId}"...`);
     const approvedRun = await orchestrator.approveShot(
       projectId,
       run.runId,
       shotId,
-      'Lead Director (Flow Acceptance Sign-off)'
+      'Lead Director (Flow Acceptance Sign-off)',
+      undefined,
+      {
+        approvalType: 'AUTOMATED_TEST',
+        actorId: 'smoke-runner',
+        actorDisplayName: 'Automated Smoke Harness',
+        approvalSource: 'production-smoke.ts',
+        interactive: false,
+      }
     );
     console.log(` - Status after Approval: ${approvedRun.status} ✅`);
 
     console.log('\n7️⃣ Resuming Pipeline to Next Shot or Final Assembly...');
-    currentRun = await orchestrator.execute(projectId, run.runId);
+    currentRun = await orchestrator.execute(projectId, run.runId, { allowRehearsal: true });
   }
 
   console.log(` - Final Run Status: ${currentRun.status} 🏆`);
 
   if (currentRun.masterEvidence) {
+    if (currentRun.masterEvidence.verificationStatus !== 'OFFLINE_REHEARSAL_VERIFIED') {
+      throw new Error(
+        `Expected verificationStatus OFFLINE_REHEARSAL_VERIFIED for offline smoke rehearsal, but got ${currentRun.masterEvidence.verificationStatus}`
+      );
+    }
     console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('🏆 PHASE 18 REAL PRODUCTION PILOT PASSED! MASTER DELIVERABLE VERIFIED!');
+    console.log('🏆 PHASE 18 OFFLINE PRODUCTION REHEARSAL PASSED!');
     console.log(` - Master MP4 : ${currentRun.masterEvidence.masterVideoPath} (${currentRun.masterEvidence.sizeBytes} bytes)`);
     console.log(` - Checksum   : ${currentRun.masterEvidence.masterSha256}`);
     console.log(` - Resolution : ${currentRun.masterEvidence.width}x${currentRun.masterEvidence.height}`);

@@ -108,6 +108,7 @@ export class GeminiProvider implements LLMProvider {
       ],
       supportsImages: true,
       supportsMultimodalStructuredOutput: true,
+      providerTrust: 'LIVE_EXTERNAL',
     };
   }
 

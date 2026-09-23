@@ -23,6 +23,7 @@ export class DeterministicOfflineLLMDouble implements LLMProvider {
     version: '1.0.0',
     capabilities: ['llm', 'qa'],
     isLocal: true,
+    providerTrust: 'OFFLINE_TEST_DOUBLE',
     costEstimateUsdPerInvocation: 0.0,
     averageLatencyMs: 5,
     supportedRoles: ['FAST', 'REASONING', 'STRUCTURED', 'QA', 'VISION_QA'],
