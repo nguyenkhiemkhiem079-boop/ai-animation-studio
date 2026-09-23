@@ -111,6 +111,7 @@ export class ProductionOrchestrator {
     runId: string,
     options?: {
       allowRehearsal?: boolean;
+      preferFlowAssisted?: boolean;
     }
   ): Promise<ProductionRun> {
     const existing = await this.repository.findById(projectId, runId);
@@ -255,13 +256,17 @@ export class ProductionOrchestrator {
         DirectorQA.evaluateScene(plan.productionScene, plan.dependencyGraph);
         plannedShots.push(...plan.productionScene.shots);
       }
-      if (sm.getRun().pilotMode || sm.getRun().requiredShotCount === 1) {
+      if (sm.getRun().requiredShotCount) {
+        plannedShots = plannedShots.slice(0, sm.getRun().requiredShotCount);
+      } else if (sm.getRun().pilotMode) {
         plannedShots = plannedShots.slice(0, 1);
       }
       await this.storage.writeJson(shotsPath, plannedShots);
     }
 
-    if (sm.getRun().pilotMode || sm.getRun().requiredShotCount === 1) {
+    if (sm.getRun().requiredShotCount) {
+      plannedShots = plannedShots.slice(0, sm.getRun().requiredShotCount);
+    } else if (sm.getRun().pilotMode) {
       plannedShots = plannedShots.slice(0, 1);
     }
 
@@ -275,8 +280,9 @@ export class ProductionOrchestrator {
     const promptCompiler = new PromptCompiler();
     const benchmarkTracker = new ProviderBenchmarkTracker();
     const router = new ProductionRouter(providerRegistry, promptCompiler, benchmarkTracker);
+    const preferFlow = options?.preferFlowAssisted ?? Boolean(sm.getRun().pilotMode);
     const productionPlan = router.planProduction(projectId, sm.seriesId, plannedShots, {
-      preferFlowAssisted: Boolean(sm.getRun().pilotMode),
+      preferFlowAssisted: preferFlow,
     });
 
     // 3. SHOT GENERATION & ASSET VERIFICATION
