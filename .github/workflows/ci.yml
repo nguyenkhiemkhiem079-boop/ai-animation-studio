@@ -27,6 +27,7 @@ jobs:
     env:
       GEMINI_API_KEY: ""
       GOOGLE_API_KEY: ""
+      RUN_LIVE_PROVIDER_TESTS: "false"
 
     steps:
       - name: Checkout repository
@@ -59,6 +60,7 @@ jobs:
     env:
       GEMINI_API_KEY: ""
       GOOGLE_API_KEY: ""
+      RUN_LIVE_PROVIDER_TESTS: "false"
 
     steps:
       - name: Checkout repository
@@ -96,4 +98,10 @@ jobs:
 
       - name: Smoke - Phase 18 Offline Production Rehearsal
         run: npm run smoke:production
+
+      - name: Smoke - Phase 18.2 Production Acceptance Contract
+        run: npm run smoke:acceptance-contract
+
+      - name: Smoke - Phase 19 Canonical Pilot Offline Rehearsal
+        run: npm run smoke:pilot-rehearsal
 

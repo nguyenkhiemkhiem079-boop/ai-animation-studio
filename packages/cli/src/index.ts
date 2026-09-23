@@ -1348,9 +1348,17 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.log(`Series ID      : ${targetSeriesId}`);
         console.log(`Required Shots : 1 (Minimal Genuine Production Pilot)`);
 
+        const isLiveOptIn = args.includes('--live') || process.env.RUN_LIVE_PROVIDER_TESTS === 'true';
+        const gemini = new GeminiProvider({ allowLiveCalls: isLiveOptIn });
+        const liveProvider = (gemini.isConfigured() && isLiveOptIn) ? gemini : undefined;
+        if (!isLiveOptIn) {
+          console.log(`ℹ️ Live Provider: DISABLED (offline story planning & routing).`);
+          console.log(`   To enable live Gemini network calls, pass '--live' or set RUN_LIVE_PROVIDER_TESTS=true.\n`);
+        } else {
+          console.log(`📡 Live Provider: ENABLED (${gemini.metadata.name} - ${gemini.getMaskedApiKey()})\n`);
+        }
         const assetRegistry = new FileSystemAssetRegistry(storage);
-        const gemini = new GeminiProvider();
-        const orchestrator = new ProductionOrchestrator(storage, assetRegistry, gemini.isConfigured() ? gemini : undefined);
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry, liveProvider);
 
         const createdRun = await orchestrator.createRun({
           projectId: targetProjId,
@@ -1418,9 +1426,14 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         }
 
         console.log(`🚀 Executing Production Run "${targetRunId}" (Project: ${runRecord.projectId})...`);
+        const isLiveOptIn = args.includes('--live') || process.env.RUN_LIVE_PROVIDER_TESTS === 'true';
+        const gemini = new GeminiProvider({ allowLiveCalls: isLiveOptIn });
+        const liveProvider = (gemini.isConfigured() && isLiveOptIn) ? gemini : undefined;
+        if (!isLiveOptIn) {
+          console.log(`ℹ️ Live Provider: DISABLED. To enable live Gemini calls, pass '--live' or set RUN_LIVE_PROVIDER_TESTS=true.`);
+        }
         const assetRegistry = new FileSystemAssetRegistry(storage);
-        const gemini = new GeminiProvider();
-        const orchestrator = new ProductionOrchestrator(storage, assetRegistry, gemini.isConfigured() ? gemini : undefined);
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry, liveProvider);
 
         const result = await orchestrator.execute(runRecord.projectId, targetRunId);
 
@@ -1716,8 +1729,11 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.log(` - Source      : ${generationSource}`);
         console.log(` - File Path   : ${videoPath}`);
 
+        const isLiveOptIn = args.includes('--live') || process.env.RUN_LIVE_PROVIDER_TESTS === 'true';
+        const gemini = new GeminiProvider({ allowLiveCalls: isLiveOptIn });
+        const liveProvider = (gemini.isConfigured() && isLiveOptIn) ? gemini : undefined;
         const assetRegistry = new FileSystemAssetRegistry(storage);
-        const orchestrator = new ProductionOrchestrator(storage, assetRegistry);
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry, liveProvider);
         const updated = await orchestrator.importShotMedia(runRecord.projectId, targetRunId, targetShotId, videoPath, {
           generationSource,
           provenance,

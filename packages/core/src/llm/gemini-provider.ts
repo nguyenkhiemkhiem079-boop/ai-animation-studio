@@ -20,6 +20,7 @@ import { convertZodToJsonSchema } from './schema-converter.js';
 import { ProviderTask, ProviderResult } from '../providers/index.js';
 import { ProviderError } from '../errors/index.js';
 import { StudioExecutionMode, ProductionSafetyError } from '../domain/execution-mode.js';
+import { LiveAuthorizationPolicy } from './live-authorization.js';
 
 export interface GeminiProviderConfig {
   apiKey?: string;
@@ -35,6 +36,7 @@ export interface GeminiProviderConfig {
     maxBackoffMs?: number;
   };
   client?: GoogleGenAI; // for dependency injection in unit tests
+  allowLiveCalls?: boolean;
 }
 
 export class GeminiProvider implements LLMProvider {
@@ -44,6 +46,7 @@ export class GeminiProvider implements LLMProvider {
   private modelPolicy: ModelPolicy;
   private cache: LLMCache;
   private executionMode: StudioExecutionMode;
+  private allowLiveCalls: boolean;
   private maxRetries: number;
   private initialBackoffMs: number;
   private maxBackoffMs: number;
@@ -73,6 +76,7 @@ export class GeminiProvider implements LLMProvider {
     this.modelPolicy = config.modelPolicy ?? new ModelPolicy();
     this.cache = config.cache ?? new LLMCache();
     this.executionMode = config.executionMode ?? 'LOCAL';
+    this.allowLiveCalls = config.allowLiveCalls ?? (config.client !== undefined);
     this.maxRetries = config.retryConfig?.maxRetries ?? config.maxRetries ?? 3;
     this.initialBackoffMs = config.retryConfig?.initialBackoffMs ?? config.initialBackoffMs ?? 500;
     this.maxBackoffMs = config.retryConfig?.maxBackoffMs ?? config.maxBackoffMs ?? 4000;
@@ -166,7 +170,21 @@ export class GeminiProvider implements LLMProvider {
       };
     }
 
-    // Live Check with minimal request
+    // Live Check requires explicit operator authorization
+    if (!LiveAuthorizationPolicy.isLiveAuthorized({ explicitLiveFlag: this.allowLiveCalls })) {
+      return {
+        providerId: this.metadata.id,
+        name: this.metadata.name,
+        status: 'AVAILABLE',
+        isLocal: false,
+        configured: true,
+        capabilities: this.metadata.capabilities,
+        details: `Gemini API Client initialized. Live network check skipped (LIVE PROVIDER DISABLED: pass --live or set RUN_LIVE_PROVIDER_TESTS=true). Key: ${this.getMaskedApiKey()}`,
+        message: `Configured offline. Live connection requires explicit opt-in (pass --live or set RUN_LIVE_PROVIDER_TESTS=true).`,
+        selectedModel: this.modelPolicy.getModelForRole('FAST'),
+      };
+    }
+
     const startTime = Date.now();
     try {
       const liveResult = await this.client!.models.generateContent({
@@ -558,6 +576,9 @@ export class GeminiProvider implements LLMProvider {
         this.metadata.id
       );
     }
+    LiveAuthorizationPolicy.assertLiveAuthorized(`Gemini API call for task "${taskType}"`, {
+      explicitLiveFlag: this.allowLiveCalls,
+    });
   }
 
   private extractUsageMetadata(response: any, latencyMs: number, retryCount: number): LLMUsageMetadata {

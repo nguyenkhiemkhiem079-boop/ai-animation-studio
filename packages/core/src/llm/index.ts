@@ -5,6 +5,7 @@ export * from './schema-converter.js';
 export * from './gemini-provider.js';
 export * from './mock-llm-provider.js';
 export * from './prompts/index.js';
+export * from './live-authorization.js';
 
 import { LLMProviderRegistry } from './llm-provider.js';
 import { GeminiProvider } from './gemini-provider.js';
