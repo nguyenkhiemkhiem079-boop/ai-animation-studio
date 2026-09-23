@@ -283,5 +283,42 @@ describe('Phase 18 — Production CLI Commands Test Suite', () => {
     expect(savedRun.approvalEvidence[shotId].approvalType).toBe('AUTOMATED_TEST');
     expect(savedRun.approvalEvidence[shotId].interactive).toBe(false);
   });
+
+  it('Test 11: running production with no arguments prints command overview and exits 0', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const exitCode = await runCli(['production'], { cwd: testCwd, storage });
+    expect(exitCode).toBe(0);
+    expect(logSpy).toHaveBeenCalled();
+    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(output).toContain('pilot-preflight');
+    expect(output).toContain('pilot <storyFile>');
+    logSpy.mockRestore();
+  });
+
+  it('Test 12: running production pilot-preflight evaluates environment without network calls', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const exitCode = await runCli(['production', 'pilot-preflight', storyFile], { cwd: testCwd, storage });
+    expect(exitCode).toBe(0);
+    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(output).toContain('PILOT PREFLIGHT READINESS CHECK');
+    expect(output).toContain('Node.js Runtime');
+    expect(output).toContain('FFmpeg Executable');
+    expect(output).toContain('FFprobe Executable');
+    expect(output).toContain('Storage Write Access');
+    expect(output).toContain('VERDICT:');
+    // Ensure raw unmasked keys are never logged
+    expect(output).not.toMatch(/AIzaSy[A-Za-z0-9_-]{33}/);
+    logSpy.mockRestore();
+  });
+
+  it('Test 13: running production pilot --check triggers preflight mode without starting run', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const exitCode = await runCli(['production', 'pilot', storyFile, '--check'], { cwd: testCwd, storage });
+    expect(exitCode).toBe(0);
+    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(output).toContain('PILOT PREFLIGHT READINESS CHECK');
+    logSpy.mockRestore();
+  });
 });
+
 

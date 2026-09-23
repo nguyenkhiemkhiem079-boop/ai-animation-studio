@@ -1073,12 +1073,143 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
 
     case 'production': {
       const subCommand = args[1];
+
+      if (!subCommand || subCommand === '--help' || subCommand === '-h' || subCommand === 'help') {
+        console.log(`
+🎬 AI Animation Studio — Production Commands:
+
+  pilot-preflight [storyFile]            Check operator readiness (FFmpeg, Node, Gemini, storage) offline
+  pilot <storyFile> [--live] [--check]   Initialize canonical 1-shot production pilot
+  create <storyFile> [--project <id>]    Create a production run from story script
+  run <runId> [--live]                   Execute or resume a production run
+  resume <runId> [--live]                Resume an interrupted production run
+  status <runId>                         Inspect truthful production run status and next action
+  evidence <runId>                       Inspect durable JSON evidence files on disk
+  import <runId> <shotId> <videoPath>    Import external media (--source google-flow --real-external)
+  approve <runId> <shotId> [--human]     Approve candidate into Canon with operator challenge
+  reject <runId> <shotId> --reason <rsn> Reject candidate shot recording operator reason
+  verify <runId>                         Audit run against 13-point Master Production Gate
+  route <projectId> [shotId]             Evaluate production route for shot
+  plan <projectId> [seriesId]            Plan production strategies for all shots
+  budget <projectId> [--set-cap <usd>]   Inspect or configure project budget cap
+`);
+        return 0;
+      }
+
+      if (subCommand === 'pilot-preflight' || subCommand === 'preflight' || (subCommand === 'pilot' && args.includes('--check'))) {
+        const nonFlagArgs = args.slice(2).filter((a) => !a.startsWith('-'));
+        const rawStoryFile = nonFlagArgs[0] || 'pilot-story.txt';
+        const cleanStoryFile = path.resolve(rawStoryFile.replace(/^["']|["']$/g, '').trim());
+
+        console.log(`\n==============================================================`);
+        console.log(`🔍 AI ANIMATION STUDIO — PILOT PREFLIGHT READINESS CHECK`);
+        console.log(`==============================================================\n`);
+
+        let allChecksPassed = true;
+        const blockers: string[] = [];
+
+        // 1. Node.js Runtime
+        const nodeVer = process.version;
+        const majorVer = parseInt(nodeVer.replace('v', '').split('.')[0], 10);
+        if (majorVer >= 20) {
+          console.log(`[PASS] Node.js Runtime        : ${nodeVer} (>= 20.0.0 required) ✅`);
+        } else {
+          console.log(`[FAIL] Node.js Runtime        : ${nodeVer} (Must be >= 20.0.0) ❌`);
+          blockers.push(`Node.js version is ${nodeVer}, must be >= 20.0.0.`);
+          allChecksPassed = false;
+        }
+
+        // 2. Media Toolchain (FFmpeg & FFprobe)
+        const mediaDiag = MediaToolchainDoctor.diagnose();
+        if (mediaDiag.ffmpeg.available) {
+          console.log(`[PASS] FFmpeg Executable       : ${mediaDiag.ffmpeg.version || 'available'} (${mediaDiag.ffmpeg.path}) ✅`);
+        } else {
+          console.log(`[FAIL] FFmpeg Executable       : NOT FOUND ❌`);
+          blockers.push(`FFmpeg not found in PATH or configured paths.`);
+          allChecksPassed = false;
+        }
+
+        if (mediaDiag.ffprobe.available) {
+          console.log(`[PASS] FFprobe Executable      : ${mediaDiag.ffprobe.version || 'available'} (${mediaDiag.ffprobe.path}) ✅`);
+        } else {
+          console.log(`[FAIL] FFprobe Executable      : NOT FOUND ❌`);
+          blockers.push(`FFprobe not found in PATH or configured paths.`);
+          allChecksPassed = false;
+        }
+
+        // 3. Story File
+        if (syncFs.existsSync(cleanStoryFile)) {
+          const stats = syncFs.statSync(cleanStoryFile);
+          console.log(`[PASS] Story Script File      : "${cleanStoryFile}" (${stats.size} bytes) ✅`);
+        } else {
+          console.log(`[WARN] Story Script File      : "${cleanStoryFile}" NOT FOUND ⚠️`);
+          blockers.push(`Story file "${cleanStoryFile}" does not exist.`);
+        }
+
+        // 4. Gemini Configuration (Single Gemini Key Architecture)
+        const isLiveOptIn = args.includes('--live') || process.env.RUN_LIVE_PROVIDER_TESTS === 'true';
+        const gemini = new GeminiProvider({ allowLiveCalls: isLiveOptIn });
+        const hasKey = gemini.isConfigured();
+        if (hasKey) {
+          console.log(`[PASS] Gemini Credential      : PRESENT (${gemini.getMaskedApiKey()}) ✅`);
+        } else {
+          console.log(`[INFO] Gemini Credential      : ABSENT (GEMINI_API_KEY not configured) ℹ️`);
+        }
+
+        // 5. Live Network Call Authorization
+        if (isLiveOptIn) {
+          console.log(`[PASS] Live Authorization     : ENABLED (--live or RUN_LIVE_PROVIDER_TESTS=true) 📡`);
+        } else {
+          console.log(`[INFO] Live Authorization     : DISABLED (Safe offline rehearsal mode) 🛡️`);
+          console.log(`                                To authorize live calls: pass --live or set RUN_LIVE_PROVIDER_TESTS=true`);
+        }
+
+        // 6. Centralized Model Policy
+        const policy = getCentralizedModelPolicy();
+        console.log(`[INFO] Gemini Model Policy    : FAST=${policy.fast}, STRUCTURED=${policy.structured}, QA=${policy.qa}, VISION_QA=${policy.visionQa}`);
+
+        // 7. Storage Write Access
+        try {
+          const testProbePath = path.resolve('.studio', `.preflight_probe_${Date.now()}`);
+          await fs.mkdir(path.dirname(testProbePath), { recursive: true });
+          await fs.writeFile(testProbePath, 'probe', 'utf-8');
+          await fs.unlink(testProbePath);
+          console.log(`[PASS] Storage Write Access   : OK (.studio writable) ✅`);
+        } catch (err: any) {
+          console.log(`[FAIL] Storage Write Access   : FAILED (${err.message}) ❌`);
+          blockers.push(`Cannot write to storage directory: ${err.message}`);
+          allChecksPassed = false;
+        }
+
+        // 8. Verdict
+        console.log(`\n--------------------------------------------------------------`);
+        if (blockers.length === 0) {
+          if (hasKey && isLiveOptIn) {
+            console.log(`VERDICT: READY FOR LIVE HUMAN PILOT 🚀`);
+            console.log(`Next step: run 'studio production pilot "${cleanStoryFile}" --live'`);
+          } else {
+            console.log(`VERDICT: READY FOR OFFLINE REHEARSAL 🎬`);
+            console.log(`To run offline rehearsal : studio production pilot "${cleanStoryFile}"`);
+            console.log(`To run live human pilot  : studio production pilot "${cleanStoryFile}" --live`);
+          }
+        } else {
+          console.log(`VERDICT: ACTION REQUIRED (BLOCKERS DETECTED) ⚠️`);
+          for (const b of blockers) {
+            console.log(` - ${b}`);
+          }
+        }
+        console.log(`==============================================================\n`);
+        return blockers.length === 0 ? 0 : 1;
+      }
+
       const projectId = args[2];
       const targetId = args[3];
 
-      if (!projectId) {
-        console.error('Error: Project ID is required. Usage: studio production <route|plan|budget> <projectId> [targetId]');
-        return 1;
+      if (subCommand === 'route' || subCommand === 'plan' || subCommand === 'budget') {
+        if (!projectId) {
+          console.error(`Error: Project ID is required. Usage: studio production ${subCommand} <projectId> [targetId]`);
+          return 1;
+        }
       }
 
       const providerRegistry = new ProviderRegistry();
@@ -1087,8 +1218,8 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       const budgetController = new BudgetController();
 
       // Read budget if persisted
-      const budgetPath = `.studio/production/${projectId}_budget.json`;
-      if (await storage.exists(budgetPath)) {
+      const budgetPath = projectId ? `.studio/production/${projectId}_budget.json` : '';
+      if (budgetPath && await storage.exists(budgetPath)) {
         const savedBudget = await storage.readJson<any>(budgetPath);
         if (savedBudget.maxBudgetUsd !== undefined) {
           budgetController.setMaxBudget(savedBudget.maxBudgetUsd);
