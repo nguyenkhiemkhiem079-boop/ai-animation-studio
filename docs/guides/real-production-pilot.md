@@ -49,9 +49,10 @@ This ensures exactly **ONE** shot contract (`requiredShotCount = 1`) is planned 
 
 | Step | Action | Boundary | Description |
 | :--- | :--- | :--- | :--- |
+| **0** | Pre-Flight Readiness Check | `[LOCAL]` | Run `studio production pilot-preflight` (checks Node, FFmpeg, storage, keys) |
 | **1** | Configure API Key | `[SYSTEM]` | Set `GEMINI_API_KEY` in environment or `.env` |
-| **2** | Enable Live Execution | `[HUMAN ACTION]` | Set `RUN_LIVE_PROVIDER_TESTS=true` for pilot run |
-| **3** | Initialize 1-Shot Pilot | `[SYSTEM]` + `[LOCAL]` | Run `studio production pilot pilot-story.txt` |
+| **2** | Enable Live Execution | `[HUMAN ACTION]` | Set `RUN_LIVE_PROVIDER_TESTS=true` or pass `--live` |
+| **3** | Initialize 1-Shot Pilot | `[SYSTEM]` + `[LOCAL]` | Run `studio production pilot .\pilot-story.txt --live` |
 | **4** | Inspect Flow Handoff | `[HUMAN ACTION]` | Open `.studio/production/<proj>/<run>/handoff/<shot>/` |
 | **5** | Generate Clip in Flow | `[GOOGLE FLOW]` + `[HUMAN ACTION]` | Paste prompt, upload references, generate in Flow |
 | **6** | Download Media | `[HUMAN ACTION]` | Download rendered MP4 as `SHOT_SCENE_01_SH01_FLOW_REAL.mp4` |
@@ -61,6 +62,32 @@ This ensures exactly **ONE** shot contract (`requiredShotCount = 1`) is planned 
 | **10** | Operator Approval Ceremony | `[HUMAN ACTION]` | Execute `studio production approve <runId> <shotId> --human` and confirm nonce |
 | **11** | Timeline Assembly & Master | `[SYSTEM]` + `[LOCAL]` | Run `studio production resume <runId>` |
 | **12** | Audit Acceptance Bundle | `[HUMAN ACTION]` | Inspect `.studio/production/<proj>/<run>/acceptance/` |
+
+---
+
+### Step 0: Pre-Flight Readiness Check `[LOCAL]`
+
+Before spending time or configuring live credentials, verify workstation readiness completely offline:
+
+**PowerShell (Windows):**
+```powershell
+npm.cmd run studio production pilot-preflight .\pilot-story.txt
+```
+
+**Bash (Linux/macOS):**
+```bash
+npm run studio production pilot-preflight ./pilot-story.txt
+```
+
+This performs **zero** network calls and checks:
+- Node.js runtime version (>= 20.0.0)
+- FFmpeg and FFprobe executable paths and stream probing capabilities
+- Story script presence and non-emptiness
+- Gemini credential status (masked safely: `AIza...1234`, never full key)
+- Live network call authorization policy
+- Centralized model tier mapping
+- Storage write permissions in `.studio/`
+
 
 ---
 
@@ -314,3 +341,63 @@ Output:
 - All state invariants satisfied
 - Zero Gemini quota consumed
 - Zero browser automation
+
+---
+
+## 🛠️ Operator Troubleshooting & Recovery Guide
+
+### 1. Gemini Quota Exceeded (`WAITING_FOR_PROVIDER`)
+- **Symptom**: Step 8 transitions run to `WAITING_FOR_PROVIDER` with message `Gemini API quota exceeded (QUOTA_EXCEEDED)`.
+- **Truth Invariant**: Studio NEVER falls back to mock providers during a production run. All imported media, evidence, and checkpoints remain 100% preserved.
+- **Recovery**: Wait for quota reset window or update `GEMINI_API_KEY`. Once available, resume execution idempotently:
+  ```powershell
+  npm.cmd run studio production resume <runId> --live
+  ```
+
+### 2. Flow File Missing or Corrupted
+- **Symptom**: Import fails with `[MEDIA_INVALID]` or `[MEDIA_NOT_FOUND]`.
+- **Recovery**: Verify the downloaded file is a valid MP4 with a playable video stream using FFprobe:
+  ```powershell
+  npm.cmd run studio doctor
+  ```
+  Ensure the path is properly quoted in PowerShell if it contains spaces:
+  ```powershell
+  npm.cmd run studio production import <runId> SHOT_SCENE_01_SH01 "C:\AI Projects\Pilot Run\clip.mp4" --source google-flow --real-external
+  ```
+
+### 3. Visual QA Defect Detected / Retake Required
+- **Symptom**: Step 8 QA scores indicate defects or recommendations: `[RETAKE_RECOMMENDED]`.
+- **Recovery**: Inspect the visual QA defects report:
+  ```powershell
+  npm.cmd run studio qa visual <projectId> SHOT_SCENE_01_SH01
+  ```
+  Generate a new take in Google Flow adjusting prompt or camera parameters, then re-import with the same command. Studio automatically invalidates previous QA and approval records via `ProductionInvalidationEngine`.
+
+### 4. Approval Challenge Expired (TTL default 15 min)
+- **Symptom**: Operator tries to approve but receives `[APPROVAL_CHALLENGE_EXPIRED]`.
+- **Recovery**: Simply re-run the approve command. Studio automatically generates a fresh random challenge with a new 15-minute TTL:
+  ```powershell
+  npm.cmd run studio production approve <runId> SHOT_SCENE_01_SH01 --human
+  ```
+
+### 5. Process Interruption or Terminal Crash
+- **Symptom**: System was rebooted, terminal was closed, or process was terminated abruptly.
+- **Recovery**: Check current state using the read-only status command:
+  ```powershell
+  npm.cmd run studio production status <runId>
+  ```
+  Studio stores all state durably in `.studio/production/<projectId>/<runId>/`. Simply resume from where you left off:
+  ```powershell
+  npm.cmd run studio production resume <runId>
+  ```
+
+### 6. Windows PowerShell Quoting & Execution Policy
+- If PowerShell blocks scripts (`ExecutionPolicy Restricted`), always invoke using `npm.cmd`:
+  ```powershell
+  npm.cmd run studio ...
+  ```
+- Always wrap paths with double quotes when spaces or special characters exist:
+  ```powershell
+  npm.cmd run studio production import <runId> <shotId> "C:\Users\John Doe\Downloads\video.mp4" --source google-flow --real-external
+  ```
+
