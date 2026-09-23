@@ -549,10 +549,14 @@ describe('Phase 18 — Real Production Pilot & Live Provider Evidence Test Suite
       sequenceId: 'seq_master_01',
       shotVideoMap: { SHOT_CANON_01: realShotVideo },
       continuityReport: { overallPassed: true, issues: [] },
+      // Phase 18.2.1: acceptance bundle is now mandatory for MASTER_PRODUCTION_VERIFIED.
+      // In this test we supply a pre-validated bundle to keep focus on master gate semantics.
+      acceptanceBundle: { valid: true, reasons: [] },
     });
 
     expect(result.passed).toBe(true);
     expect(result.status).toBe('MASTER_PRODUCTION_VERIFIED');
+    expect(result.checksSummary.acceptanceBundleVerified).toBe(true);
     expect(result.evidence?.masterSha256).toHaveLength(64);
     expect(result.evidence?.verificationStatus).toBe('MASTER_PRODUCTION_VERIFIED');
   });

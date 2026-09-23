@@ -801,11 +801,13 @@ describe('Phase 18.2 — Real Production Acceptance Harness Adversarial Test Sui
   });
 
   // 18. Real acceptance bundle validates when all truth requirements pass
-  it('18. proves real acceptance bundle validates when all truth requirements pass', async () => {
+  it('18. proves real acceptance bundle validates when all truth requirements pass (two-phase flow)', async () => {
     const run = createValidBaseRun();
 
-    // 1. ProductionMasterVerifier passes and grants MASTER_PRODUCTION_VERIFIED
-    const masterResult = ProductionMasterVerifier.verify({
+    // ── Phase A: Structural + semantic verification without acceptance bundle
+    // This grants OFFLINE_REHEARSAL_VERIFIED (not MASTER_PRODUCTION_VERIFIED) because
+    // the acceptance bundle does not yet exist. allowRehearsal=true is required here.
+    const preliminaryResult = ProductionMasterVerifier.verify({
       run,
       requiredShotIds: ['SHOT_01'],
       masterVideoPath: realMasterVideo,
@@ -814,12 +816,15 @@ describe('Phase 18.2 — Real Production Acceptance Harness Adversarial Test Sui
       shotVideoMap: { SHOT_01: realShotVideo },
       continuityReport: { overallPassed: true, issues: [] },
       shots: [baseShotContract],
+      allowRehearsal: true,
     });
 
-    expect(masterResult.passed).toBe(true);
-    expect(masterResult.status).toBe('MASTER_PRODUCTION_VERIFIED');
+    // Preliminary result is not yet MASTER_PRODUCTION_VERIFIED (bundle is absent)
+    expect(preliminaryResult.passed).toBe(true);
+    expect(preliminaryResult.status).toBe('OFFLINE_REHEARSAL_VERIFIED');
+    expect(preliminaryResult.checksSummary.acceptanceBundleVerified).toBe(false);
 
-    // 2. Build durable acceptance bundle
+    // ── Phase B: Build durable acceptance bundle from preliminary evidence
     const masterEvidence = {
       runId: run.runId,
       projectId: run.projectId,
@@ -832,8 +837,8 @@ describe('Phase 18.2 — Real Production Acceptance Harness Adversarial Test Sui
       fps: 24,
       container: 'mp4',
       videoCodec: 'h264',
-      verificationStatus: masterResult.status,
-      checksSummary: masterResult.checksSummary,
+      verificationStatus: preliminaryResult.status,
+      checksSummary: preliminaryResult.checksSummary,
       verifiedAt: new Date().toISOString(),
     };
 
@@ -850,11 +855,137 @@ describe('Phase 18.2 — Real Production Acceptance Harness Adversarial Test Sui
     expect(bundle.acceptanceDir).toContain('acceptance');
     expect(bundle.manifest.manifestSha256).toBeDefined();
 
-    // 3. Acceptance bundle validation succeeds
+    // ── Phase C: Validate the bundle's self-integrity and file checksums
     const validation = await ProductionAcceptanceBundle.validate(bundle.acceptanceDir, storage);
     expect(validation.valid).toBe(true);
     expect(validation.reasons).toHaveLength(0);
-    expect(validation.metadata?.allChecksPassed).toBe(true);
-    expect(validation.metadata?.verificationStatus).toBe('MASTER_PRODUCTION_VERIFIED');
+    expect(validation.metadata?.allChecksPassed).toBe(false); // preliminary status, not yet MASTER_PRODUCTION_VERIFIED
+
+    // ── Phase D: Final verification WITH the validated acceptance bundle
+    const finalResult = ProductionMasterVerifier.verify({
+      run,
+      requiredShotIds: ['SHOT_01'],
+      masterVideoPath: realMasterVideo,
+      manifestId: 'manifest_01',
+      sequenceId: 'seq_01',
+      shotVideoMap: { SHOT_01: realShotVideo },
+      continuityReport: { overallPassed: true, issues: [] },
+      shots: [baseShotContract],
+      acceptanceBundle: { valid: validation.valid, reasons: validation.reasons },
+    });
+
+    // Only now does the verifier grant MASTER_PRODUCTION_VERIFIED
+    expect(finalResult.passed).toBe(true);
+    expect(finalResult.status).toBe('MASTER_PRODUCTION_VERIFIED');
+    expect(finalResult.checksSummary.acceptanceBundleVerified).toBe(true);
+  });
+
+  // 19. Missing acceptanceBundle fails verifier — cannot default to MASTER_PRODUCTION_VERIFIED
+  it('19. proves missing acceptanceBundle fails verifier (fail-closed, no default pass)', () => {
+    const run = createValidBaseRun();
+
+    const result = ProductionMasterVerifier.verify({
+      run,
+      requiredShotIds: ['SHOT_01'],
+      masterVideoPath: realMasterVideo,
+      manifestId: 'manifest_01',
+      sequenceId: 'seq_01',
+      shotVideoMap: { SHOT_01: realShotVideo },
+      continuityReport: { overallPassed: true, issues: [] },
+      shots: [baseShotContract],
+      // acceptanceBundle intentionally omitted
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.status).toBe('FAILED_VERIFICATION');
+    expect(result.checksSummary.acceptanceBundleVerified).toBe(false);
+    expect(result.reasons.some((r) => r.includes('Acceptance bundle is missing'))).toBe(true);
+  });
+
+  // 20. Tampered manifest self-hash fails bundle validation
+  it('20. proves tampered acceptance-manifest.json self-hash fails validation', async () => {
+    const run = createValidBaseRun();
+    const masterEvidence = {
+      runId: run.runId,
+      projectId: run.projectId,
+      masterPath: realMasterVideo,
+      masterSha256,
+      sizeBytes: fs.statSync(realMasterVideo).size,
+      width: 1280,
+      height: 720,
+      durationSeconds: 1.0,
+      fps: 24,
+      container: 'mp4',
+      videoCodec: 'h264',
+      verificationStatus: 'OFFLINE_REHEARSAL_VERIFIED' as const,
+      checksSummary: {},
+      verifiedAt: new Date().toISOString(),
+    };
+
+    const bundle = await ProductionAcceptanceBundle.build({
+      projectId: run.projectId,
+      runId: run.runId,
+      storage,
+      run,
+      masterEvidence,
+      requiredShotIds: ['SHOT_01'],
+      providerModelIds: ['gemini-2.5-pro'],
+    });
+
+    // Tamper with the manifest's recorded SHA (simulate manifest substitution)
+    const manifestPath = `${bundle.acceptanceDir}/acceptance-manifest.json`;
+    const raw = await storage.readJson<any>(manifestPath);
+    raw.manifestSha256 = '0000000000000000000000000000000000000000000000000000000000000000';
+    await storage.writeJson(manifestPath, raw);
+
+    const validation = await ProductionAcceptanceBundle.validate(bundle.acceptanceDir, storage);
+    expect(validation.valid).toBe(false);
+    expect(validation.reasons.some((r) => r.includes('self-integrity check failed'))).toBe(true);
+  });
+
+  // 21. Metadata runId mismatch in production-acceptance.json fails validation
+  it('21. proves metadata runId mismatch in production-acceptance.json fails bundle validation', async () => {
+    const run = createValidBaseRun();
+    const masterEvidence = {
+      runId: run.runId,
+      projectId: run.projectId,
+      masterPath: realMasterVideo,
+      masterSha256,
+      sizeBytes: fs.statSync(realMasterVideo).size,
+      width: 1280,
+      height: 720,
+      durationSeconds: 1.0,
+      fps: 24,
+      container: 'mp4',
+      videoCodec: 'h264',
+      verificationStatus: 'OFFLINE_REHEARSAL_VERIFIED' as const,
+      checksSummary: {},
+      verifiedAt: new Date().toISOString(),
+    };
+
+    const bundle = await ProductionAcceptanceBundle.build({
+      projectId: run.projectId,
+      runId: run.runId,
+      storage,
+      run,
+      masterEvidence,
+      requiredShotIds: ['SHOT_01'],
+      providerModelIds: ['gemini-2.5-pro'],
+    });
+
+    // Tamper: replace production-acceptance.json with a different runId
+    const metaPath = `${bundle.acceptanceDir}/production-acceptance.json`;
+    const rawMeta = await storage.readJson<any>(metaPath);
+    rawMeta.runId = 'run_INJECTED_FOREIGN';
+    await storage.writeJson(metaPath, rawMeta);
+
+    // This tampers the file, which will cause file checksum mismatch AND metadata runId mismatch
+    const validation = await ProductionAcceptanceBundle.validate(bundle.acceptanceDir, storage);
+    expect(validation.valid).toBe(false);
+    // Either checksum mismatch or metadata consistency failure must be reported
+    const hasChecksumOrConsistencyError = validation.reasons.some(
+      (r) => r.includes('Cryptographic checksum mismatch') || r.includes('Metadata consistency failure')
+    );
+    expect(hasChecksumOrConsistencyError).toBe(true);
   });
 });

@@ -373,15 +373,19 @@ export class ProductionMasterVerifier {
       checksSummary.continuityQAMeetsProductionCriteria = contPassed;
     }
 
-    // Check 18: Acceptance bundle validation
-    let acceptanceValid = true;
-    if (input.acceptanceBundle) {
-      if (!input.acceptanceBundle.valid) {
-        acceptanceValid = false;
-        reasons.push(
-          `Acceptance bundle verification failed:\n- ${(input.acceptanceBundle.reasons || []).join('\n- ')}`
-        );
-      }
+    // Check 18: Acceptance bundle validation — FAIL CLOSED if absent or invalid.
+    // A missing acceptance bundle cannot satisfy production acceptance truth.
+    let acceptanceValid = false;
+    if (!input.acceptanceBundle) {
+      reasons.push(
+        'Acceptance bundle is missing. A validated acceptance bundle is required for MASTER_PRODUCTION_VERIFIED.'
+      );
+    } else if (!input.acceptanceBundle.valid) {
+      reasons.push(
+        `Acceptance bundle verification failed:\n- ${(input.acceptanceBundle.reasons || []).join('\n- ')}`
+      );
+    } else {
+      acceptanceValid = true;
     }
     checksSummary.acceptanceBundleVerified = acceptanceValid;
 

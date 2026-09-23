@@ -434,10 +434,14 @@ describe('Phase 18.1 — Production Truth Hardening Adversarial Test Suite', () 
       shotVideoMap: { SHOT_01: realShotVideo },
       continuityReport: { overallPassed: true, issues: [] },
       shots: [baseShotContract],
+      // Phase 18.2.1: acceptance bundle is now mandatory for MASTER_PRODUCTION_VERIFIED.
+      // In this test we supply a pre-validated bundle to keep focus on timeline-binding semantics.
+      acceptanceBundle: { valid: true, reasons: [] },
     });
 
     expect(result.passed).toBe(true);
     expect(result.status).toBe('MASTER_PRODUCTION_VERIFIED');
+    expect(result.checksSummary.acceptanceBundleVerified).toBe(true);
     expect(result.checksSummary.timelineUsesApprovedCanonMedia).toBe(true);
     expect(result.checksSummary.humanApprovalVerified).toBe(true);
     expect(result.checksSummary.noSimulatedMediaInProduction).toBe(true);

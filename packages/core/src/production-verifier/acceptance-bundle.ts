@@ -165,6 +165,21 @@ export class ProductionAcceptanceBundle {
       return { valid: false, reasons };
     }
 
+    // ── Self-integrity: recompute manifest SHA-256 (excluding the manifestSha256 field itself)
+    if (manifest.manifestSha256) {
+      const manifestForHashing = { ...manifest };
+      delete manifestForHashing.manifestSha256;
+      const recomputedManifestContent = JSON.stringify(manifestForHashing, null, 2);
+      const recomputedSha = crypto.createHash('sha256').update(recomputedManifestContent, 'utf-8').digest('hex');
+      if (recomputedSha !== manifest.manifestSha256) {
+        reasons.push(
+          `Acceptance manifest self-integrity check failed: recorded manifestSha256 is ${manifest.manifestSha256}, recomputed ${recomputedSha}. Manifest has been tampered with.`
+        );
+      }
+    } else {
+      reasons.push('Acceptance manifest is missing its own manifestSha256 self-integrity field.');
+    }
+
     // Check each required file
     for (const fileName of this.REQUIRED_FILES) {
       const record = manifest.files[fileName];
@@ -202,6 +217,23 @@ export class ProductionAcceptanceBundle {
       try {
         const raw = await storage.readJson<AcceptanceBundleMetadata>(metaPath);
         metadata = AcceptanceBundleMetadataSchema.parse(raw);
+
+        // ── Metadata consistency: runId / projectId / seriesId must match the manifest
+        if (metadata.runId !== manifest.runId) {
+          reasons.push(
+            `Metadata consistency failure: production-acceptance.json runId "${metadata.runId}" does not match manifest runId "${manifest.runId}".`
+          );
+        }
+        if (metadata.projectId !== manifest.projectId) {
+          reasons.push(
+            `Metadata consistency failure: production-acceptance.json projectId "${metadata.projectId}" does not match manifest projectId "${manifest.projectId}".`
+          );
+        }
+        if (metadata.seriesId !== manifest.seriesId) {
+          reasons.push(
+            `Metadata consistency failure: production-acceptance.json seriesId "${metadata.seriesId}" does not match manifest seriesId "${manifest.seriesId}".`
+          );
+        }
       } catch (err: any) {
         reasons.push(`Invalid production-acceptance.json metadata: ${err?.message}`);
       }

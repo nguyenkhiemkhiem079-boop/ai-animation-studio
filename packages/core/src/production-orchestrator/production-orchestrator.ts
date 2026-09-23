@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import { IStorageProvider } from '../storage/index.js';
 import { IAssetRegistry } from '../asset-registry/index.js';
 import { LLMProvider } from '../llm/llm-provider.js';
-import { ProductionRun, ProductionRunSchema } from '../domain/production-run.js';
+import { ProductionRun, ProductionRunSchema, MasterProductionEvidence } from '../domain/production-run.js';
 import { ProductionRunStateMachine } from '../production-run/production-run-state-machine.js';
 import { ProductionRunRepository } from '../production-run/production-run-repository.js';
 import { EvidenceStore } from '../production-evidence/evidence-store.js';
@@ -443,11 +443,16 @@ export class ProductionOrchestrator {
       outputPath: masterVideoPath,
     });
 
-    // 5. MASTER QA & VERIFICATION
+    // 5. MASTER QA & VERIFICATION — Two-Phase Flow
     sm.transition('MASTER_QA', 'Auditing final master deliverable against 18-point production gate');
     sm.setStage('master_qa');
 
-    const masterEvidence = ProductionMasterVerifier.assertVerified({
+    const isProductionMode = sm.mode === 'PRODUCTION' && !options?.allowRehearsal;
+
+    // ── Phase A: Structural + semantic verification (without acceptance bundle).
+    // In PRODUCTION mode, this grants OFFLINE_REHEARSAL_VERIFIED (bundle is not yet built).
+    // In LOCAL/OFFLINE modes, this is allowed to produce the final status directly.
+    const preliminaryResult = ProductionMasterVerifier.verify({
       run: sm.getRun(),
       requiredShotIds: allShotIds,
       masterVideoPath: renderResult.outputPath,
@@ -457,22 +462,59 @@ export class ProductionOrchestrator {
       shotVideoMap,
       timelineSequence: sequence,
       shots: plannedShots,
-      allowRehearsal: sm.mode !== 'PRODUCTION' || Boolean(options?.allowRehearsal),
+      allowRehearsal: true, // always allow rehearsal here; Phase D enforces production truth
     });
 
-    sm.recordMasterEvidence(masterEvidence);
-    await this.evidenceStore.saveMasterEvidence(projectId, runId, masterEvidence);
+    if (!preliminaryResult.passed) {
+      throw new ProductionSafetyError(
+        `Master production verification failed at structural/semantic gate:\n- ${preliminaryResult.reasons.join('\n- ')}`
+      );
+    }
 
-    // Build durable acceptance bundle
-    await ProductionAcceptanceBundle.build({
+    const preliminaryEvidence: MasterProductionEvidence = preliminaryResult.evidence!;
+
+    // ── Phase B: Build durable acceptance bundle from preliminary evidence
+    const bundleResult = await ProductionAcceptanceBundle.build({
       projectId,
       runId,
       storage: this.storage,
       run: sm.getRun(),
-      masterEvidence,
+      masterEvidence: preliminaryEvidence,
       requiredShotIds: allShotIds,
       providerModelIds: this.llm ? [this.llm.metadata.id] : [],
     });
+
+    // ── Phase C: Validate the acceptance bundle (self-integrity + file checksums + metadata consistency)
+    const bundleValidation = await ProductionAcceptanceBundle.validate(
+      bundleResult.acceptanceDir,
+      this.storage
+    );
+
+    // ── Phase D: Final verification WITH the validated acceptance bundle.
+    // Only in PRODUCTION mode does this need to produce MASTER_PRODUCTION_VERIFIED.
+    // In LOCAL/OFFLINE modes, the preliminary rehearsal evidence is sufficient.
+    let masterEvidence: MasterProductionEvidence;
+
+    if (isProductionMode) {
+      masterEvidence = ProductionMasterVerifier.assertVerified({
+        run: sm.getRun(),
+        requiredShotIds: allShotIds,
+        masterVideoPath: renderResult.outputPath,
+        manifestId: renderResult.manifest.manifestId,
+        sequenceId: sequence.sequenceId,
+        continuityReport,
+        shotVideoMap,
+        timelineSequence: sequence,
+        shots: plannedShots,
+        acceptanceBundle: { valid: bundleValidation.valid, reasons: bundleValidation.reasons },
+      });
+    } else {
+      // Non-production: use preliminary evidence (OFFLINE_REHEARSAL_VERIFIED / LOCAL_PRODUCTION_PIPELINE_VERIFIED)
+      masterEvidence = preliminaryEvidence;
+    }
+
+    sm.recordMasterEvidence(masterEvidence);
+    await this.evidenceStore.saveMasterEvidence(projectId, runId, masterEvidence);
 
     // 6. COMPLETED
     sm.transition('COMPLETED', 'Production run completed and master verified');
