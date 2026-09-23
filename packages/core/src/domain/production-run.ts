@@ -222,6 +222,29 @@ export const ProductionApprovalEvidenceSchema = z.object({
 export type ProductionApprovalEvidence = z.infer<typeof ProductionApprovalEvidenceSchema>;
 
 /**
+ * Trusted human confirmation boundary.
+ * Untrusted boolean alone != proof of human interaction.
+ */
+export interface HumanApprovalConfirmation {
+  readonly __brand: 'TrustedHumanApprovalConfirmation';
+  confirmedAt: string;
+  confirmedBy: string;
+  statement: 'APPROVE' | 'REJECT';
+}
+
+export function createTrustedHumanConfirmation(params: {
+  confirmedBy: string;
+  statement?: 'APPROVE' | 'REJECT';
+}): HumanApprovalConfirmation {
+  return {
+    __brand: 'TrustedHumanApprovalConfirmation',
+    confirmedAt: new Date().toISOString(),
+    confirmedBy: params.confirmedBy,
+    statement: params.statement ?? 'APPROVE',
+  };
+}
+
+/**
  * Acceptance Manifest & Bundle Metadata Schemas
  */
 export const AcceptanceManifestFileRecordSchema = z.object({

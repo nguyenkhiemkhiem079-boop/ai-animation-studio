@@ -508,6 +508,8 @@ describe('Phase 18 — Real Production Pilot & Live Provider Evidence Test Suite
         SHOT_CANON_01: {
           shotId: 'SHOT_CANON_01',
           reportId: 'rep_passed',
+          candidateAssetId: media.assetId,
+          mediaSha256: media.sha256,
           overallStatus: 'PASS',
           passed: true,
           mechanism: 'MULTIMODAL_PROVIDER',
@@ -532,6 +534,8 @@ describe('Phase 18 — Real Production Pilot & Live Provider Evidence Test Suite
           shotId: 'SHOT_CANON_01',
           candidateAssetId: media.assetId,
           canonicalAssetId: 'CANON_SHOT_CANON_01',
+          mediaSha256: media.sha256,
+          qaReportId: 'rep_passed',
           status: 'APPROVED',
           approvalType: 'HUMAN',
           decidedBy: 'Lead Director',

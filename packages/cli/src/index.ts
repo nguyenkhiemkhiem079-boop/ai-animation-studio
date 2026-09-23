@@ -89,19 +89,36 @@ import {
   ProductionMasterVerifier,
   LiveProviderPreflight,
   ProductionAcceptanceBundle,
+  createTrustedHumanConfirmation,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as syncFs from 'node:fs';
+import * as readline from 'node:readline';
+
+function promptCliUser(promptText: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    rl.question(promptText, (answer) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
 
 export interface CliContext {
   cwd: string;
   storage: FileSystemStorage;
+  promptFn?: (promptText: string) => Promise<string>;
 }
 
 export async function runCli(args: string[], context?: CliContext): Promise<number> {
   const cwd = context?.cwd ?? process.cwd();
   const storage = context?.storage ?? new FileSystemStorage(cwd);
+  const promptUser = context?.promptFn ?? promptCliUser;
 
   const command = args[0] || 'help';
 
@@ -1686,7 +1703,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const targetShotId = args[3];
 
         if (!targetRunId || !targetShotId) {
-          console.error('Error: Run ID and Shot ID required. Usage: studio production approve <runId> <shotId> [--human]');
+          console.error('Error: Run ID and Shot ID required. Usage: studio production approve <runId> <shotId> [--human|--automated]');
           return 1;
         }
 
@@ -1701,24 +1718,69 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const actorIdx = args.indexOf('--actor');
         const actorDisplayName = actorIdx !== -1 && args[actorIdx + 1] ? args[actorIdx + 1] : (isHuman ? 'Lead Director (Human Operator)' : 'Automated Test Harness');
 
-        let approvalType: 'HUMAN' | 'AUTOMATED_TEST' = 'HUMAN';
-        let confirmedByOperator = false;
+        let approvalType: 'HUMAN' | 'AUTOMATED_TEST';
+        let interactive = false;
+        let confirmation: any = undefined;
 
         if (isHuman) {
+          if (!process.stdin.isTTY) {
+            console.error('Error: --human requires an interactive TTY terminal session. Non-interactive environments must use --automated.');
+            return 1;
+          }
+
+          const media = runRecord.mediaEvidence[targetShotId];
+          const qa = runRecord.qaEvidence[targetShotId];
+          console.log(`\n--- Candidate Review: Shot "${targetShotId}" ---`);
+          console.log(`Shot ID            : ${targetShotId}`);
+          console.log(`Candidate Asset ID : ${media?.assetId ?? 'UNKNOWN'}`);
+          console.log(`Media SHA-256      : ${media?.sha256 ?? 'UNKNOWN'}`);
+          console.log(`QA Report ID       : ${qa?.reportId ?? 'UNKNOWN'}`);
+          console.log(`QA status          : ${qa?.overallStatus ?? 'NOT_EVALUATED'}`);
+          console.log(`Provider trust     : ${qa?.providerTrust ?? 'UNKNOWN'}\n`);
+
+          const answer = await promptUser('Type APPROVE to confirm human approval: ');
+          if (answer.trim() !== 'APPROVE') {
+            console.error('Human approval aborted: confirmation text did not match "APPROVE". Approval evidence unchanged.');
+            return 1;
+          }
+
           approvalType = 'HUMAN';
-          confirmedByOperator = true;
+          interactive = true;
+          confirmation = createTrustedHumanConfirmation({
+            confirmedBy: actorDisplayName,
+            statement: 'APPROVE',
+          });
         } else if (isAutomated) {
           approvalType = 'AUTOMATED_TEST';
+          interactive = false;
         } else {
           // If neither flag passed
-          const isTty = Boolean(process.stdin.isTTY);
-          if (isTty) {
+          if (process.stdin.isTTY) {
+            const media = runRecord.mediaEvidence[targetShotId];
+            const qa = runRecord.qaEvidence[targetShotId];
+            console.log(`\n--- Candidate Review: Shot "${targetShotId}" ---`);
+            console.log(`Shot ID            : ${targetShotId}`);
+            console.log(`Candidate Asset ID : ${media?.assetId ?? 'UNKNOWN'}`);
+            console.log(`Media SHA-256      : ${media?.sha256 ?? 'UNKNOWN'}`);
+            console.log(`QA Report ID       : ${qa?.reportId ?? 'UNKNOWN'}`);
+            console.log(`QA status          : ${qa?.overallStatus ?? 'NOT_EVALUATED'}`);
+            console.log(`Provider trust     : ${qa?.providerTrust ?? 'UNKNOWN'}\n`);
+
+            const answer = await promptUser('Type APPROVE to confirm human approval: ');
+            if (answer.trim() !== 'APPROVE') {
+              console.error('Human approval aborted: confirmation text did not match "APPROVE". Approval evidence unchanged.');
+              return 1;
+            }
+
             approvalType = 'HUMAN';
-            confirmedByOperator = true;
+            interactive = true;
+            confirmation = createTrustedHumanConfirmation({
+              confirmedBy: actorDisplayName,
+              statement: 'APPROVE',
+            });
           } else {
-            approvalType = 'AUTOMATED_TEST';
-            console.log('⚠️  Notice: Defaulting to AUTOMATED_TEST approval in non-interactive environment.');
-            console.log('To confirm genuine human review, re-run with: studio production approve <runId> <shotId> --human');
+            console.error('Error: Non-interactive environment detected. Use --automated for automated workflows or run in an interactive terminal with --human.');
+            return 1;
           }
         }
 
@@ -1733,9 +1795,9 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           undefined,
           {
             approvalType,
-            confirmedByOperator,
+            confirmation,
             actorDisplayName,
-            interactive: isHuman,
+            interactive,
             approvalSource: 'studio production approve',
           }
         );
@@ -1771,13 +1833,56 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           return 1;
         }
 
-        console.log(`🚫 Rejecting candidate shot "${targetShotId}"...`);
+        const isHuman = args.includes('--human');
+        const isAutomated = args.includes('--automated');
+        let approvalType: 'HUMAN' | 'AUTOMATED_TEST' | 'SYSTEM' = 'SYSTEM';
+        let interactive = false;
+        let confirmation: any = undefined;
+
+        if (isHuman) {
+          if (!process.stdin.isTTY) {
+            console.error('Error: --human requires an interactive TTY terminal session.');
+            return 1;
+          }
+          const answer = await promptUser('Type REJECT to confirm rejection: ');
+          if (answer.trim() !== 'REJECT') {
+            console.error('Human rejection aborted: confirmation text did not match "REJECT".');
+            return 1;
+          }
+          approvalType = 'HUMAN';
+          interactive = true;
+          confirmation = createTrustedHumanConfirmation({
+            confirmedBy: 'Lead Director (Human Operator)',
+            statement: 'REJECT',
+          });
+        } else if (isAutomated) {
+          approvalType = 'AUTOMATED_TEST';
+        }
+
+        console.log(`🚫 Rejecting candidate shot "${targetShotId}" (${approvalType})...`);
         const assetRegistry = new FileSystemAssetRegistry(storage);
         const orchestrator = new ProductionOrchestrator(storage, assetRegistry);
-        const updated = await orchestrator.rejectShot(runRecord.projectId, targetRunId, targetShotId, reason);
+        const updated = await orchestrator.rejectShot(
+          runRecord.projectId,
+          targetRunId,
+          targetShotId,
+          reason,
+          undefined,
+          {
+            approvalType,
+            interactive,
+            confirmation,
+            approvalSource: 'studio production reject',
+          }
+        );
 
+        const rejRecord = updated.approvalEvidence[targetShotId];
         console.log(`✅ Rejection recorded for shot "${targetShotId}".`);
-        console.log(` - Run Status: ${updated.status}`);
+        if (rejRecord) {
+          console.log(` - Rejection Type : ${rejRecord.approvalType}`);
+          console.log(` - Interactive    : ${rejRecord.interactive}`);
+        }
+        console.log(` - Run Status     : ${updated.status}`);
         return 0;
       }
 

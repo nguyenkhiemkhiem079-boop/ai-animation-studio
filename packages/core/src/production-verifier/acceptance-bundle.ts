@@ -1,6 +1,8 @@
 import * as crypto from 'node:crypto';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { IStorageProvider } from '../storage/index.js';
+import { ArtifactVerifier } from '../media/artifact-verifier.js';
 import {
   AcceptanceManifest,
   AcceptanceManifestSchema,
@@ -20,6 +22,13 @@ export interface BuildAcceptanceBundleOptions {
   masterEvidence: MasterProductionEvidence;
   requiredShotIds: string[];
   providerModelIds?: string[];
+}
+
+export interface ValidateAcceptanceBundleOptions {
+  expectedRequiredShotIds?: string[];
+  finalMasterVideoPath?: string;
+  expectedMasterChecksum?: string;
+  expectedVerificationStatus?: string;
 }
 
 export interface AcceptanceBundleValidationResult {
@@ -146,7 +155,8 @@ export class ProductionAcceptanceBundle {
    */
   public static async validate(
     acceptanceDir: string,
-    storage: IStorageProvider
+    storage: IStorageProvider,
+    options?: ValidateAcceptanceBundleOptions
   ): Promise<AcceptanceBundleValidationResult> {
     const reasons: string[] = [];
     const manifestPath = `${acceptanceDir}/acceptance-manifest.json`;
@@ -210,6 +220,19 @@ export class ProductionAcceptanceBundle {
       }
     }
 
+    // Check master-evidence.json
+    let masterEv: MasterProductionEvidence | undefined;
+    const masterPath = `${acceptanceDir}/master-evidence.json`;
+    if (await storage.exists(masterPath)) {
+      try {
+        masterEv = await storage.readJson<MasterProductionEvidence>(masterPath);
+      } catch (err: any) {
+        reasons.push(`Invalid master-evidence.json in acceptance bundle: ${err?.message}`);
+      }
+    } else {
+      reasons.push('Acceptance bundle is missing required master-evidence.json.');
+    }
+
     // Check acceptance metadata
     let metadata: AcceptanceBundleMetadata | undefined;
     const metaPath = `${acceptanceDir}/production-acceptance.json`;
@@ -234,9 +257,137 @@ export class ProductionAcceptanceBundle {
             `Metadata consistency failure: production-acceptance.json seriesId "${metadata.seriesId}" does not match manifest seriesId "${manifest.seriesId}".`
           );
         }
+
+        // ── Master Checksum and Status Consistency with master-evidence.json
+        if (masterEv) {
+          if (metadata.finalMasterChecksum !== masterEv.masterSha256) {
+            reasons.push(
+              `Metadata consistency failure: production-acceptance.json finalMasterChecksum ("${metadata.finalMasterChecksum}") does not match master-evidence.json masterSha256 ("${masterEv.masterSha256}").`
+            );
+          }
+          if (metadata.verificationStatus !== masterEv.verificationStatus) {
+            reasons.push(
+              `Metadata consistency failure: production-acceptance.json verificationStatus ("${metadata.verificationStatus}") does not match master-evidence.json verificationStatus ("${masterEv.verificationStatus}").`
+            );
+          }
+        }
+
+        if (options?.expectedMasterChecksum && metadata.finalMasterChecksum !== options.expectedMasterChecksum) {
+          reasons.push(
+            `Metadata consistency failure: finalMasterChecksum ("${metadata.finalMasterChecksum}") does not match expected master checksum ("${options.expectedMasterChecksum}").`
+          );
+        }
+        if (options?.expectedVerificationStatus && metadata.verificationStatus !== options.expectedVerificationStatus) {
+          reasons.push(
+            `Metadata consistency failure: verificationStatus ("${metadata.verificationStatus}") does not match expected verification status ("${options.expectedVerificationStatus}").`
+          );
+        }
+
+        // ── Check providerModelIds has no empty or undefined entries
+        if (
+          metadata.providerModelIds &&
+          metadata.providerModelIds.some((m) => !m || typeof m !== 'string' || m.trim() === '')
+        ) {
+          reasons.push('Metadata consistency failure: providerModelIds contains empty or undefined entries.');
+        }
+
+        // ── Required Shot Set Comparison (Reject missing, extra, duplicate)
+        const bundleShots = metadata.requiredShotIds || [];
+        const seenShots = new Set<string>();
+        for (const s of bundleShots) {
+          if (!s || typeof s !== 'string' || s.trim() === '') {
+            reasons.push(`Metadata consistency failure: requiredShotIds contains empty or invalid shot ID.`);
+          } else if (seenShots.has(s)) {
+            reasons.push(`Metadata consistency failure: requiredShotIds contains duplicate shot ID: "${s}".`);
+          }
+          seenShots.add(s);
+        }
+
+        let expectedShots = options?.expectedRequiredShotIds;
+        if (!expectedShots) {
+          const mediaPath = `${acceptanceDir}/media-evidence.json`;
+          if (await storage.exists(mediaPath)) {
+            try {
+              const mediaEv = await storage.readJson<Record<string, any>>(mediaPath);
+              expectedShots = Object.keys(mediaEv);
+            } catch {
+              // ignore
+            }
+          }
+        }
+
+        if (expectedShots && expectedShots.length > 0) {
+          const expectedSet = new Set(expectedShots);
+          const bundleSet = new Set(bundleShots);
+
+          const missing = [...expectedSet].filter((s) => !bundleSet.has(s));
+          if (missing.length > 0) {
+            reasons.push(`Metadata consistency failure: requiredShotIds is missing expected shot(s): ${missing.join(', ')}.`);
+          }
+
+          const extra = [...bundleSet].filter((s) => !expectedSet.has(s));
+          if (extra.length > 0) {
+            reasons.push(`Metadata consistency failure: requiredShotIds contains unexpected extra shot(s): ${extra.join(', ')}.`);
+          }
+        }
+
+        // ── Final physical master video on disk vs finalMasterChecksum
+        const masterVideoPath = options?.finalMasterVideoPath || masterEv?.masterVideoPath;
+        if (masterVideoPath && fs.existsSync(masterVideoPath)) {
+          const diskVerif = ArtifactVerifier.verify(masterVideoPath, { requireVideoStream: true });
+          if (diskVerif.checksumSha256 && diskVerif.checksumSha256 !== metadata.finalMasterChecksum) {
+            reasons.push(
+              `Acceptance metadata finalMasterChecksum (${metadata.finalMasterChecksum}) does not match physical master video SHA-256 (${diskVerif.checksumSha256}) on disk at "${masterVideoPath}".`
+            );
+          }
+        }
+
+        // ── Evidence Consistency across files in bundle
+        const mediaPath = `${acceptanceDir}/media-evidence.json`;
+        const qaPath = `${acceptanceDir}/qa-evidence.json`;
+        const approvalPath = `${acceptanceDir}/approval-evidence.json`;
+        if ((await storage.exists(mediaPath)) && (await storage.exists(qaPath))) {
+          try {
+            const mediaRecords = await storage.readJson<Record<string, any>>(mediaPath);
+            const qaRecords = await storage.readJson<Record<string, any>>(qaPath);
+            const approvalRecords = (await storage.exists(approvalPath))
+              ? await storage.readJson<Record<string, any>>(approvalPath)
+              : {};
+
+            for (const shotId of bundleShots) {
+              const m = mediaRecords[shotId];
+              const q = qaRecords[shotId];
+              const a = approvalRecords[shotId];
+
+              if (m && q) {
+                if (q.mediaSha256 && q.mediaSha256 !== m.sha256) {
+                  reasons.push(
+                    `Bundle evidence consistency failure: Shot "${shotId}" QA media SHA-256 (${q.mediaSha256}) does not match media evidence SHA-256 (${m.sha256}).`
+                  );
+                }
+                if (q.candidateAssetId && m.assetId && q.candidateAssetId !== m.assetId) {
+                  reasons.push(
+                    `Bundle evidence consistency failure: Shot "${shotId}" QA candidateAssetId ("${q.candidateAssetId}") does not match media asset ID ("${m.assetId}").`
+                  );
+                }
+              }
+              if (a && m) {
+                if (a.mediaSha256 && a.mediaSha256 !== m.sha256) {
+                  reasons.push(
+                    `Bundle evidence consistency failure: Shot "${shotId}" approval media SHA-256 (${a.mediaSha256}) does not match media evidence SHA-256 (${m.sha256}).`
+                  );
+                }
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
       } catch (err: any) {
         reasons.push(`Invalid production-acceptance.json metadata: ${err?.message}`);
       }
+    } else {
+      reasons.push('Missing production-acceptance.json in acceptance bundle.');
     }
 
     return {

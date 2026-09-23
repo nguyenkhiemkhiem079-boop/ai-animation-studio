@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import { IStorageProvider } from '../storage/index.js';
 import { IAssetRegistry } from '../asset-registry/index.js';
 import { LLMProvider } from '../llm/llm-provider.js';
-import { ProductionRun, ProductionRunSchema, MasterProductionEvidence } from '../domain/production-run.js';
+import { ProductionRun, ProductionRunSchema, MasterProductionEvidence, HumanApprovalConfirmation } from '../domain/production-run.js';
 import { ProductionRunStateMachine } from '../production-run/production-run-state-machine.js';
 import { ProductionRunRepository } from '../production-run/production-run-repository.js';
 import { EvidenceStore } from '../production-evidence/evidence-store.js';
@@ -487,7 +487,13 @@ export class ProductionOrchestrator {
     // ── Phase C: Validate the acceptance bundle (self-integrity + file checksums + metadata consistency)
     const bundleValidation = await ProductionAcceptanceBundle.validate(
       bundleResult.acceptanceDir,
-      this.storage
+      this.storage,
+      {
+        expectedRequiredShotIds: allShotIds,
+        finalMasterVideoPath: renderResult.outputPath,
+        expectedMasterChecksum: preliminaryEvidence.masterSha256,
+        expectedVerificationStatus: preliminaryEvidence.verificationStatus,
+      }
     );
 
     // ── Phase D: Final verification WITH the validated acceptance bundle.
@@ -674,6 +680,7 @@ export class ProductionOrchestrator {
       actorDisplayName?: string;
       approvalSource?: string;
       interactive?: boolean;
+      confirmation?: HumanApprovalConfirmation;
       confirmedByOperator?: boolean;
     }
   ): Promise<ProductionRun> {
@@ -703,18 +710,24 @@ export class ProductionOrchestrator {
       );
     }
 
-    // Enforce human approval truth: prevent scripted non-interactive spoofing of HUMAN approval
-    const hasOperatorConfirmation = options?.interactive === true || options?.confirmedByOperator === true;
+    // Enforce human approval truth: prevent scripted non-interactive spoofing of HUMAN approval.
+    // Untrusted booleans alone (e.g. confirmedByOperator) cannot establish human trust boundary.
+    const hasValidHumanConfirmation =
+      options?.confirmation?.__brand === 'TrustedHumanApprovalConfirmation' &&
+      options?.confirmation?.statement === 'APPROVE' &&
+      options?.interactive === true;
 
     let approvalType = options?.approvalType;
     if (!approvalType) {
-      approvalType = hasOperatorConfirmation ? 'HUMAN' : 'AUTOMATED_TEST';
+      approvalType = hasValidHumanConfirmation ? 'HUMAN' : 'AUTOMATED_TEST';
     }
 
-    if (approvalType === 'HUMAN' && !hasOperatorConfirmation) {
-      throw new ProductionSafetyError(
-        `Cannot record approvalType="HUMAN" without explicit operator confirmation or interactive session. Non-interactive automated scripts must use approvalType="AUTOMATED_TEST".`
-      );
+    if (approvalType === 'HUMAN') {
+      if (!hasValidHumanConfirmation) {
+        throw new ProductionSafetyError(
+          `Cannot record approvalType="HUMAN" without a trusted HumanApprovalConfirmation and an interactive session (interactive=true). Untrusted booleans alone (e.g. confirmedByOperator) cannot establish human trust.`
+        );
+      }
     }
 
     sm.recordApprovalEvidence({
@@ -758,7 +771,15 @@ export class ProductionOrchestrator {
     runId: string,
     shotId: string,
     reason: string,
-    decidedBy: string = 'Director / Human Reviewer'
+    decidedBy: string = 'Director / Human Reviewer',
+    options?: {
+      approvalType?: 'HUMAN' | 'AUTOMATED_TEST' | 'SYSTEM';
+      interactive?: boolean;
+      confirmation?: HumanApprovalConfirmation;
+      actorId?: string;
+      actorDisplayName?: string;
+      approvalSource?: string;
+    }
   ): Promise<ProductionRun> {
     const run = await this.repository.findById(projectId, runId);
     if (!run) throw new Error(`Production run "${runId}" not found.`);
@@ -769,13 +790,34 @@ export class ProductionOrchestrator {
       throw new ProductionSafetyError(`Cannot reject shot "${shotId}": No media evidence recorded.`);
     }
 
+    const hasValidHumanConfirmation =
+      options?.confirmation?.__brand === 'TrustedHumanApprovalConfirmation' &&
+      options?.confirmation?.statement === 'REJECT' &&
+      options?.interactive === true;
+
+    let approvalType = options?.approvalType;
+    if (!approvalType) {
+      approvalType = hasValidHumanConfirmation ? 'HUMAN' : 'SYSTEM';
+    }
+
+    if (approvalType === 'HUMAN') {
+      if (!hasValidHumanConfirmation) {
+        throw new ProductionSafetyError(
+          `Cannot record rejection approvalType="HUMAN" without a trusted HumanApprovalConfirmation and an interactive session (interactive=true).`
+        );
+      }
+    }
+
     sm.recordApprovalEvidence({
       shotId,
       candidateAssetId: media.assetId,
       mediaSha256: media.sha256,
       status: 'REJECTED',
-      approvalType: 'HUMAN',
-      interactive: false,
+      approvalType,
+      interactive: options?.interactive ?? false,
+      actorId: options?.actorId,
+      actorDisplayName: options?.actorDisplayName,
+      approvalSource: options?.approvalSource,
       decidedBy,
       decidedAt: new Date().toISOString(),
       notes: reason,

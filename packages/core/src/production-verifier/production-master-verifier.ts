@@ -255,27 +255,56 @@ export class ProductionMasterVerifier {
         allNoPendingRetakes = false;
         reasons.push(`Visual QA evidence missing for shot "${shotId}".`);
       } else {
-        // QA checksum binding
-        if (qa.mediaSha256 && qa.mediaSha256 !== media.sha256) {
+        // Strict QA artifact binding
+        if (!qa.mediaSha256) {
           allQaChecksumsValid = false;
           allQaPassedAndDefectFree = false;
           reasons.push(
-            `Shot "${shotId}" QA evidence checksum mismatch: QA evaluated on ${qa.mediaSha256}, recorded media is ${media.sha256}. Re-QA required.`
+            `QA_MEDIA_SHA_MISSING: Shot "${shotId}" Visual QA evidence is missing bound media SHA-256.`
+          );
+        } else if (qa.mediaSha256 !== media.sha256) {
+          allQaChecksumsValid = false;
+          allQaPassedAndDefectFree = false;
+          reasons.push(
+            `QA_MEDIA_SHA_MISMATCH: Shot "${shotId}" QA evidence checksum mismatch: QA evaluated on ${qa.mediaSha256}, recorded media is ${media.sha256}. Re-QA required.`
+          );
+        } else if (verif.checksumSha256 && verif.checksumSha256 !== qa.mediaSha256) {
+          allQaChecksumsValid = false;
+          allQaPassedAndDefectFree = false;
+          reasons.push(
+            `QA_MEDIA_SHA_MISMATCH: Shot "${shotId}" QA evidence checksum mismatch: QA evaluated on ${qa.mediaSha256}, current physical disk file has ${verif.checksumSha256}. Re-QA required.`
           );
         }
-        if (qa.mediaSha256 && verif.checksumSha256 && verif.checksumSha256 !== qa.mediaSha256) {
+
+        if (!qa.candidateAssetId) {
           allQaChecksumsValid = false;
           allQaPassedAndDefectFree = false;
           reasons.push(
-            `Shot "${shotId}" QA evidence checksum mismatch: QA evaluated on ${qa.mediaSha256}, current disk file has ${verif.checksumSha256}. Re-QA required.`
+            `QA_ASSET_BINDING_MISSING: Shot "${shotId}" Visual QA evidence is missing bound candidateAssetId.`
+          );
+        } else if (media.assetId && qa.candidateAssetId !== media.assetId) {
+          allQaChecksumsValid = false;
+          allQaPassedAndDefectFree = false;
+          reasons.push(
+            `QA_ASSET_BINDING_MISMATCH: Shot "${shotId}" QA candidateAssetId mismatch: QA evaluated on "${qa.candidateAssetId}", recorded media assetId is "${media.assetId}".`
           );
         }
-        if (approval?.mediaSha256 && qa.mediaSha256 && qa.mediaSha256 !== approval.mediaSha256) {
-          allQaChecksumsValid = false;
-          allQaPassedAndDefectFree = false;
-          reasons.push(
-            `Shot "${shotId}" QA media checksum (${qa.mediaSha256}) does not match approved checksum (${approval.mediaSha256}). FAIL CLOSED.`
-          );
+
+        if (approval) {
+          if (approval.mediaSha256 && qa.mediaSha256 && qa.mediaSha256 !== approval.mediaSha256) {
+            allQaChecksumsValid = false;
+            allQaPassedAndDefectFree = false;
+            reasons.push(
+              `QA_MEDIA_SHA_MISMATCH: Shot "${shotId}" QA media checksum (${qa.mediaSha256}) does not match approved checksum (${approval.mediaSha256}). FAIL CLOSED.`
+            );
+          }
+          if (approval.candidateAssetId && qa.candidateAssetId && qa.candidateAssetId !== approval.candidateAssetId) {
+            allQaChecksumsValid = false;
+            allQaPassedAndDefectFree = false;
+            reasons.push(
+              `QA_ASSET_BINDING_MISMATCH: Shot "${shotId}" QA candidateAssetId (${qa.candidateAssetId}) does not match approved candidateAssetId (${approval.candidateAssetId}). FAIL CLOSED.`
+            );
+          }
         }
 
         // QA structural pass

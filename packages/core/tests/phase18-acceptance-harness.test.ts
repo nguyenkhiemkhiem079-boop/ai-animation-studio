@@ -15,6 +15,7 @@ import {
   MemoryStorage,
   InMemoryAssetRegistry,
   ProductionSafetyError,
+  createTrustedHumanConfirmation,
   ShotContract,
   LLMProvider,
   LLMProviderMetadata,
@@ -784,7 +785,23 @@ describe('Phase 18.2 — Real Production Acceptance Harness Adversarial Test Sui
     );
     expect(automatedApprovedRun.approvalEvidence['SHOT_01'].approvalType).toBe('AUTOMATED_TEST');
 
-    // Calling with confirmedByOperator: true successfully records HUMAN
+    // Calling with confirmedByOperator: true alone without trusted confirmation throws ProductionSafetyError
+    await expect(
+      orchestrator.approveShot(
+        'proj_anti_spoof',
+        run.runId,
+        'SHOT_01',
+        'Human Lead Director',
+        'Verified with director eyes',
+        {
+          approvalType: 'HUMAN',
+          confirmedByOperator: true,
+          actorDisplayName: 'Lead Director',
+        }
+      )
+    ).rejects.toThrow(ProductionSafetyError);
+
+    // Calling with trusted confirmation and interactive: true successfully records HUMAN
     const humanApprovedRun = await orchestrator.approveShot(
       'proj_anti_spoof',
       run.runId,
@@ -793,7 +810,11 @@ describe('Phase 18.2 — Real Production Acceptance Harness Adversarial Test Sui
       'Verified with director eyes',
       {
         approvalType: 'HUMAN',
-        confirmedByOperator: true,
+        interactive: true,
+        confirmation: createTrustedHumanConfirmation({
+          confirmedBy: 'Lead Director',
+          statement: 'APPROVE',
+        }),
         actorDisplayName: 'Lead Director',
       }
     );
