@@ -38,6 +38,16 @@ export interface AcceptanceBundleValidationResult {
   metadata?: AcceptanceBundleMetadata;
 }
 
+/**
+ * Production Acceptance Bundle Builder & Integrity Verifier.
+ *
+ * NOTE ON INTEGRITY SEMANTICS:
+ * The Acceptance Bundle employs SHA-256 integrity checksum verification and manifest
+ * self-integrity hashing to detect accidental corruption or subsequent unauthorized file
+ * modifications when the manifest is held authoritative. It provides content integrity
+ * and checksum verification rather than asymmetric digital signatures or cryptographic
+ * non-repudiation against an adversary capable of rewriting the entire bundle and recomputing hashes.
+ */
 export class ProductionAcceptanceBundle {
   public static readonly REQUIRED_FILES = [
     'production-acceptance.json',

@@ -215,6 +215,8 @@ export const ProductionApprovalEvidenceSchema = z.object({
   actorDisplayName: z.string().optional(),
   approvalSource: z.string().optional(),
   interactive: z.boolean().default(false),
+  challengeId: z.string().optional(),
+  challengeNonce: z.string().optional(),
   decidedBy: z.string().min(1),
   decidedAt: z.string().datetime(),
   notes: z.string().optional(),
@@ -222,27 +224,25 @@ export const ProductionApprovalEvidenceSchema = z.object({
 export type ProductionApprovalEvidence = z.infer<typeof ProductionApprovalEvidenceSchema>;
 
 /**
- * Trusted human confirmation boundary.
- * Untrusted boolean alone != proof of human interaction.
+ * Explicit Human Operator Approval Challenge Ceremony.
+ * Bound to runId, projectId, shotId, candidateAssetId, mediaSha256, and qaReportId.
+ * Single-use, unexpired, and strictly invalidated if media or QA changes.
  */
-export interface HumanApprovalConfirmation {
-  readonly __brand: 'TrustedHumanApprovalConfirmation';
-  confirmedAt: string;
-  confirmedBy: string;
-  statement: 'APPROVE' | 'REJECT';
-}
-
-export function createTrustedHumanConfirmation(params: {
-  confirmedBy: string;
-  statement?: 'APPROVE' | 'REJECT';
-}): HumanApprovalConfirmation {
-  return {
-    __brand: 'TrustedHumanApprovalConfirmation',
-    confirmedAt: new Date().toISOString(),
-    confirmedBy: params.confirmedBy,
-    statement: params.statement ?? 'APPROVE',
-  };
-}
+export const ProductionApprovalChallengeSchema = z.object({
+  challengeId: z.string().min(1),
+  nonce: z.string().min(8),
+  projectId: z.string().min(1),
+  runId: z.string().min(1),
+  shotId: z.string().min(1),
+  candidateAssetId: z.string().min(1),
+  mediaSha256: z.string().min(64).max(64),
+  qaReportId: z.string().min(1),
+  approvalAction: z.enum(['APPROVE', 'REJECT']),
+  issuedAt: z.string().datetime(),
+  expiresAt: z.string().datetime(),
+  consumedAt: z.string().datetime().nullable().default(null),
+});
+export type ProductionApprovalChallenge = z.infer<typeof ProductionApprovalChallengeSchema>;
 
 /**
  * Acceptance Manifest & Bundle Metadata Schemas
@@ -348,6 +348,7 @@ export const ProductionRunSchema = z.object({
   mediaEvidence: z.record(ProductionMediaEvidenceSchema).default({}),
   qaEvidence: z.record(ProductionQAEvidenceSchema).default({}),
   approvalEvidence: z.record(ProductionApprovalEvidenceSchema).default({}),
+  approvalChallenges: z.record(ProductionApprovalChallengeSchema).optional().default({}),
   masterEvidence: MasterProductionEvidenceSchema.optional(),
   checkpointId: z.string().optional(),
   failure: z

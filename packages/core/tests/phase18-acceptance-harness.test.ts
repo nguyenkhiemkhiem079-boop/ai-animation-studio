@@ -15,7 +15,6 @@ import {
   MemoryStorage,
   InMemoryAssetRegistry,
   ProductionSafetyError,
-  createTrustedHumanConfirmation,
   ShotContract,
   LLMProvider,
   LLMProviderMetadata,
@@ -801,7 +800,13 @@ describe('Phase 18.2 — Real Production Acceptance Harness Adversarial Test Sui
       )
     ).rejects.toThrow(ProductionSafetyError);
 
-    // Calling with trusted confirmation and interactive: true successfully records HUMAN
+    // Calling with valid challenge ceremony and interactive: true successfully records HUMAN
+    const challenge = await orchestrator.issueApprovalChallenge(
+      'proj_anti_spoof',
+      run.runId,
+      'SHOT_01',
+      'APPROVE'
+    );
     const humanApprovedRun = await orchestrator.approveShot(
       'proj_anti_spoof',
       run.runId,
@@ -811,10 +816,8 @@ describe('Phase 18.2 — Real Production Acceptance Harness Adversarial Test Sui
       {
         approvalType: 'HUMAN',
         interactive: true,
-        confirmation: createTrustedHumanConfirmation({
-          confirmedBy: 'Lead Director',
-          statement: 'APPROVE',
-        }),
+        challengeId: challenge.challengeId,
+        challengeNonce: challenge.nonce,
         actorDisplayName: 'Lead Director',
       }
     );

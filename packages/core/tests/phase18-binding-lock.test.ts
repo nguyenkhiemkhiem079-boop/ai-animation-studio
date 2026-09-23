@@ -14,7 +14,6 @@ import {
   ProductionRun,
   ShotContract,
   ArtifactVerifier,
-  createTrustedHumanConfirmation,
 } from '../src/index.js';
 
 describe('Phase 18.2.2 — Final Human & Artifact Binding Lock Test Suite', () => {

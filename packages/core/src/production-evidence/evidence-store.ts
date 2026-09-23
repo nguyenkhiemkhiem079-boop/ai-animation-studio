@@ -11,6 +11,8 @@ import {
   ProductionQAEvidenceSchema,
   ProductionApprovalEvidence,
   ProductionApprovalEvidenceSchema,
+  ProductionApprovalChallenge,
+  ProductionApprovalChallengeSchema,
   MasterProductionEvidence,
   MasterProductionEvidenceSchema,
 } from '../domain/production-run.js';
@@ -34,7 +36,13 @@ export class EvidenceStore {
     const filePath = `${this.getProductionDir(projectId, runId)}/production-run.json`;
     if (!(await this.storage.exists(filePath))) return null;
     const data = await this.storage.readJson<unknown>(filePath);
-    return ProductionRunSchema.parse(data);
+    const parsed = ProductionRunSchema.parse(data);
+    const challengesPath = `${this.getProductionDir(projectId, runId)}/approval-challenges.json`;
+    if (await this.storage.exists(challengesPath)) {
+      const challenges = await this.loadApprovalChallenges(projectId, runId);
+      parsed.approvalChallenges = { ...challenges, ...(parsed.approvalChallenges || {}) };
+    }
+    return parsed;
   }
 
   // 2. Provider Evidence
@@ -129,6 +137,27 @@ export class EvidenceStore {
     if (!(await this.storage.exists(filePath))) return {};
     const data = await this.storage.readJson<unknown>(filePath);
     return z.record(ProductionApprovalEvidenceSchema).parse(data);
+  }
+
+  // 5b. Approval Challenges
+  public async saveApprovalChallenges(
+    projectId: string,
+    runId: string,
+    challenges: Record<string, ProductionApprovalChallenge>
+  ): Promise<void> {
+    const validated = z.record(ProductionApprovalChallengeSchema).parse(challenges);
+    const dir = this.getProductionDir(projectId, runId);
+    await this.storage.writeJson(`${dir}/approval-challenges.json`, validated);
+  }
+
+  public async loadApprovalChallenges(
+    projectId: string,
+    runId: string
+  ): Promise<Record<string, ProductionApprovalChallenge>> {
+    const filePath = `${this.getProductionDir(projectId, runId)}/approval-challenges.json`;
+    if (!(await this.storage.exists(filePath))) return {};
+    const data = await this.storage.readJson<unknown>(filePath);
+    return z.record(ProductionApprovalChallengeSchema).parse(data);
   }
 
   // 6. Master Evidence

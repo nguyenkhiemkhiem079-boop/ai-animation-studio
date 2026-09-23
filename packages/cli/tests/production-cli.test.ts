@@ -253,7 +253,10 @@ describe('Phase 18 — Production CLI Commands Test Suite', () => {
       const exitCode = await runCli(['production', 'approve', runId, shotId, '--human'], {
         cwd: testCwd,
         storage,
-        promptFn: async () => 'APPROVE',
+        promptFn: async (promptText) => {
+          const match = promptText.match(/APPROVE\s+([A-Z0-9]+)/i);
+          return match ? `APPROVE ${match[1]}` : 'APPROVE';
+        },
       });
       expect(exitCode).toBe(0);
 

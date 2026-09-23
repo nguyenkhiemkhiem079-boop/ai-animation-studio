@@ -1,9 +1,10 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as crypto from 'node:crypto';
 import { IStorageProvider } from '../storage/index.js';
 import { IAssetRegistry } from '../asset-registry/index.js';
 import { LLMProvider } from '../llm/llm-provider.js';
-import { ProductionRun, ProductionRunSchema, MasterProductionEvidence, HumanApprovalConfirmation } from '../domain/production-run.js';
+import { ProductionRun, ProductionRunSchema, MasterProductionEvidence, ProductionApprovalChallenge } from '../domain/production-run.js';
 import { ProductionRunStateMachine } from '../production-run/production-run-state-machine.js';
 import { ProductionRunRepository } from '../production-run/production-run-repository.js';
 import { EvidenceStore } from '../production-evidence/evidence-store.js';
@@ -79,6 +80,7 @@ export class ProductionOrchestrator {
       mediaEvidence: {},
       qaEvidence: {},
       approvalEvidence: {},
+      approvalChallenges: {},
       resumeMetadata: {
         canResume: true,
         resumeStage: 'PREFLIGHT',
@@ -652,6 +654,10 @@ export class ProductionOrchestrator {
     });
     await this.evidenceStore.saveQAEvidence(projectId, runId, sm.getRun().qaEvidence);
 
+    // Any previous approval challenge for this shot is invalidated since media has changed
+    sm.invalidateApprovalChallengesForShot(shotId);
+    await this.evidenceStore.saveApprovalChallenges(projectId, runId, sm.getRun().approvalChallenges);
+
     // Move to APPROVAL_REQUIRED
     sm.transition('APPROVAL_REQUIRED', `Imported shot "${shotId}" requires human approval`);
     sm.setResumeMetadata({
@@ -663,6 +669,86 @@ export class ProductionOrchestrator {
 
     await this.repository.save(sm.getRun());
     return sm.getRun();
+  }
+
+  /**
+   * Issues an explicit single-use approval challenge for human operator confirmation.
+   * Bound to runId, projectId, shotId, candidateAssetId, mediaSha256, and qaReportId,
+   * with cryptographically random nonce, issuedAt, and expiresAt.
+   */
+  public async issueApprovalChallenge(
+    projectId: string,
+    runId: string,
+    shotId: string,
+    action: 'APPROVE' | 'REJECT' = 'APPROVE',
+    ttlSeconds: number = 900 // 15 minutes default
+  ): Promise<ProductionApprovalChallenge> {
+    const run = await this.repository.findById(projectId, runId);
+    if (!run) throw new Error(`Production run "${runId}" not found.`);
+
+    const media = run.mediaEvidence[shotId];
+    if (!media) {
+      throw new ProductionSafetyError(`Cannot issue approval challenge for shot "${shotId}": No media evidence recorded.`);
+    }
+
+    // Verify current media on disk has not changed from recorded evidence
+    if (fs.existsSync(media.physicalPath)) {
+      const diskCheck = ArtifactVerifier.verify(media.physicalPath);
+      if (diskCheck.checksumSha256 && diskCheck.checksumSha256 !== media.sha256) {
+        throw new ProductionSafetyError(
+          `Cannot issue approval challenge for shot "${shotId}": Media on disk (${diskCheck.checksumSha256}) has changed from recorded media evidence (${media.sha256}).`
+        );
+      }
+    }
+
+    let qaReportId = 'QA_NOT_EVALUATED';
+    if (action === 'APPROVE') {
+      const qa = run.qaEvidence[shotId];
+      if (!qa || !qa.passed) {
+        throw new ProductionSafetyError(
+          `Cannot issue approval challenge for shot "${shotId}": Visual QA must be evaluated and passed before issuing approval challenge.`
+        );
+      }
+      if (qa.mediaSha256 && qa.mediaSha256 !== media.sha256) {
+        throw new ProductionSafetyError(
+          `Cannot issue approval challenge for shot "${shotId}": QA media SHA-256 (${qa.mediaSha256}) does not match current media SHA-256 (${media.sha256}).`
+        );
+      }
+      qaReportId = qa.reportId;
+    } else {
+      const qa = run.qaEvidence[shotId];
+      if (qa) {
+        qaReportId = qa.reportId;
+      }
+    }
+
+    const challengeId = `chal_${crypto.randomUUID().replace(/-/g, '')}`;
+    const nonce = crypto.randomBytes(6).toString('hex').toUpperCase(); // 12-character hex nonce
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + ttlSeconds * 1000).toISOString();
+
+    const challenge: ProductionApprovalChallenge = {
+      challengeId,
+      nonce,
+      projectId,
+      runId,
+      shotId,
+      candidateAssetId: media.assetId,
+      mediaSha256: media.sha256,
+      qaReportId,
+      approvalAction: action,
+      issuedAt: now.toISOString(),
+      expiresAt,
+      consumedAt: null,
+    };
+
+    const sm = new ProductionRunStateMachine(run);
+    sm.recordApprovalChallenge(challenge);
+
+    await this.evidenceStore.saveApprovalChallenges(projectId, runId, sm.getRun().approvalChallenges);
+    await this.repository.save(sm.getRun());
+
+    return challenge;
   }
 
   /**
@@ -680,7 +766,8 @@ export class ProductionOrchestrator {
       actorDisplayName?: string;
       approvalSource?: string;
       interactive?: boolean;
-      confirmation?: HumanApprovalConfirmation;
+      challengeId?: string;
+      challengeNonce?: string;
       confirmedByOperator?: boolean;
     }
   ): Promise<ProductionRun> {
@@ -710,24 +797,84 @@ export class ProductionOrchestrator {
       );
     }
 
-    // Enforce human approval truth: prevent scripted non-interactive spoofing of HUMAN approval.
-    // Untrusted booleans alone (e.g. confirmedByOperator) cannot establish human trust boundary.
-    const hasValidHumanConfirmation =
-      options?.confirmation?.__brand === 'TrustedHumanApprovalConfirmation' &&
-      options?.confirmation?.statement === 'APPROVE' &&
-      options?.interactive === true;
-
+    // Enforce human approval truth: prevent programmatic spoofing of HUMAN approval.
+    // Untrusted booleans alone (e.g. confirmedByOperator or interactive=true) cannot establish human trust boundary.
+    // HUMAN approval strictly requires an issued, unexpired, unconsumed challenge verified against current media and QA.
     let approvalType = options?.approvalType;
     if (!approvalType) {
-      approvalType = hasValidHumanConfirmation ? 'HUMAN' : 'AUTOMATED_TEST';
+      approvalType = (options?.challengeId && options?.interactive) ? 'HUMAN' : 'AUTOMATED_TEST';
     }
 
     if (approvalType === 'HUMAN') {
-      if (!hasValidHumanConfirmation) {
+      if (!options?.challengeId || !options?.challengeNonce) {
         throw new ProductionSafetyError(
-          `Cannot record approvalType="HUMAN" without a trusted HumanApprovalConfirmation and an interactive session (interactive=true). Untrusted booleans alone (e.g. confirmedByOperator) cannot establish human trust.`
+          `Cannot record approvalType="HUMAN" without an explicit approval challenge and nonce. An approval challenge must be issued and confirmed interactively.`
         );
       }
+      if (options?.interactive !== true) {
+        throw new ProductionSafetyError(
+          `Cannot record approvalType="HUMAN" with interactive=false. Human approval requires an interactive session.`
+        );
+      }
+      const challenge = run.approvalChallenges?.[options.challengeId];
+      if (!challenge) {
+        throw new ProductionSafetyError(
+          `Approval challenge "${options.challengeId}" not found for run "${runId}".`
+        );
+      }
+      if (challenge.nonce !== options.challengeNonce) {
+        throw new ProductionSafetyError(
+          `Approval challenge nonce mismatch for challenge "${options.challengeId}".`
+        );
+      }
+      if (challenge.approvalAction !== 'APPROVE') {
+        throw new ProductionSafetyError(
+          `Approval challenge "${options.challengeId}" is for action "${challenge.approvalAction}", not "APPROVE".`
+        );
+      }
+      if (challenge.runId !== runId || challenge.projectId !== projectId || challenge.shotId !== shotId) {
+        throw new ProductionSafetyError(
+          `Approval challenge "${options.challengeId}" does not match target run/shot (${challenge.shotId} !== ${shotId}).`
+        );
+      }
+      if (challenge.consumedAt !== null) {
+        throw new ProductionSafetyError(
+          `Approval challenge "${options.challengeId}" has already been consumed at ${challenge.consumedAt}. Reused challenges are forbidden.`
+        );
+      }
+      const now = new Date();
+      if (now.getTime() > new Date(challenge.expiresAt).getTime()) {
+        throw new ProductionSafetyError(
+          `Approval challenge "${options.challengeId}" expired at ${challenge.expiresAt}.`
+        );
+      }
+      if (challenge.candidateAssetId !== media.assetId) {
+        throw new ProductionSafetyError(
+          `Approval challenge candidate asset ID (${challenge.candidateAssetId}) does not match current media asset ID (${media.assetId}).`
+        );
+      }
+      if (challenge.mediaSha256 !== media.sha256) {
+        throw new ProductionSafetyError(
+          `Approval challenge media SHA-256 (${challenge.mediaSha256}) does not match current media evidence (${media.sha256}). Media has changed since challenge was issued.`
+        );
+      }
+      if (fs.existsSync(media.physicalPath)) {
+        const diskCheck = ArtifactVerifier.verify(media.physicalPath);
+        if (diskCheck.checksumSha256 && diskCheck.checksumSha256 !== challenge.mediaSha256) {
+          throw new ProductionSafetyError(
+            `Approval challenge media SHA-256 (${challenge.mediaSha256}) does not match current physical disk checksum (${diskCheck.checksumSha256}).`
+          );
+        }
+      }
+      if (challenge.qaReportId !== qa.reportId) {
+        throw new ProductionSafetyError(
+          `Approval challenge QA report ID (${challenge.qaReportId}) does not match current QA report ID (${qa.reportId}). QA evaluation was replaced.`
+        );
+      }
+
+      // Mark challenge as single-use consumed
+      challenge.consumedAt = now.toISOString();
+      await this.evidenceStore.saveApprovalChallenges(projectId, runId, run.approvalChallenges);
     }
 
     sm.recordApprovalEvidence({
@@ -742,6 +889,8 @@ export class ProductionOrchestrator {
       actorDisplayName: options?.actorDisplayName,
       approvalSource: options?.approvalSource,
       interactive: options?.interactive ?? false,
+      challengeId: options?.challengeId,
+      challengeNonce: options?.challengeNonce,
       decidedBy,
       decidedAt: new Date().toISOString(),
       notes,
@@ -775,7 +924,8 @@ export class ProductionOrchestrator {
     options?: {
       approvalType?: 'HUMAN' | 'AUTOMATED_TEST' | 'SYSTEM';
       interactive?: boolean;
-      confirmation?: HumanApprovalConfirmation;
+      challengeId?: string;
+      challengeNonce?: string;
       actorId?: string;
       actorDisplayName?: string;
       approvalSource?: string;
@@ -790,22 +940,61 @@ export class ProductionOrchestrator {
       throw new ProductionSafetyError(`Cannot reject shot "${shotId}": No media evidence recorded.`);
     }
 
-    const hasValidHumanConfirmation =
-      options?.confirmation?.__brand === 'TrustedHumanApprovalConfirmation' &&
-      options?.confirmation?.statement === 'REJECT' &&
-      options?.interactive === true;
-
     let approvalType = options?.approvalType;
     if (!approvalType) {
-      approvalType = hasValidHumanConfirmation ? 'HUMAN' : 'SYSTEM';
+      approvalType = (options?.challengeId && options?.interactive) ? 'HUMAN' : 'SYSTEM';
     }
 
     if (approvalType === 'HUMAN') {
-      if (!hasValidHumanConfirmation) {
+      if (!options?.challengeId || !options?.challengeNonce) {
         throw new ProductionSafetyError(
-          `Cannot record rejection approvalType="HUMAN" without a trusted HumanApprovalConfirmation and an interactive session (interactive=true).`
+          `Cannot record rejection approvalType="HUMAN" without an explicit rejection challenge and nonce.`
         );
       }
+      if (options?.interactive !== true) {
+        throw new ProductionSafetyError(
+          `Cannot record rejection approvalType="HUMAN" without an interactive session (interactive=true).`
+        );
+      }
+      const challenge = run.approvalChallenges?.[options.challengeId];
+      if (!challenge) {
+        throw new ProductionSafetyError(
+          `Rejection challenge "${options.challengeId}" not found for run "${runId}".`
+        );
+      }
+      if (challenge.nonce !== options.challengeNonce) {
+        throw new ProductionSafetyError(
+          `Rejection challenge nonce mismatch for challenge "${options.challengeId}".`
+        );
+      }
+      if (challenge.approvalAction !== 'REJECT') {
+        throw new ProductionSafetyError(
+          `Challenge "${options.challengeId}" is for action "${challenge.approvalAction}", not "REJECT".`
+        );
+      }
+      if (challenge.runId !== runId || challenge.projectId !== projectId || challenge.shotId !== shotId) {
+        throw new ProductionSafetyError(
+          `Rejection challenge "${options.challengeId}" does not match target run/shot (${challenge.shotId} !== ${shotId}).`
+        );
+      }
+      if (challenge.consumedAt !== null) {
+        throw new ProductionSafetyError(
+          `Rejection challenge "${options.challengeId}" has already been consumed at ${challenge.consumedAt}. Reused challenges are forbidden.`
+        );
+      }
+      const now = new Date();
+      if (now.getTime() > new Date(challenge.expiresAt).getTime()) {
+        throw new ProductionSafetyError(
+          `Rejection challenge "${options.challengeId}" expired at ${challenge.expiresAt}.`
+        );
+      }
+      if (challenge.mediaSha256 !== media.sha256) {
+        throw new ProductionSafetyError(
+          `Rejection challenge media SHA-256 does not match recorded media SHA-256.`
+        );
+      }
+      challenge.consumedAt = now.toISOString();
+      await this.evidenceStore.saveApprovalChallenges(projectId, runId, run.approvalChallenges);
     }
 
     sm.recordApprovalEvidence({
@@ -815,6 +1004,8 @@ export class ProductionOrchestrator {
       status: 'REJECTED',
       approvalType,
       interactive: options?.interactive ?? false,
+      challengeId: options?.challengeId,
+      challengeNonce: options?.challengeNonce,
       actorId: options?.actorId,
       actorDisplayName: options?.actorDisplayName,
       approvalSource: options?.approvalSource,
@@ -829,8 +1020,10 @@ export class ProductionOrchestrator {
 
     sm.setResumeMetadata({
       canResume: true,
-      blockedReason: `Shot "${shotId}" was rejected: "${reason}". Retake or new generation required.`,
-      recommendedCommand: `studio production resume ${runId}`,
+      targetShotId: shotId,
+      nextAction: `Candidate shot "${shotId}" was rejected: ${reason}. Retake or re-generation required.`,
+      recommendedCommand: `studio video retake ${projectId} ${shotId} --reason "${reason}"`,
+      blockedReason: `Shot "${shotId}" rejected: ${reason}`,
     });
 
     await this.repository.save(sm.getRun());

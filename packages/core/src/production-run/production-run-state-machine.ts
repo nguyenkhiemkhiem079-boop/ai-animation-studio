@@ -5,6 +5,7 @@ import {
   ProductionMediaEvidence,
   ProductionQAEvidence,
   ProductionApprovalEvidence,
+  ProductionApprovalChallenge,
   MasterProductionEvidence,
   ResumeMetadata,
 } from '../domain/production-run.js';
@@ -98,6 +99,25 @@ export class ProductionRunStateMachine {
       this.run.mediaEvidence[evidence.shotId].approvalStatus = evidence.status;
     }
     this.run.updatedAt = new Date().toISOString();
+  }
+
+  public recordApprovalChallenge(challenge: ProductionApprovalChallenge): void {
+    if (!this.run.approvalChallenges) {
+      this.run.approvalChallenges = {};
+    }
+    this.run.approvalChallenges[challenge.challengeId] = challenge;
+    this.run.updatedAt = new Date().toISOString();
+  }
+
+  public invalidateApprovalChallengesForShot(shotId: string): void {
+    if (!this.run.approvalChallenges) return;
+    const now = new Date().toISOString();
+    for (const ch of Object.values(this.run.approvalChallenges)) {
+      if (ch.shotId === shotId && ch.consumedAt === null) {
+        ch.consumedAt = now;
+      }
+    }
+    this.run.updatedAt = now;
   }
 
   public recordMasterEvidence(evidence: MasterProductionEvidence): void {

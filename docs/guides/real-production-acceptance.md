@@ -150,10 +150,15 @@ If the candidate meets production standards, grant human approval:
 studio production approve <runId> SHOT_01 --human --actor "Lead Director" --notes "Cinematography and acting approved"
 ```
 
-**Anti-Spoofing & Checksum Binding Rules**:
-1. Non-interactive scripts and CI runners cannot pass `--human` without operator confirmation; automated test runs record `AUTOMATED_TEST`.
-2. The approval record binds cryptographically to the exact media SHA-256 and Visual QA report ID.
-3. **If media changes on disk after approval**, the previous approval is automatically **INVALIDATED**. Re-QA and re-approval are required.
+**Approval Challenge Ceremony & Anti-Spoofing Rules**:
+1. When `--human` is invoked in an interactive terminal, the orchestrator generates a single-use, time-bounded **approval challenge** cryptographically bound to `(runId, projectId, shotId, candidateAssetId, mediaSha256, qaReportId)`.
+2. The CLI displays the candidate asset details, media SHA-256, QA report ID, and a random challenge nonce (e.g. `B9C8E7F01234`), prompting the operator:
+   ```
+   Type "APPROVE <nonce>" to confirm human approval:
+   ```
+3. The orchestrator strictly validates that the challenge matches the current shot, unexpired, unused, and matches the exact current physical media disk SHA-256 and QA report ID before marking the challenge consumed.
+4. Programmatic calls or non-interactive scripts setting boolean `interactive=true` or passing forged confirmation objects are blocked; automated test runs record `AUTOMATED_TEST`.
+5. **If media changes on disk or is re-imported after challenge issuance or approval**, previous challenges and approvals are automatically **INVALIDATED**. Re-QA and re-approval are required.
 
 To reject a shot and trigger a retake:
 ```bash
@@ -216,7 +221,7 @@ Validate the acceptance bundle independently:
 studio production verify <runId>
 ```
 
-The `acceptance-manifest.json` contains cryptographic SHA-256 digests of all 7 evidence files. Any manual tampering with evidence files causes immediate validation failure.
+The `acceptance-manifest.json` contains cryptographic SHA-256 digests of all 7 evidence files. This integrity checksum verification guarantees detection of accidental or subsequent modification of bundled files when the manifest is authoritative. (Integrity checksums provide tamper-evidence against file tampering, while an entity with full write access to regenerate the entire directory could recompute hashes; asymmetric digital signing can be added if external third-party non-repudiation is required).
 
 ---
 

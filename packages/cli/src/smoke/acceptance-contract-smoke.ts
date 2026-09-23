@@ -13,7 +13,6 @@ import {
   ProductionAcceptanceBundle,
   ProductionMasterVerifier,
   ProductionSafetyError,
-  createTrustedHumanConfirmation,
 } from '@ai-studio/core';
 
 export async function runAcceptanceContractSmoke(): Promise<number> {
@@ -121,14 +120,12 @@ export async function runAcceptanceContractSmoke(): Promise<number> {
     throw new Error('Contract Violation: Scripted unconfirmed HUMAN approval must be blocked.');
   }
 
-  // Trusted human approval
-  const confirmation = createTrustedHumanConfirmation({
-    confirmedBy: 'Director',
-    statement: 'APPROVE',
-  });
+  // Trusted human approval via explicit challenge ceremony
+  const challenge = await orchestrator.issueApprovalChallenge(projectId, runId, 'SHOT_01', 'APPROVE');
   const approvedRun = await orchestrator.approveShot(projectId, runId, 'SHOT_01', 'Director', undefined, {
     approvalType: 'HUMAN',
-    confirmation,
+    challengeId: challenge.challengeId,
+    challengeNonce: challenge.nonce,
     interactive: true,
     actorDisplayName: 'Lead Director (Smoke Operator)',
   });
