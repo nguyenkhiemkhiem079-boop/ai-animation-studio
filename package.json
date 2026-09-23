@@ -26,6 +26,7 @@
     "smoke:production": "tsx packages/cli/src/index.ts smoke production",
     "smoke:production-live": "tsx packages/cli/src/index.ts smoke production-live",
     "smoke:acceptance-contract": "tsx packages/cli/src/index.ts smoke acceptance-contract",
+    "smoke:pilot-rehearsal": "tsx packages/cli/src/index.ts smoke pilot-rehearsal",
     "studio": "tsx packages/cli/src/index.ts",
     "clean": "npm run --workspaces --if-present clean"
   },

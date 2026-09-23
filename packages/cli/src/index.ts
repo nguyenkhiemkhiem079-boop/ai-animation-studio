@@ -216,8 +216,12 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const { runAcceptanceContractSmoke } = await import('./smoke/acceptance-contract-smoke.js');
         await runAcceptanceContractSmoke();
         return 0;
+      } else if (subCommand === 'pilot-rehearsal') {
+        const { runPilotRehearsalSmoke } = await import('./smoke/pilot-rehearsal-smoke.js');
+        await runPilotRehearsalSmoke();
+        return 0;
       } else {
-        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow, visual-qa, visual-qa-live, production, production-live, acceptance-contract`);
+        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow, visual-qa, visual-qa-live, production, production-live, acceptance-contract, pilot-rehearsal`);
         return 1;
       }
     }
@@ -1325,12 +1329,13 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       }
 
       if (subCommand === 'pilot') {
-        const storyFile = args[2];
-        if (!storyFile || !syncFs.existsSync(storyFile)) {
+        const rawStoryFile = args[2];
+        const cleanStoryFile = rawStoryFile ? path.resolve(rawStoryFile.replace(/^["']|["']$/g, '').trim()) : '';
+        if (!cleanStoryFile || !syncFs.existsSync(cleanStoryFile)) {
           console.error('Error: Valid story file is required. Usage: studio production pilot <storyFile> [--project <id>] [--series <id>]');
           return 1;
         }
-        const rawScript = syncFs.readFileSync(storyFile, 'utf-8');
+        const rawScript = syncFs.readFileSync(cleanStoryFile, 'utf-8');
         const projIdx = args.indexOf('--project');
         const serIdx = args.indexOf('--series');
         const targetProjId = projIdx !== -1 && args[projIdx + 1] ? args[projIdx + 1] : `proj_pilot_${Date.now()}`;
@@ -1672,12 +1677,14 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       if (subCommand === 'import') {
         const targetRunId = args[2];
         const targetShotId = args[3];
-        const videoPath = args[4];
+        const rawVideoPath = args[4];
 
-        if (!targetRunId || !targetShotId || !videoPath) {
+        if (!targetRunId || !targetShotId || !rawVideoPath) {
           console.error('Error: Required arguments missing. Usage: studio production import <runId> <shotId> <videoPath> [--source <source>] [--real-external]');
           return 1;
         }
+
+        const videoPath = path.resolve(rawVideoPath.replace(/^["']|["']$/g, '').trim());
 
         const runRecord = await findRunById(targetRunId);
         if (!runRecord) {
