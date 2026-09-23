@@ -335,6 +335,8 @@ export const ProductionRunSchema = z.object({
   seriesId: z.string().min(1),
   status: ProductionRunStatusSchema.default('CREATED'),
   mode: z.enum(['MOCK', 'LOCAL', 'PRODUCTION']).default('PRODUCTION'),
+  pilotMode: z.boolean().default(false),
+  requiredShotCount: z.number().int().positive().optional(),
   createdAt: z.string().datetime().default(() => new Date().toISOString()),
   updatedAt: z.string().datetime().default(() => new Date().toISOString()),
   startedAt: z.string().datetime().optional(),

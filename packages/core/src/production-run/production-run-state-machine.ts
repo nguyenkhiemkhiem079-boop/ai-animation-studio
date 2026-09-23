@@ -120,6 +120,18 @@ export class ProductionRunStateMachine {
     this.run.updatedAt = now;
   }
 
+  public invalidateApprovalForShot(shotId: string): void {
+    delete this.run.approvalEvidence[shotId];
+    if (this.run.mediaEvidence[shotId]) {
+      this.run.mediaEvidence[shotId].approvalStatus = 'PENDING';
+    }
+    this.run.completedShotIds = this.run.completedShotIds.filter((id) => id !== shotId);
+    if (!this.run.pendingShotIds.includes(shotId)) {
+      this.run.pendingShotIds.push(shotId);
+    }
+    this.run.updatedAt = new Date().toISOString();
+  }
+
   public recordMasterEvidence(evidence: MasterProductionEvidence): void {
     this.run.masterEvidence = evidence;
     this.run.updatedAt = new Date().toISOString();

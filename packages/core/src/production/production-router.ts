@@ -75,7 +75,7 @@ export class ProductionRouter {
       }
     }
 
-    const isDeterministic =
+    let isDeterministic =
       executionRoute === 'deterministic_hyperframes' ||
       executionRoute === 'deterministic_rigged_2d';
 
@@ -95,6 +95,8 @@ export class ProductionRouter {
       estimatedCostUsd = 0.0;
       estimatedLatencyMs = 60000;
       integrationMode = 'ASSISTED';
+      executionRoute = 'generative_full_video';
+      isDeterministic = false;
       userActionRequired = true;
       rationale = 'Routed to Google Flow Assisted production: external creative workspace with human handoff.';
     } else if (isDeterministic) {

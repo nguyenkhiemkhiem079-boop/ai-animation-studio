@@ -396,5 +396,30 @@ document.getElementById('btn-dl-manifest')?.addEventListener('click', () => {
   triggerDownload('video_render_manifest.json', JSON.stringify(manifestData, null, 2), 'application/json');
 });
 
+// 9. Production Pilot Dashboard State
+function updateProductionPanel(pilotData) {
+  if (!pilotData) return;
+  const statusBadge = document.getElementById('prod-run-status-badge');
+  const envBadge = document.getElementById('prod-run-env-badge');
+  const runIdEl = document.getElementById('prod-run-id');
+  const nextActionEl = document.getElementById('prod-next-action');
+  const resumeCmdEl = document.getElementById('prod-resume-cmd');
+  const masterStatusBadge = document.getElementById('prod-master-status-badge');
+
+  if (statusBadge && pilotData.status) statusBadge.textContent = pilotData.status;
+  if (envBadge && pilotData.isRealProduction !== undefined) {
+    envBadge.textContent = pilotData.isRealProduction ? 'REAL_PRODUCTION' : 'OFFLINE_REHEARSAL';
+  }
+  if (runIdEl && pilotData.runId) runIdEl.textContent = pilotData.runId;
+  if (nextActionEl && pilotData.nextAction) nextActionEl.textContent = pilotData.nextAction;
+  if (resumeCmdEl && pilotData.recommendedCommand) resumeCmdEl.textContent = pilotData.recommendedCommand;
+  if (masterStatusBadge && pilotData.masterStatus) {
+    masterStatusBadge.textContent = pilotData.masterStatus === 'MASTER_PRODUCTION_VERIFIED'
+      ? 'MASTER_PRODUCTION_VERIFIED 🏆'
+      : 'MASTER PRODUCTION: NOT VERIFIED (OFFLINE_REHEARSAL_VERIFIED)';
+  }
+}
+
 // Initialize UI
 updatePlaybackUI();
+

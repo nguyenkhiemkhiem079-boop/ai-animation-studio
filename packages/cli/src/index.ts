@@ -89,6 +89,7 @@ import {
   ProductionMasterVerifier,
   LiveProviderPreflight,
   ProductionAcceptanceBundle,
+  ProductionNextActionResolver,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -1323,6 +1324,66 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return 0;
       }
 
+      if (subCommand === 'pilot') {
+        const storyFile = args[2];
+        if (!storyFile || !syncFs.existsSync(storyFile)) {
+          console.error('Error: Valid story file is required. Usage: studio production pilot <storyFile> [--project <id>] [--series <id>]');
+          return 1;
+        }
+        const rawScript = syncFs.readFileSync(storyFile, 'utf-8');
+        const projIdx = args.indexOf('--project');
+        const serIdx = args.indexOf('--series');
+        const targetProjId = projIdx !== -1 && args[projIdx + 1] ? args[projIdx + 1] : `proj_pilot_${Date.now()}`;
+        const targetSeriesId = serIdx !== -1 && args[serIdx + 1] ? args[serIdx + 1] : `series_pilot`;
+
+        console.log(`\n==============================================================`);
+        console.log(`🎬 INITIALIZING CANONICAL 1-SHOT PRODUCTION PILOT`);
+        console.log(`==============================================================`);
+        console.log(`Project ID     : ${targetProjId}`);
+        console.log(`Series ID      : ${targetSeriesId}`);
+        console.log(`Required Shots : 1 (Minimal Genuine Production Pilot)`);
+
+        const assetRegistry = new FileSystemAssetRegistry(storage);
+        const gemini = new GeminiProvider();
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry, gemini.isConfigured() ? gemini : undefined);
+
+        const createdRun = await orchestrator.createRun({
+          projectId: targetProjId,
+          seriesId: targetSeriesId,
+          rawScript,
+          mode: 'PRODUCTION',
+          pilotMode: true,
+          requiredShotCount: 1,
+        });
+
+        console.log(`\n🚀 Orchestrating canonical pilot through story planning and handoff...`);
+        const executedRun = await orchestrator.execute(targetProjId, createdRun.runId);
+        const nextActionInfo = await ProductionNextActionResolver.resolve(executedRun, storage);
+
+        console.log(`\n==============================================================`);
+        console.log(`REAL PRODUCTION PILOT`);
+        console.log(`==============================================================\n`);
+        console.log(`Run                  : ${executedRun.runId}`);
+        console.log(`Project              : ${executedRun.projectId}`);
+        console.log(`Series               : ${executedRun.seriesId}`);
+        console.log(`Required Shots       : 1\n`);
+
+        for (const s of nextActionInfo.stepMatrix) {
+          const paddedName = `[${s.stepIndex}] ${s.name}`.padEnd(21, ' ');
+          console.log(`${paddedName}: ${s.status}${s.details ? ` (${s.details})` : ''}`);
+        }
+
+        console.log(`\nNEXT ACTION:`);
+        console.log(nextActionInfo.nextAction);
+        if (nextActionInfo.handoffPath) {
+          console.log(`Handoff Directory    : ${nextActionInfo.handoffPath}`);
+        }
+        console.log(`\nRECOMMENDED COMMAND:`);
+        console.log(nextActionInfo.recommendedCommand);
+        console.log(`==============================================================\n`);
+        return 0;
+      }
+
       const findRunById = async (targetRunId: string) => {
         const repo = new ProductionRunRepository(storage);
         // Search across known projects directory
@@ -1541,59 +1602,29 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           return 1;
         }
 
-        const evidenceStore = new EvidenceStore(storage);
-        const provs = await evidenceStore.loadProviderEvidence(runRecord.projectId, targetRunId);
-        const media = await evidenceStore.loadMediaEvidence(runRecord.projectId, targetRunId);
-        const qas = await evidenceStore.loadQAEvidence(runRecord.projectId, targetRunId);
-        const apps = await evidenceStore.loadApprovalEvidence(runRecord.projectId, targetRunId);
-        const master = await evidenceStore.loadMasterEvidence(runRecord.projectId, targetRunId);
+        const nextActionInfo = await ProductionNextActionResolver.resolve(runRecord, storage);
 
-        // Check continuity report
-        const continuityPath = `.studio/production/${runRecord.projectId}/${targetRunId}/continuity_report.json`;
-        let continuityStatus = 'PENDING';
-        if (await storage.exists(continuityPath)) {
-          const cont = await storage.readJson<any>(continuityPath);
-          continuityStatus = cont.overallPassed ? 'VERIFIED' : 'FAILED';
+        console.log(`\n==============================================================`);
+        console.log(runRecord.pilotMode ? `REAL PRODUCTION PILOT` : `PRODUCTION RUN STATUS`);
+        console.log(`==============================================================\n`);
+        console.log(`Run                  : ${runRecord.runId}`);
+        console.log(`Project              : ${runRecord.projectId}`);
+        console.log(`Series               : ${runRecord.seriesId}`);
+        console.log(`Required Shots       : ${runRecord.requiredShotCount ?? (runRecord.completedShotIds.length + runRecord.pendingShotIds.length || 1)}\n`);
+
+        for (const s of nextActionInfo.stepMatrix) {
+          const paddedName = `[${s.stepIndex}] ${s.name}`.padEnd(21, ' ');
+          console.log(`${paddedName}: ${s.status}${s.details ? ` (${s.details})` : ''}`);
         }
 
-        // Check acceptance bundle
-        const acceptanceDir = `.studio/production/${runRecord.projectId}/${targetRunId}/acceptance`;
-        let acceptanceStatus = 'NOT VERIFIED';
-        if (await storage.exists(`${acceptanceDir}/acceptance-manifest.json`)) {
-          const val = await ProductionAcceptanceBundle.validate(acceptanceDir, storage);
-          acceptanceStatus = val.valid ? 'VERIFIED' : 'FAILED';
+        console.log(`\nNEXT ACTION:`);
+        console.log(nextActionInfo.nextAction);
+        if (nextActionInfo.handoffPath) {
+          console.log(`Handoff Directory    : ${nextActionInfo.handoffPath}`);
         }
-
-        const totalPlanned = runRecord.completedShotIds.length + runRecord.pendingShotIds.length;
-        const totalShots = totalPlanned > 0 ? totalPlanned : Math.max(Object.keys(media).length, 1);
-
-        const realFlowShots = Object.values(media).filter((m) => m.generationSource === 'GOOGLE_FLOW_REAL').length;
-        const liveProvs = provs.filter((p) => p.providerTrust === 'LIVE_EXTERNAL' && p.status === 'SUCCESS');
-        const liveProviderStatus = liveProvs.length > 0 ? 'VERIFIED' : 'NOT VERIFIED';
-
-        const humanApprovals = Object.values(apps).filter((a) => a.approvalType === 'HUMAN' && a.status === 'APPROVED').length;
-        const passedQas = Object.values(qas).filter((q) => q.passed && q.overallStatus !== 'FAIL').length;
-        const masterStatus = master?.verificationStatus ?? 'NOT VERIFIED';
-
-        console.log(`\n==================================================`);
-        console.log(`PRODUCTION ACCEPTANCE STATUS: ${targetRunId}`);
-        console.log(`==================================================`);
-        console.log(`RUN                 : ${runRecord.status} (Stage: ${runRecord.currentStage}, Mode: ${runRecord.mode})`);
-        console.log(`LIVE PROVIDER       : ${liveProviderStatus}`);
-        console.log(`REAL FLOW MEDIA     : ${realFlowShots}/${totalShots} VERIFIED`);
-        console.log(`VISUAL QA           : ${passedQas}/${totalShots} PASS`);
-        console.log(`HUMAN APPROVAL      : ${humanApprovals}/${totalShots} VERIFIED`);
-        console.log(`CONTINUITY          : ${continuityStatus}`);
-        console.log(`MASTER              : ${masterStatus}`);
-        console.log(`ACCEPTANCE BUNDLE   : ${acceptanceStatus}`);
-        console.log(`--------------------------------------------------`);
-        if (runRecord.resumeMetadata.nextAction) {
-          console.log(`NEXT ACTION: ${runRecord.resumeMetadata.nextAction}`);
-        }
-        if (runRecord.resumeMetadata.recommendedCommand) {
-          console.log(`RECOMMENDED: ${runRecord.resumeMetadata.recommendedCommand}`);
-        }
-        console.log(`==================================================\n`);
+        console.log(`\nRECOMMENDED COMMAND:`);
+        console.log(nextActionInfo.recommendedCommand);
+        console.log(`==============================================================\n`);
         return 0;
       }
 

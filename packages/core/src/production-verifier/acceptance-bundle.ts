@@ -55,6 +55,7 @@ export class ProductionAcceptanceBundle {
     'media-evidence.json',
     'qa-evidence.json',
     'approval-evidence.json',
+    'approval-challenges.json',
     'continuity-evidence.json',
     'master-evidence.json',
   ] as const;
@@ -80,18 +81,30 @@ export class ProductionAcceptanceBundle {
     const evidenceStore = new EvidenceStore(storage);
     const acceptanceDir = `.studio/production/${projectId}/${runId}/acceptance`;
 
+    // Secret sanitization helper ensuring zero secret leakage in acceptance bundles
+    const sanitize = (raw: any): any => {
+      const str = JSON.stringify(raw);
+      const cleaned = str
+        .replace(/AIzaSy[A-Za-z0-9_-]{33}/g, '[REDACTED_GEMINI_KEY]')
+        .replace(/Bearer\s+[A-Za-z0-9_\-\.]+/gi, 'Bearer [REDACTED_TOKEN]')
+        .replace(/"apiKey":\s*"[^"]*"/gi, '"apiKey": "[REDACTED]"')
+        .replace(/"GEMINI_API_KEY":\s*"[^"]*"/gi, '"GEMINI_API_KEY": "[REDACTED]"');
+      return JSON.parse(cleaned);
+    };
+
     // 1. Gather all evidence
-    const providerEv = await evidenceStore.loadProviderEvidence(projectId, runId);
-    const mediaEv = await evidenceStore.loadMediaEvidence(projectId, runId);
-    const qaEv = await evidenceStore.loadQAEvidence(projectId, runId);
-    const approvalEv = await evidenceStore.loadApprovalEvidence(projectId, runId);
-    const masterEv = (await evidenceStore.loadMasterEvidence(projectId, runId)) ?? masterEvidence;
+    const providerEv = sanitize(await evidenceStore.loadProviderEvidence(projectId, runId));
+    const mediaEv = sanitize(await evidenceStore.loadMediaEvidence(projectId, runId));
+    const qaEv = sanitize(await evidenceStore.loadQAEvidence(projectId, runId));
+    const approvalEv = sanitize(await evidenceStore.loadApprovalEvidence(projectId, runId));
+    const challengesEv = sanitize(await evidenceStore.loadApprovalChallenges(projectId, runId));
+    const masterEv = sanitize((await evidenceStore.loadMasterEvidence(projectId, runId)) ?? masterEvidence);
 
     // Continuity report
     const continuityPath = `.studio/production/${projectId}/${runId}/continuity_report.json`;
     let continuityEv: any = {};
     if (await storage.exists(continuityPath)) {
-      continuityEv = await storage.readJson(continuityPath);
+      continuityEv = sanitize(await storage.readJson(continuityPath));
     }
 
     const metadata: AcceptanceBundleMetadata = {
@@ -101,7 +114,7 @@ export class ProductionAcceptanceBundle {
       seriesId: run.seriesId,
       createdAt: run.createdAt,
       completedAt: new Date().toISOString(),
-      providerModelIds: providerModelIds.length > 0 ? providerModelIds : providerEv.map((p) => p.actualModel),
+      providerModelIds: providerModelIds.length > 0 ? providerModelIds : (providerEv as any[]).map((p) => p.actualModel),
       requiredShotIds,
       finalMasterChecksum: masterEvidence.masterSha256,
       verificationStatus: masterEvidence.verificationStatus,
@@ -116,6 +129,7 @@ export class ProductionAcceptanceBundle {
       'media-evidence.json': JSON.stringify(mediaEv, null, 2),
       'qa-evidence.json': JSON.stringify(qaEv, null, 2),
       'approval-evidence.json': JSON.stringify(approvalEv, null, 2),
+      'approval-challenges.json': JSON.stringify(challengesEv, null, 2),
       'continuity-evidence.json': JSON.stringify(continuityEv, null, 2),
       'master-evidence.json': JSON.stringify(masterEv, null, 2),
     };

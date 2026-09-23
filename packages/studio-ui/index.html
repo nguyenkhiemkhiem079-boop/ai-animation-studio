@@ -631,54 +631,68 @@
       <div class="production-panel-layout">
         <div class="production-header-card">
           <div class="prod-card-header">
-            <h3>Active Production Run Execution</h3>
-            <span class="badge" id="prod-run-status-badge">READY</span>
+            <h3>Canonical 1-Shot Production Pilot & Evidence Monitor</h3>
+            <div class="prod-badge-group">
+              <span class="badge" id="prod-run-mode-badge">1-SHOT PILOT</span>
+              <span class="badge" id="prod-run-env-badge">OFFLINE_REHEARSAL</span>
+              <span class="badge" id="prod-run-status-badge">WAITING_FOR_IMPORT</span>
+            </div>
           </div>
           <div class="prod-meta-row">
-            <div><strong>Run ID:</strong> <span id="prod-run-id">run_pilot_smoke</span></div>
-            <div><strong>Project:</strong> <span id="prod-project-id">proj_pilot_smoke</span></div>
-            <div><strong>Stage:</strong> <span id="prod-current-stage">SHOT_GENERATION</span></div>
-            <div><strong>Active Shot:</strong> <span id="prod-active-shot">SHOT_SCENE_01_SH01</span></div>
+            <div><strong>Run ID:</strong> <span id="prod-run-id">run_pilot_canonical</span></div>
+            <div><strong>Project:</strong> <span id="prod-project-id">proj_pilot_01</span></div>
+            <div><strong>Series:</strong> <span id="prod-series-id">series_pilot_01</span></div>
+            <div><strong>Required Shots:</strong> <span id="prod-required-shots">1 (Pilot Mode)</span></div>
+            <div><strong>Current Stage:</strong> <span id="prod-current-stage">NEEDS_USER_ACTION</span></div>
+            <div><strong>Active Shot:</strong> <span id="prod-active-shot">SHOT_01</span></div>
           </div>
-          <div class="prod-resume-box" id="prod-resume-box">
+
+          <div class="prod-handoff-box" id="prod-handoff-box" style="margin-top: 12px; padding: 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 6px;">
+            <strong>📦 Google Flow Handoff Package:</strong>
+            <p style="margin: 4px 0; font-family: monospace; font-size: 13px;" id="prod-handoff-path">.studio/production/proj_pilot_01/run_pilot_canonical/handoff/SHOT_01/</p>
+            <div style="font-size: 12px; color: #94a3b8;">Expected Download: <code id="prod-expected-filename">SHOT_01_FLOW_REAL.mp4</code></div>
+          </div>
+
+          <div class="prod-resume-box" id="prod-resume-box" style="margin-top: 12px;">
             <strong>Next Recommended Action:</strong>
-            <p id="prod-next-action">Inspect verified shot candidate or approve into Canon.</p>
-            <code id="prod-resume-cmd">studio production run run_pilot_smoke</code>
+            <p id="prod-next-action">Generate clip in Google Flow using handoff package, then import downloaded MP4.</p>
+            <code id="prod-resume-cmd">studio production import run_pilot_canonical SHOT_01 SHOT_01_FLOW_REAL.mp4 --source google-flow --real-external</code>
           </div>
         </div>
 
         <div class="production-evidence-grid">
           <div class="evidence-box">
-            <h4>📡 Provider Execution Evidence (Sanitized)</h4>
+            <h4>📡 Provider Execution Evidence (Single Gemini Key)</h4>
             <div id="prod-provider-evidence-list">
               <div class="evidence-item">
                 <span class="provider-pill">Google Gemini</span>
                 <span class="model-pill">gemini-3.5-flash</span>
-                <span class="status-pill status-success">SUCCESS</span>
-                <div class="item-detail">Latency: 720ms | Tokens: In 42 / Out 180 | Secrets: REDACTED ✅</div>
+                <span class="status-pill status-success">READY</span>
+                <div class="item-detail">Trust: <code>LIVE_EXTERNAL</code> (Preflight Verified) | API: Single Unified Key</div>
+                <div class="item-detail">Quota: Protected | Live Mode: Manual Operator Opt-in</div>
               </div>
             </div>
           </div>
 
           <div class="evidence-box">
-            <h4>🎞️ Authoritative Media & Artifact Verification</h4>
+            <h4>🎞️ Authoritative Media & Provenance Verification</h4>
             <div id="prod-media-evidence-list">
               <div class="evidence-item">
-                <strong>SHOT_SCENE_01_SH01</strong> (HyperFrames MP4)
-                <div class="item-detail">1280x720 @ 24fps • 4606 bytes • h264</div>
-                <div class="item-detail">SHA256: <code>927573f8850e...</code> • Leakage: ZERO LEAK ✅</div>
-                <span class="status-pill status-approved">APPROVED CANON</span>
+                <strong>SHOT_01</strong> (<span id="prod-media-source-label">GOOGLE_FLOW_REAL</span>)
+                <div class="item-detail">FFprobe: Playable Video Stream Required</div>
+                <div class="item-detail">SHA-256 Binding: Verified against physical disk</div>
+                <span class="status-pill status-approved" id="prod-media-status-pill">AWAITING IMPORT</span>
               </div>
             </div>
           </div>
 
           <div class="evidence-box">
-            <h4>🔍 Visual Semantic QA & Candidate Evaluation</h4>
+            <h4>🔍 Visual Semantic QA (8 Coverage Dimensions)</h4>
             <div id="prod-qa-evidence-list">
               <div class="evidence-item">
-                <strong>vis_qa_SHOT_01</strong> • Status: <span class="status-pill status-success">PASS</span>
-                <div class="item-detail">Identity: 95% • Spatial: 95% • Defects: 0 Critical</div>
-                <div class="item-detail">Coverage: Artifact Integrity & Spatial Format Verified</div>
+                <strong>vis_qa_SHOT_01</strong> • Status: <span class="status-pill status-success">PENDING</span>
+                <div class="item-detail">8 Dimensions: Integrity, Identity, Spatial, Semantic Action, Temporal, Defects, Framing, Continuity</div>
+                <div class="item-detail">Provider Quota Safeguard: Safe transition to WAITING_FOR_PROVIDER on 429</div>
               </div>
             </div>
           </div>
@@ -687,11 +701,11 @@
             <h4>🏆 Master Production Delivery Gate</h4>
             <div id="prod-master-evidence-box">
               <div class="master-gate-status">
-                <span class="master-verified-badge">OFFLINE_REHEARSAL_VERIFIED 🧪</span>
+                <span class="master-verified-badge" id="prod-master-status-badge">MASTER PRODUCTION: NOT VERIFIED (OFFLINE_REHEARSAL_VERIFIED)</span>
               </div>
               <div class="item-detail">Master MP4: <code>.studio/production/.../master.mp4</code></div>
-              <div class="item-detail">Playable Stream: Verified via FFprobe</div>
-              <div class="item-detail">Status: Rehearsal Verified (Production Master Gate Pending Live Acceptance)</div>
+              <div class="item-detail">Acceptance Bundle: <code>acceptance-manifest.json</code> (SHA-256 Checksum Verified)</div>
+              <div class="item-detail">Truth Rule: MASTER_PRODUCTION_VERIFIED requires genuine live run</div>
             </div>
           </div>
         </div>

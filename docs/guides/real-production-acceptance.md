@@ -7,10 +7,10 @@ This guide defines the operator workflow for achieving genuine **`MASTER_PRODUCT
 The production acceptance harness enforces strict **semantic truth**, cryptographic evidence binding, and anti-spoofing constraints. Under these rules:
 - **Offline test doubles and mocks are rejected** for production acceptance.
 - **Simulated Flow media (`SIMULATED_FLOW`) is rejected** for production master verification.
-- **Real Google Flow media requires explicit operator provenance acknowledgement** (`--source google-flow --real-external`).
-- **Human approval is strictly mandatory** for every shot; automated scripts cannot spoof `HUMAN` approval.
+- **Human approval is strictly mandatory** for every shot; Studio `HUMAN` approval requires completion of the operator challenge ceremony.
+- **Operator Challenge Trust Boundary**: The operator challenge is an application-level confirmation boundary protecting against accidental, stale, mismatched, or replayed approvals. It is not cryptographic proof of physical human presence. Code with unrestricted access to the local Studio process/storage is outside this trust boundary.
 - **Media modifications invalidate previous approvals and QA** (cryptographic SHA-256 binding).
-- A durable **Acceptance Bundle** with a tamper-evident cryptographic manifest is generated and audited.
+- A durable **Acceptance Bundle** with SHA-256 file and manifest self-integrity checksum verification is generated and audited.
 
 ---
 

@@ -6,3 +6,4 @@ export * from './flow-result-importer.js';
 export * from './flow-qa-evaluator.js';
 export * from './flow-job-manager.js';
 export * from './flow-job-repository.js';
+export * from './flow-operator-handoff-builder.js';

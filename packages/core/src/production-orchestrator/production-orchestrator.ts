@@ -30,6 +30,7 @@ import { ProviderRegistry } from '../providers/index.js';
 import { HyperFramesCompositionCompiler } from '../hyperframes/composition-compiler.js';
 import { HyperFramesVideoBridge } from '../hyperframes/hyperframes-video-bridge.js';
 import { FlowJobManager } from '../flow/flow-job-manager.js';
+import { FlowOperatorHandoffBuilder } from '../flow/flow-operator-handoff-builder.js';
 import { TimelineAssembler } from '../timeline/timeline-assembler.js';
 import { RealAudioMixer } from '../audio/real-audio-mixer.js';
 import { ContinuityQAEvaluator } from '../qa/continuity-qa-evaluator.js';
@@ -42,6 +43,8 @@ export interface CreateProductionRunOptions {
   rawScript: string;
   mode?: 'MOCK' | 'LOCAL' | 'PRODUCTION';
   targetRunId?: string;
+  pilotMode?: boolean;
+  requiredShotCount?: number;
 }
 
 export class ProductionOrchestrator {
@@ -70,6 +73,8 @@ export class ProductionOrchestrator {
       seriesId: options.seriesId,
       status: 'CREATED',
       mode,
+      pilotMode: options.pilotMode ?? false,
+      requiredShotCount: options.requiredShotCount,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       currentStage: 'CREATED',
@@ -245,7 +250,14 @@ export class ProductionOrchestrator {
         DirectorQA.evaluateScene(plan.productionScene, plan.dependencyGraph);
         plannedShots.push(...plan.productionScene.shots);
       }
+      if (sm.getRun().pilotMode || sm.getRun().requiredShotCount === 1) {
+        plannedShots = plannedShots.slice(0, 1);
+      }
       await this.storage.writeJson(shotsPath, plannedShots);
+    }
+
+    if (sm.getRun().pilotMode || sm.getRun().requiredShotCount === 1) {
+      plannedShots = plannedShots.slice(0, 1);
     }
 
     const allShotIds = plannedShots.map((s) => s.id);
@@ -258,7 +270,9 @@ export class ProductionOrchestrator {
     const promptCompiler = new PromptCompiler();
     const benchmarkTracker = new ProviderBenchmarkTracker();
     const router = new ProductionRouter(providerRegistry, promptCompiler, benchmarkTracker);
-    const productionPlan = router.planProduction(projectId, sm.seriesId, plannedShots);
+    const productionPlan = router.planProduction(projectId, sm.seriesId, plannedShots, {
+      preferFlowAssisted: Boolean(sm.getRun().pilotMode),
+    });
 
     // 3. SHOT GENERATION & ASSET VERIFICATION
     sm.setStage('shot_generation');
@@ -276,7 +290,7 @@ export class ProductionOrchestrator {
       sm.setStage('generating_shot', shotId);
 
       // Route A: Deterministic HyperFrames
-      if (strat.isDeterministic || strat.executionRoute === 'deterministic_hyperframes') {
+      if (strat.integrationMode !== 'ASSISTED' && (strat.isDeterministic || strat.executionRoute === 'deterministic_hyperframes')) {
         const compiler = new HyperFramesCompositionCompiler();
         const composition = compiler.compile(targetShot);
 
@@ -348,6 +362,20 @@ export class ProductionOrchestrator {
         });
         await this.evidenceStore.saveQAEvidence(projectId, runId, sm.getRun().qaEvidence);
 
+        // Check for provider quota failure during visual QA
+        if (report.metadata?.providerFailure && (report.metadata.providerFailureReason === 'QUOTA_EXCEEDED' || report.metadata.providerFailureReason === 'RATE_LIMITED')) {
+          sm.transition('WAITING_FOR_PROVIDER', `Gemini quota exceeded during visual QA for shot "${shotId}"`);
+          sm.setResumeMetadata({
+            canResume: true,
+            targetShotId: shotId,
+            blockedReason: `Gemini visual QA quota exceeded (${report.metadata.providerFailureReason}).`,
+            nextAction: 'Wait for quota reset or update GEMINI_API_KEY, then resume.',
+            recommendedCommand: `studio production resume ${runId}`,
+          });
+          await this.repository.save(sm.getRun());
+          return sm.getRun();
+        }
+
         // Require Human Approval before timeline entry
         sm.transition('APPROVAL_REQUIRED', `Shot "${shotId}" requires human approval`);
         sm.setResumeMetadata({
@@ -362,8 +390,18 @@ export class ProductionOrchestrator {
 
       // Route B: Google Flow Assisted
       if (strat.integrationMode === 'ASSISTED' || strat.executionRoute === 'generative_full_video') {
+        const handoffBuilder = new FlowOperatorHandoffBuilder();
+        const handoff = await handoffBuilder.buildHandoff({
+          projectId,
+          runId,
+          seriesId: sm.seriesId,
+          sceneId: targetShot.sceneId,
+          shot: targetShot,
+          references: [],
+        });
+
         const flowManager = new FlowJobManager(this.assetRegistry);
-        const job = await flowManager.prepareFlowJob({
+        await flowManager.prepareFlowJob({
           projectId,
           seriesId: sm.seriesId,
           sceneId: targetShot.sceneId,
@@ -372,13 +410,13 @@ export class ProductionOrchestrator {
           references: [],
         });
 
-        sm.transition('NEEDS_USER_ACTION', `Flow package prepared for shot "${shotId}"`);
+        sm.transition('NEEDS_USER_ACTION', `Flow handoff package prepared for shot "${shotId}"`);
         sm.markShotBlocked(shotId);
         sm.setResumeMetadata({
           canResume: true,
           targetShotId: shotId,
-          nextAction: `Generate clip in Google Flow using package at "${job.packageDir}", then import MP4.`,
-          recommendedCommand: `studio production import ${runId} ${shotId} <path_to_downloaded_mp4>`,
+          nextAction: `Generate clip in Google Flow using package at "${handoff.handoffDir}", then import downloaded MP4 (${handoff.expectedFilename}).`,
+          recommendedCommand: `studio production import ${runId} ${shotId} <path_to_downloaded_mp4> --source google-flow --real-external`,
         });
         await this.repository.save(sm.getRun());
         return sm.getRun();
@@ -654,9 +692,25 @@ export class ProductionOrchestrator {
     });
     await this.evidenceStore.saveQAEvidence(projectId, runId, sm.getRun().qaEvidence);
 
-    // Any previous approval challenge for this shot is invalidated since media has changed
+    // Any previous approval and approval challenge for this shot is invalidated since media has changed
+    sm.invalidateApprovalForShot(shotId);
+    await this.evidenceStore.saveApprovalEvidence(projectId, runId, sm.getRun().approvalEvidence);
     sm.invalidateApprovalChallengesForShot(shotId);
     await this.evidenceStore.saveApprovalChallenges(projectId, runId, sm.getRun().approvalChallenges);
+
+    // Check for provider quota failure during visual QA
+    if (report.metadata?.providerFailure && (report.metadata.providerFailureReason === 'QUOTA_EXCEEDED' || report.metadata.providerFailureReason === 'RATE_LIMITED')) {
+      sm.transition('WAITING_FOR_PROVIDER', `Gemini quota exceeded during visual QA for shot "${shotId}"`);
+      sm.setResumeMetadata({
+        canResume: true,
+        targetShotId: shotId,
+        blockedReason: `Gemini visual QA quota exceeded (${report.metadata.providerFailureReason}).`,
+        nextAction: 'Wait for quota reset or update GEMINI_API_KEY, then resume.',
+        recommendedCommand: `studio production resume ${runId}`,
+      });
+      await this.repository.save(sm.getRun());
+      return sm.getRun();
+    }
 
     // Move to APPROVAL_REQUIRED
     sm.transition('APPROVAL_REQUIRED', `Imported shot "${shotId}" requires human approval`);
@@ -797,7 +851,11 @@ export class ProductionOrchestrator {
       );
     }
 
-    // Enforce human approval truth: prevent programmatic spoofing of HUMAN approval.
+    // Studio HUMAN approval requires completion of the operator challenge ceremony.
+    // The operator challenge is an application-level confirmation boundary protecting against
+    // accidental, stale, mismatched, or replayed approvals. It is not cryptographic proof of
+    // physical human presence; code with unrestricted access to the local Studio process/storage
+    // is outside this trust boundary.
     // Untrusted booleans alone (e.g. confirmedByOperator or interactive=true) cannot establish human trust boundary.
     // HUMAN approval strictly requires an issued, unexpired, unconsumed challenge verified against current media and QA.
     let approvalType = options?.approvalType;

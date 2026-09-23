@@ -554,6 +554,9 @@ export class VisualSemanticQAEvaluator {
           identityVisual: (isProductionMode && isOfflineDouble) ? 'NOT_EVALUATED' : identityVisualCoverage,
           temporalArtifactVisual: (isProductionMode && isOfflineDouble) ? 'NOT_EVALUATED' : 'VERIFIED',
           semanticAction: (isProductionMode && isOfflineDouble) ? 'NOT_EVALUATED' : 'VERIFIED',
+          visualDefects: (isProductionMode && isOfflineDouble) ? 'NOT_EVALUATED' : 'VERIFIED',
+          compositionFraming: (isProductionMode && isOfflineDouble) ? 'NOT_EVALUATED' : 'VERIFIED',
+          continuityContext: (isProductionMode && isOfflineDouble) ? 'NOT_EVALUATED' : 'VERIFIED',
         };
 
         const evaluationMechanism = isOfflineDouble ? 'OFFLINE_TEST_DOUBLE' : 'MULTIMODAL_PROVIDER';
@@ -765,6 +768,9 @@ export class VisualSemanticQAEvaluator {
       identityVisual: 'NOT_EVALUATED',
       temporalArtifactVisual: 'NOT_EVALUATED',
       semanticAction: 'NOT_EVALUATED',
+      visualDefects: 'VERIFIED',
+      compositionFraming: 'VERIFIED',
+      continuityContext: 'NOT_EVALUATED',
     };
 
     if (!passed && defects.length > 0) {

@@ -74,6 +74,9 @@ export const VisualEvaluationCoverageSchema = z.object({
   identityVisual: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']),
   temporalArtifactVisual: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']),
   semanticAction: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']),
+  visualDefects: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']).optional(),
+  compositionFraming: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']).optional(),
+  continuityContext: z.enum(['VERIFIED', 'FAILED', 'NOT_EVALUATED']).optional(),
 });
 export type VisualEvaluationCoverage = z.infer<typeof VisualEvaluationCoverageSchema>;
 
