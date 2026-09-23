@@ -30,7 +30,7 @@ import { ProviderRegistry } from '../providers/index.js';
 import { HyperFramesCompositionCompiler } from '../hyperframes/composition-compiler.js';
 import { HyperFramesVideoBridge } from '../hyperframes/hyperframes-video-bridge.js';
 import { FlowJobManager } from '../flow/flow-job-manager.js';
-import { FlowOperatorHandoffBuilder } from '../flow/flow-operator-handoff-builder.js';
+import { FlowOperatorHandoffBuilder, FlowOperatorHandoffResult } from '../flow/flow-operator-handoff-builder.js';
 import { TimelineAssembler } from '../timeline/timeline-assembler.js';
 import { RealAudioMixer } from '../audio/real-audio-mixer.js';
 import { ContinuityQAEvaluator } from '../qa/continuity-qa-evaluator.js';
@@ -119,6 +119,11 @@ export class ProductionOrchestrator {
     }
 
     const sm = new ProductionRunStateMachine(existing);
+
+    // If run is already completed or cancelled, return immediately (Idempotency)
+    if (sm.status === 'COMPLETED' || sm.status === 'CANCELLED') {
+      return sm.getRun();
+    }
 
     // 1. PREFLIGHT
     if (sm.status === 'CREATED') {
@@ -390,25 +395,44 @@ export class ProductionOrchestrator {
 
       // Route B: Google Flow Assisted
       if (strat.integrationMode === 'ASSISTED' || strat.executionRoute === 'generative_full_video') {
-        const handoffBuilder = new FlowOperatorHandoffBuilder();
-        const handoff = await handoffBuilder.buildHandoff({
-          projectId,
-          runId,
-          seriesId: sm.seriesId,
-          sceneId: targetShot.sceneId,
-          shot: targetShot,
-          references: [],
-        });
+        const baseDir = typeof (this.storage as any).getBaseDir === 'function' ? (this.storage as any).getBaseDir() : '.';
+        const handoffDir = path.resolve(baseDir, '.studio', 'production', projectId, runId, 'handoff', shotId);
+        const manifestRelativePath = `.studio/production/${projectId}/${runId}/handoff/${shotId}/handoff-manifest.json`;
 
-        const flowManager = new FlowJobManager(this.assetRegistry);
-        await flowManager.prepareFlowJob({
-          projectId,
-          seriesId: sm.seriesId,
-          sceneId: targetShot.sceneId,
-          shot: targetShot,
-          sourceReferences: [],
-          references: [],
-        });
+        let handoff: FlowOperatorHandoffResult;
+        if (await this.storage.exists(manifestRelativePath)) {
+          // Handoff package already exists on disk — do not overwrite
+          const manifestContent = await this.storage.read(manifestRelativePath);
+          handoff = {
+            handoffDir,
+            expectedFilename: `${shotId}_FLOW.mp4`,
+            manifestPath: path.join(handoffDir, 'handoff-manifest.json'),
+            promptPath: path.join(handoffDir, 'flow-prompt.txt'),
+            instructionsPath: path.join(handoffDir, 'operator-instructions.md'),
+            manifestSha256: crypto.createHash('sha256').update(manifestContent).digest('hex'),
+          };
+        } else {
+          const handoffBuilder = new FlowOperatorHandoffBuilder();
+          handoff = await handoffBuilder.buildHandoff({
+            projectId,
+            runId,
+            seriesId: sm.seriesId,
+            sceneId: targetShot.sceneId,
+            shot: targetShot,
+            references: [],
+            outputBaseDir: handoffDir,
+          });
+
+          const flowManager = new FlowJobManager(this.assetRegistry);
+          await flowManager.prepareFlowJob({
+            projectId,
+            seriesId: sm.seriesId,
+            sceneId: targetShot.sceneId,
+            shot: targetShot,
+            sourceReferences: [],
+            references: [],
+          });
+        }
 
         sm.transition('NEEDS_USER_ACTION', `Flow handoff package prepared for shot "${shotId}"`);
         sm.markShotBlocked(shotId);
