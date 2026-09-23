@@ -160,4 +160,91 @@ export class ProductionInvalidationEngine {
       reason,
     };
   }
+
+  /**
+   * Cascading invalidation when a ShotContract is modified.
+   * Cascade: ShotContract -> QA -> Approval Challenges -> Approval -> Completed State -> Master Evidence -> Acceptance.
+   */
+  public static invalidateOnShotContractChange(run: ProductionRun, shotId: string, reason: string): InvalidationCascadeReport {
+    let invalidatedQA = false;
+    let invalidatedApproval = false;
+    let invalidatedChallengesCount = 0;
+    let invalidatedMaster = false;
+    let invalidatedAcceptance = false;
+
+    // 1. Invalidate QA
+    if (run.qaEvidence[shotId]) {
+      delete run.qaEvidence[shotId];
+      invalidatedQA = true;
+    }
+
+    // 2. Invalidate Challenges
+    if (run.approvalChallenges) {
+      const now = new Date().toISOString();
+      for (const challenge of Object.values(run.approvalChallenges)) {
+        if (challenge.shotId === shotId && challenge.consumedAt === null) {
+          challenge.consumedAt = now;
+          invalidatedChallengesCount++;
+        }
+      }
+    }
+
+    // 3. Invalidate Approval
+    if (run.approvalEvidence[shotId]) {
+      delete run.approvalEvidence[shotId];
+      invalidatedApproval = true;
+    }
+
+    // 4. Update Shot Completion State
+    run.completedShotIds = run.completedShotIds.filter((id) => id !== shotId);
+    if (!run.pendingShotIds.includes(shotId)) {
+      run.pendingShotIds.push(shotId);
+    }
+    if (run.mediaEvidence[shotId]) {
+      run.mediaEvidence[shotId].approvalStatus = 'PENDING';
+    }
+
+    // 5. Invalidate Master & Acceptance
+    if (run.masterEvidence) {
+      delete run.masterEvidence;
+      invalidatedMaster = true;
+      invalidatedAcceptance = true;
+    }
+
+    run.updatedAt = new Date().toISOString();
+
+    return {
+      shotId,
+      invalidatedQA,
+      invalidatedApproval,
+      invalidatedChallengesCount,
+      invalidatedMaster,
+      invalidatedAcceptance,
+      reason,
+    };
+  }
+
+  /**
+   * Invalidates acceptance bundle when master deliverable is re-rendered or modified.
+   */
+  public static invalidateOnMasterChange(run: ProductionRun, reason: string): InvalidationCascadeReport {
+    let invalidatedAcceptance = false;
+
+    if (run.masterEvidence) {
+      run.masterEvidence.verificationStatus = 'FAILED_VERIFICATION';
+      run.masterEvidence.failureReason = `Master invalidated: ${reason}`;
+      invalidatedAcceptance = true;
+    }
+
+    run.updatedAt = new Date().toISOString();
+
+    return {
+      invalidatedQA: false,
+      invalidatedApproval: false,
+      invalidatedChallengesCount: 0,
+      invalidatedMaster: false,
+      invalidatedAcceptance,
+      reason,
+    };
+  }
 }

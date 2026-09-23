@@ -108,6 +108,42 @@ export class ProductionInvariantValidator {
       }
     }
 
+    // 7. Approval Readiness Invariant: APPROVAL_REQUIRED must imply candidate media exists
+    if (run.status === 'APPROVAL_REQUIRED') {
+      const targetShotId = run.resumeMetadata.targetShotId || run.currentShotId;
+      if (targetShotId && !run.mediaEvidence[targetShotId]) {
+        violations.push(
+          `Invariant Violation: ProductionRun "${run.runId}" is in APPROVAL_REQUIRED status but lacks mediaEvidence for shot "${targetShotId}".`
+        );
+      }
+    }
+
+    // 8. Canonical Completion Invariant: Every completed shot must reference approved media
+    for (const shotId of run.completedShotIds) {
+      const media = run.mediaEvidence[shotId];
+      const approval = run.approvalEvidence[shotId];
+      if (!media) {
+        violations.push(
+          `Invariant Violation: Shot "${shotId}" is in completedShotIds but lacks media evidence.`
+        );
+      }
+      if (!approval || approval.status !== 'APPROVED') {
+        violations.push(
+          `Invariant Violation: Shot "${shotId}" is in completedShotIds but lacks APPROVED canon status.`
+        );
+      }
+    }
+
+    // 9. Asset Binding Invariant: Approval candidateAssetId must match recorded media assetId
+    for (const [shotId, approval] of Object.entries(run.approvalEvidence)) {
+      const media = run.mediaEvidence[shotId];
+      if (media && approval.candidateAssetId && approval.candidateAssetId !== media.assetId) {
+        violations.push(
+          `Invariant Violation: Shot "${shotId}" approval candidateAssetId "${approval.candidateAssetId}" does not match recorded media assetId "${media.assetId}".`
+        );
+      }
+    }
+
     return {
       valid: violations.length === 0,
       violations,
