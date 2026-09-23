@@ -82,6 +82,9 @@
     <button class="nav-tab" id="tab-btn-export" data-target="panel-export">
       <span class="tab-icon">📦</span> Deliverables & NLE
     </button>
+    <button class="nav-tab" id="tab-btn-production" data-target="panel-production">
+      <span class="tab-icon">🔬</span> Production Pilot & Evidence
+    </button>
   </nav>
 
   <!-- Main Workspace Panels -->
@@ -619,6 +622,78 @@
           <h3>Master Video Render Manifest</h3>
           <p>MP4 (H.264/AAC) & WebM (VP9/Opus) master render specification.</p>
           <button class="btn btn-secondary" id="btn-dl-manifest">Download Manifest</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL 7: Production Run & Evidence Monitor -->
+    <section class="studio-panel" id="panel-production" aria-labelledby="tab-btn-production">
+      <div class="production-panel-layout">
+        <div class="production-header-card">
+          <div class="prod-card-header">
+            <h3>Active Production Run Execution</h3>
+            <span class="badge" id="prod-run-status-badge">READY</span>
+          </div>
+          <div class="prod-meta-row">
+            <div><strong>Run ID:</strong> <span id="prod-run-id">run_pilot_smoke</span></div>
+            <div><strong>Project:</strong> <span id="prod-project-id">proj_pilot_smoke</span></div>
+            <div><strong>Stage:</strong> <span id="prod-current-stage">SHOT_GENERATION</span></div>
+            <div><strong>Active Shot:</strong> <span id="prod-active-shot">SHOT_SCENE_01_SH01</span></div>
+          </div>
+          <div class="prod-resume-box" id="prod-resume-box">
+            <strong>Next Recommended Action:</strong>
+            <p id="prod-next-action">Inspect verified shot candidate or approve into Canon.</p>
+            <code id="prod-resume-cmd">studio production run run_pilot_smoke</code>
+          </div>
+        </div>
+
+        <div class="production-evidence-grid">
+          <div class="evidence-box">
+            <h4>📡 Provider Execution Evidence (Sanitized)</h4>
+            <div id="prod-provider-evidence-list">
+              <div class="evidence-item">
+                <span class="provider-pill">Google Gemini</span>
+                <span class="model-pill">gemini-3.5-flash</span>
+                <span class="status-pill status-success">SUCCESS</span>
+                <div class="item-detail">Latency: 720ms | Tokens: In 42 / Out 180 | Secrets: REDACTED ✅</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="evidence-box">
+            <h4>🎞️ Authoritative Media & Artifact Verification</h4>
+            <div id="prod-media-evidence-list">
+              <div class="evidence-item">
+                <strong>SHOT_SCENE_01_SH01</strong> (HyperFrames MP4)
+                <div class="item-detail">1280x720 @ 24fps • 4606 bytes • h264</div>
+                <div class="item-detail">SHA256: <code>927573f8850e...</code> • Leakage: ZERO LEAK ✅</div>
+                <span class="status-pill status-approved">APPROVED CANON</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="evidence-box">
+            <h4>🔍 Visual Semantic QA & Candidate Evaluation</h4>
+            <div id="prod-qa-evidence-list">
+              <div class="evidence-item">
+                <strong>vis_qa_SHOT_01</strong> • Status: <span class="status-pill status-success">PASS</span>
+                <div class="item-detail">Identity: 95% • Spatial: 95% • Defects: 0 Critical</div>
+                <div class="item-detail">Coverage: Artifact Integrity & Spatial Format Verified</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="evidence-box">
+            <h4>🏆 Master Production Delivery Gate</h4>
+            <div id="prod-master-evidence-box">
+              <div class="master-gate-status">
+                <span class="master-verified-badge">MASTER_PRODUCTION_VERIFIED ✅</span>
+              </div>
+              <div class="item-detail">Master MP4: <code>.studio/production/.../master.mp4</code></div>
+              <div class="item-detail">Playable Stream: Verified via FFprobe</div>
+              <div class="item-detail">Checks Passed: 13 / 13 Verification Points</div>
+            </div>
+          </div>
         </div>
       </div>
     </section>

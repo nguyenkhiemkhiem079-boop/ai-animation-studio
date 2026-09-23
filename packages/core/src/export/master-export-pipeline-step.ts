@@ -8,6 +8,7 @@ import { ProductionSafetyError } from '../domain/execution-mode.js';
 import { Html5PlayerPackager } from './html5-player-packager.js';
 import { NLEInterchangeExporter } from './nle-interchange-exporter.js';
 import { VideoRenderer } from './video-renderer.js';
+import { ProductionLeakDetector } from '../production-verifier/production-leak-detector.js';
 
 export interface MasterExportStepSummary {
   manifestId: string;
@@ -164,6 +165,7 @@ export class MasterExportPipelineStep implements PipelineStep {
             `Master export blocked in PRODUCTION mode: Authoritative shotVideoMap is missing verified physical video artifact for shot "${shotId}".`
           );
         }
+        ProductionLeakDetector.assertProductionMediaSafety(videoPath, `Master export shot "${shotId}"`);
       }
     }
 

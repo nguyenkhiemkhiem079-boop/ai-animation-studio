@@ -96,7 +96,10 @@ export class VideoRenderer {
     };
 
     for (const clip of videoTrack.clips) {
-      let resolved = getPath(clip.sourceAssetId) ?? getPath(clip.clipId);
+      let resolved =
+        getPath(clip.sourceAssetId) ??
+        getPath(clip.clipId) ??
+        (typeof clip.metadata?.shotId === 'string' ? getPath(clip.metadata.shotId) : undefined);
       if (!resolved && fs.existsSync(clip.sourceAssetId)) {
         resolved = clip.sourceAssetId;
       }

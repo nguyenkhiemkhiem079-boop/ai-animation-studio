@@ -83,6 +83,10 @@ import {
   FlowResultImporter,
   FlowQAEvaluator,
   FlowIntegrationMode,
+  ProductionOrchestrator,
+  ProductionRunRepository,
+  EvidenceStore,
+  ProductionMasterVerifier,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -181,8 +185,16 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.log(` - Usage: ${JSON.stringify(res.usage)}`);
         console.log(` - Output: ${JSON.stringify(res.data)}`);
         return 0;
+      } else if (subCommand === 'production') {
+        const { runProductionSmoke } = await import('./smoke/production-smoke.js');
+        await runProductionSmoke();
+        return 0;
+      } else if (subCommand === 'production-live') {
+        const { runProductionLiveSmoke } = await import('./smoke/production-live-smoke.js');
+        await runProductionLiveSmoke();
+        return 0;
       } else {
-        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow, visual-qa, visual-qa-live`);
+        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow, visual-qa, visual-qa-live, production, production-live`);
         return 1;
       }
     }
@@ -1255,7 +1267,307 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return 0;
       }
 
-      console.error(`Unknown production subcommand: "${subCommand}". Supported: route, plan, budget`);
+      if (subCommand === 'create') {
+        const storyFile = args[2];
+        if (!storyFile) {
+          console.error('Error: Story file required. Usage: studio production create <storyFile> [--project <id>] [--series <id>]');
+          return 1;
+        }
+        if (!syncFs.existsSync(storyFile)) {
+          console.error(`Error: Story file not found at "${storyFile}".`);
+          return 1;
+        }
+        const rawScript = syncFs.readFileSync(storyFile, 'utf-8');
+        const projIdx = args.indexOf('--project');
+        const serIdx = args.indexOf('--series');
+        const targetProjId = projIdx !== -1 && args[projIdx + 1] ? args[projIdx + 1] : `proj_${Date.now()}`;
+        const targetSeriesId = serIdx !== -1 && args[serIdx + 1] ? args[serIdx + 1] : `series_prod`;
+
+        const assetRegistry = new FileSystemAssetRegistry(storage);
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry);
+        const createdRun = await orchestrator.createRun({
+          projectId: targetProjId,
+          seriesId: targetSeriesId,
+          rawScript,
+          mode: 'PRODUCTION',
+        });
+
+        console.log(`🎬 Production Run Created:`);
+        console.log(` - Run ID        : ${createdRun.runId}`);
+        console.log(` - Project ID    : ${createdRun.projectId}`);
+        console.log(` - Series ID     : ${createdRun.seriesId}`);
+        console.log(` - Initial Status: ${createdRun.status} ✅`);
+        console.log(`\nNext step to begin production:\nstudio production run ${createdRun.runId}`);
+        return 0;
+      }
+
+      const findRunById = async (targetRunId: string) => {
+        const repo = new ProductionRunRepository(storage);
+        // Search across known projects directory
+        const projectsDir = '.studio/production';
+        if (await storage.exists(projectsDir)) {
+          const projectFolders = await storage.list(projectsDir);
+          for (const pf of projectFolders) {
+            const pId = pf.replace(/\\/g, '/').split('/')[2] || pf;
+            const r = await repo.findById(pId, targetRunId);
+            if (r) return r;
+          }
+        }
+        return null;
+      };
+
+      if (subCommand === 'run' || subCommand === 'resume') {
+        const targetRunId = args[2];
+        if (!targetRunId) {
+          console.error(`Error: Run ID required. Usage: studio production ${subCommand} <runId>`);
+          return 1;
+        }
+
+        const runRecord = await findRunById(targetRunId);
+        if (!runRecord) {
+          console.error(`Error: ProductionRun "${targetRunId}" not found in .studio/production/`);
+          return 1;
+        }
+
+        console.log(`🚀 Executing Production Run "${targetRunId}" (Project: ${runRecord.projectId})...`);
+        const assetRegistry = new FileSystemAssetRegistry(storage);
+        const gemini = new GeminiProvider();
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry, gemini.isConfigured() ? gemini : undefined);
+
+        const result = await orchestrator.execute(runRecord.projectId, targetRunId);
+
+        console.log(`\n📊 Production Run State:`);
+        console.log(` - Status: ${result.status}`);
+        console.log(` - Current Stage: ${result.currentStage}`);
+        if (result.currentShotId) console.log(` - Shot: ${result.currentShotId}`);
+        console.log(` - Completed Shots: ${result.completedShotIds.join(', ') || 'None'}`);
+
+        if (result.status === 'WAITING_FOR_PROVIDER') {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('STATUS: WAITING_FOR_PROVIDER');
+          console.log(`Provider: ${gemini.metadata.name}`);
+          console.log(`Reason  : ${result.resumeMetadata.blockedReason}`);
+          console.log('Completed work preserved: YES');
+          console.log('Resume command:');
+          console.log(`studio production resume ${targetRunId}`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        } else if (result.status === 'NEEDS_USER_ACTION') {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('STATUS: NEEDS_USER_ACTION');
+          console.log(`Shot    : ${result.currentShotId}`);
+          console.log('Renderer: Google Flow — Assisted');
+          console.log(`Package : .studio/flow/packages/${runRecord.projectId}/${result.currentShotId}`);
+          console.log('Next action: Generate the clip in Flow and import the downloaded MP4:');
+          console.log(`studio production import ${targetRunId} ${result.currentShotId} <path_to_downloaded_mp4>`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        } else if (result.status === 'APPROVAL_REQUIRED') {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('STATUS: APPROVAL_REQUIRED');
+          console.log(`Shot    : ${result.resumeMetadata.targetShotId}`);
+          console.log('Human review required before timeline assembly.');
+          console.log('Approve command:');
+          console.log(`studio production approve ${targetRunId} ${result.resumeMetadata.targetShotId}`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        } else if (result.status === 'COMPLETED') {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('🏆 PRODUCTION RUN COMPLETED & MASTER DELIVERABLE VERIFIED!');
+          if (result.masterEvidence) {
+            console.log(` - Master MP4 : ${result.masterEvidence.masterVideoPath}`);
+            console.log(` - Checksum   : ${result.masterEvidence.masterSha256}`);
+            console.log(` - Status     : ${result.masterEvidence.verificationStatus} ✅`);
+          }
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        }
+        return 0;
+      }
+
+      if (subCommand === 'status') {
+        const targetRunId = args[2];
+        if (!targetRunId) {
+          console.error('Error: Run ID required. Usage: studio production status <runId>');
+          return 1;
+        }
+        const runRecord = await findRunById(targetRunId);
+        if (!runRecord) {
+          console.error(`Error: ProductionRun "${targetRunId}" not found.`);
+          return 1;
+        }
+
+        console.log(`📊 Production Run Status [${targetRunId}]:`);
+        console.log(` - Project ID     : ${runRecord.projectId}`);
+        console.log(` - Series ID      : ${runRecord.seriesId}`);
+        console.log(` - Status         : ${runRecord.status}`);
+        console.log(` - Execution Mode : ${runRecord.mode}`);
+        console.log(` - Stage          : ${runRecord.currentStage}`);
+        if (runRecord.currentShotId) console.log(` - Active Shot    : ${runRecord.currentShotId}`);
+        console.log(` - Completed Shots: ${runRecord.completedShotIds.length} (${runRecord.completedShotIds.join(', ') || 'None'})`);
+        console.log(` - Blocked Shots  : ${runRecord.blockedShotIds.length} (${runRecord.blockedShotIds.join(', ') || 'None'})`);
+        if (runRecord.resumeMetadata.nextAction) {
+          console.log(` - Next Action    : ${runRecord.resumeMetadata.nextAction}`);
+        }
+        if (runRecord.resumeMetadata.recommendedCommand) {
+          console.log(` - Resume Command : ${runRecord.resumeMetadata.recommendedCommand}`);
+        }
+        return 0;
+      }
+
+      if (subCommand === 'evidence') {
+        const targetRunId = args[2];
+        if (!targetRunId) {
+          console.error('Error: Run ID required. Usage: studio production evidence <runId>');
+          return 1;
+        }
+        const runRecord = await findRunById(targetRunId);
+        if (!runRecord) {
+          console.error(`Error: ProductionRun "${targetRunId}" not found.`);
+          return 1;
+        }
+
+        const evidenceStore = new EvidenceStore(storage);
+        const provs = await evidenceStore.loadProviderEvidence(runRecord.projectId, targetRunId);
+        const media = await evidenceStore.loadMediaEvidence(runRecord.projectId, targetRunId);
+        const qas = await evidenceStore.loadQAEvidence(runRecord.projectId, targetRunId);
+        const apps = await evidenceStore.loadApprovalEvidence(runRecord.projectId, targetRunId);
+        const master = await evidenceStore.loadMasterEvidence(runRecord.projectId, targetRunId);
+
+        console.log(`🗄️ Durable Production Evidence for Run "${targetRunId}":`);
+        console.log(` - Location           : ${evidenceStore.getProductionDir(runRecord.projectId, targetRunId)}`);
+        console.log(` - Provider Records   : ${provs.length}`);
+        for (const p of provs) {
+          console.log(`   • [${p.providerId}] ${p.providerRole} (${p.actualModel}) -> ${p.status} (${p.latencyMs}ms)`);
+        }
+        console.log(` - Media Artifacts    : ${Object.keys(media).length}`);
+        for (const [sId, m] of Object.entries(media)) {
+          console.log(`   • [${sId}] ${m.container.toUpperCase()} (${m.width}x${m.height}, ${m.durationSeconds}s) SHA256: ${m.sha256.substring(0, 16)}...`);
+        }
+        console.log(` - QA Audit Records   : ${Object.keys(qas).length}`);
+        for (const [sId, q] of Object.entries(qas)) {
+          console.log(`   • [${sId}] Status: ${q.overallStatus} (Defects: ${q.totalDefects}, Critical: ${q.criticalDefects})`);
+        }
+        console.log(` - Human Approvals    : ${Object.keys(apps).length}`);
+        for (const [sId, a] of Object.entries(apps)) {
+          console.log(`   • [${sId}] ${a.status} by "${a.decidedBy}" at ${a.decidedAt}`);
+        }
+        console.log(` - Master Deliverable : ${master ? `${master.verificationStatus} (${master.masterSha256.substring(0, 16)}...)` : 'PENDING'}`);
+        return 0;
+      }
+
+      if (subCommand === 'import') {
+        const targetRunId = args[2];
+        const targetShotId = args[3];
+        const videoPath = args[4];
+
+        if (!targetRunId || !targetShotId || !videoPath) {
+          console.error('Error: Required arguments missing. Usage: studio production import <runId> <shotId> <videoPath>');
+          return 1;
+        }
+
+        const runRecord = await findRunById(targetRunId);
+        if (!runRecord) {
+          console.error(`Error: ProductionRun "${targetRunId}" not found.`);
+          return 1;
+        }
+
+        console.log(`📥 Importing media for shot "${targetShotId}" into run "${targetRunId}" from: ${videoPath}...`);
+        const assetRegistry = new FileSystemAssetRegistry(storage);
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry);
+        const updated = await orchestrator.importShotMedia(runRecord.projectId, targetRunId, targetShotId, videoPath);
+
+        console.log(`✅ Media successfully imported, verified with FFprobe, and evaluated with Visual QA!`);
+        console.log(` - Status: ${updated.status}`);
+        console.log(` - Next Step: studio production approve ${targetRunId} ${targetShotId}`);
+        return 0;
+      }
+
+      if (subCommand === 'approve') {
+        const targetRunId = args[2];
+        const targetShotId = args[3];
+
+        if (!targetRunId || !targetShotId) {
+          console.error('Error: Run ID and Shot ID required. Usage: studio production approve <runId> <shotId>');
+          return 1;
+        }
+
+        const runRecord = await findRunById(targetRunId);
+        if (!runRecord) {
+          console.error(`Error: ProductionRun "${targetRunId}" not found.`);
+          return 1;
+        }
+
+        console.log(`✍️  Approving candidate shot "${targetShotId}" into Canon...`);
+        const assetRegistry = new FileSystemAssetRegistry(storage);
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry);
+        const updated = await orchestrator.approveShot(runRecord.projectId, targetRunId, targetShotId);
+
+        console.log(`✅ Shot "${targetShotId}" promoted to Canon!`);
+        console.log(` - Run Status: ${updated.status}`);
+        console.log(` - Next Step  : studio production resume ${targetRunId}`);
+        return 0;
+      }
+
+      if (subCommand === 'reject') {
+        const targetRunId = args[2];
+        const targetShotId = args[3];
+        const reasonIdx = args.indexOf('--reason');
+        const reason = reasonIdx !== -1 && args[reasonIdx + 1] ? args[reasonIdx + 1] : 'Rejected by human reviewer';
+
+        if (!targetRunId || !targetShotId) {
+          console.error('Error: Run ID and Shot ID required. Usage: studio production reject <runId> <shotId> --reason "<reason>"');
+          return 1;
+        }
+
+        const runRecord = await findRunById(targetRunId);
+        if (!runRecord) {
+          console.error(`Error: ProductionRun "${targetRunId}" not found.`);
+          return 1;
+        }
+
+        console.log(`🚫 Rejecting candidate shot "${targetShotId}"...`);
+        const assetRegistry = new FileSystemAssetRegistry(storage);
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry);
+        const updated = await orchestrator.rejectShot(runRecord.projectId, targetRunId, targetShotId, reason);
+
+        console.log(`✅ Rejection recorded for shot "${targetShotId}".`);
+        console.log(` - Run Status: ${updated.status}`);
+        return 0;
+      }
+
+      if (subCommand === 'verify') {
+        const targetRunId = args[2];
+        if (!targetRunId) {
+          console.error('Error: Run ID required. Usage: studio production verify <runId>');
+          return 1;
+        }
+        const runRecord = await findRunById(targetRunId);
+        if (!runRecord) {
+          console.error(`Error: ProductionRun "${targetRunId}" not found.`);
+          return 1;
+        }
+
+        const evidenceStore = new EvidenceStore(storage);
+        const master = await evidenceStore.loadMasterEvidence(runRecord.projectId, targetRunId);
+
+        if (!master || master.verificationStatus !== 'MASTER_PRODUCTION_VERIFIED') {
+          console.log('\nMASTER PRODUCTION VERIFIED: NOT VERIFIED ❌');
+          console.log('One or more production verification requirements are incomplete.');
+          return 1;
+        }
+
+        console.log('\nMASTER PRODUCTION VERIFIED: PASS ✅');
+        console.log(` - Master Path : ${master.masterVideoPath}`);
+        console.log(` - Checksum    : ${master.masterSha256}`);
+        console.log(` - Verified At : ${master.verifiedAt}`);
+        return 0;
+      }
+
+      if (subCommand === 'verify-live') {
+        const { runProductionLiveSmoke } = await import('./smoke/production-live-smoke.js');
+        return runProductionLiveSmoke();
+      }
+
+      console.error(
+        `Unknown production subcommand: "${subCommand}". Supported: create, run, status, resume, evidence, import, approve, reject, verify, verify-live, route, plan, budget`
+      );
       return 1;
     }
 
@@ -2578,6 +2890,16 @@ Commands:
   world staging <seriesId> <locId> <zId> Show 3D/2D spatial layout and landmark anchors
   world resolve <seriesId> <locId> <zId> Resolve environmental backdrop and depth layers
   world props <seriesId> <locId> <zId>   List props and mutable states in zone
+  production create <story> [--project]  Create a resumable production run from story script
+  production run <runId>                 Execute or resume a production run
+  production status <runId>              Inspect truthful production run status & blocked state
+  production resume <runId>              Resume interrupted production run from last checkpoint
+  production evidence <runId>            Inspect 6 durable JSON evidence files on disk
+  production import <runId> <sId> <mp4>  Import & verify external media (Flow download) with FFprobe
+  production approve <runId> <shotId>    Promote verified candidate shot into approved Canon
+  production reject <runId> <sId> --rsn  Reject candidate shot recording human reason
+  production verify <runId>              Audit run against 13-point Master Production Gate
+  production verify-live <runId>         Opt-in live Gemini provider verification
   production route <projId> <shotId>     Evaluate production route (Deterministic vs Generative)
   production plan <projId> [seriesId]    Plan production, breakdown, cost & latency for all shots
   production budget <projId> [--set-cap] View or configure project budget and headroom

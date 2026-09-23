@@ -218,21 +218,32 @@ export class GeminiProvider implements LLMProvider {
     const status = err?.status || err?.statusCode || err?.code;
 
     if (
+      status === 429 ||
+      /\b429\b/.test(msg) ||
+      msg.includes('rate limit') ||
+      msg.includes('rate_limit') ||
+      msg.includes('too many requests')
+    ) {
+      return 'RATE_LIMITED';
+    }
+    if (
+      status === 'RESOURCE_EXHAUSTED' ||
+      msg.includes('quota') ||
+      msg.includes('resource_exhausted')
+    ) {
+      return 'QUOTA_EXCEEDED';
+    }
+    if (
       status === 401 ||
       status === 403 ||
-      msg.includes('401') ||
-      msg.includes('403') ||
+      /\b401\b/.test(msg) ||
+      /\b403\b/.test(msg) ||
       msg.includes('api_key') ||
+      msg.includes('api key') ||
       msg.includes('unauthorized') ||
       msg.includes('permission denied')
     ) {
       return 'AUTH_ERROR';
-    }
-    if (status === 429 || msg.includes('429') || msg.includes('rate limit')) {
-      return 'RATE_LIMITED';
-    }
-    if (msg.includes('quota') || msg.includes('resource_exhausted')) {
-      return 'QUOTA_EXCEEDED';
     }
     if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('deadline_exceeded') || msg.includes('etimedout')) {
       return 'TIMEOUT';
