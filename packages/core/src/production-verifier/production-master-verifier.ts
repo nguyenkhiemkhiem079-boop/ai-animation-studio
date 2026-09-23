@@ -21,6 +21,10 @@ export interface MasterVerificationInput {
   shotVideoMap?: Record<string, string>;
   shots?: ShotContract[];
   allowRehearsal?: boolean;
+  acceptanceBundle?: {
+    valid: boolean;
+    reasons?: string[];
+  };
 }
 
 export interface MasterVerificationResult {
@@ -64,13 +68,17 @@ export class ProductionMasterVerifier {
       zeroTestOrSmokeLeakage: false,
       allCandidatesApprovedIntoCanon: false,
       humanApprovalVerified: false,
+      approvalChecksumMatchesMedia: false,
       noSimulatedMediaInProduction: false,
       timelineUsesApprovedCanonMedia: false,
       qaPassedAndDefectFree: false,
+      qaChecksumMatchesMedia: false,
       visualSemanticCoverageEvaluated: false,
       continuityQAMeetsProductionCriteria: false,
+      noPendingRetakes: false,
       finalMasterFilePhysicallyExistsAndNonZero: false,
       finalMasterFFprobeValidStream: false,
+      acceptanceBundleVerified: false,
     };
 
     if (requiredShotIds.length === 0) {
@@ -90,10 +98,13 @@ export class ProductionMasterVerifier {
     let zeroLeakage = true;
     let allApprovedIntoCanon = true;
     let allHumanApproved = true;
+    let allApprovalChecksumsValid = true;
     let noSimulatedFlow = true;
     let allQaPassedAndDefectFree = true;
+    let allQaChecksumsValid = true;
     let allSemanticCoverageVerified = true;
     let allTimelineMediaValid = true;
+    let allNoPendingRetakes = true;
 
     for (const shotId of requiredShotIds) {
       const media = run.mediaEvidence[shotId];
@@ -102,6 +113,8 @@ export class ProductionMasterVerifier {
         allMediaFilesExist = false;
         allMediaPassArtifact = false;
         allChecksumsValid = false;
+        allApprovalChecksumsValid = false;
+        allQaChecksumsValid = false;
         reasons.push(`Shot "${shotId}" is missing authoritative media evidence in ProductionRun.`);
         continue;
       }
@@ -158,6 +171,30 @@ export class ProductionMasterVerifier {
         );
       }
 
+      // Check 11: Approval checksum binding & invalidation
+      if (approval) {
+        if (!approval.mediaSha256) {
+          if (run.mode === 'PRODUCTION' && !allowRehearsal) {
+            allApprovalChecksumsValid = false;
+            reasons.push(`Shot "${shotId}" approval is missing bound media SHA-256.`);
+          }
+        } else if (approval.mediaSha256 !== media.sha256) {
+          allApprovalChecksumsValid = false;
+          allHumanApproved = false;
+          reasons.push(
+            `Shot "${shotId}" approval checksum mismatch: approved SHA-256 is ${approval.mediaSha256}, but recorded media is ${media.sha256}. Media changed after approval; previous approval invalidated.`
+          );
+        } else if (verif.checksumSha256 && verif.checksumSha256 !== approval.mediaSha256) {
+          allApprovalChecksumsValid = false;
+          allHumanApproved = false;
+          reasons.push(
+            `Shot "${shotId}" approval checksum mismatch: approved SHA-256 is ${approval.mediaSha256}, but current disk file has ${verif.checksumSha256}. Media modified on disk after approval; approval invalidated.`
+          );
+        }
+      } else {
+        allApprovalChecksumsValid = false;
+      }
+
       // Check 8: No simulated Flow media in genuine production
       if (media.generationSource === 'SIMULATED_FLOW') {
         noSimulatedFlow = false;
@@ -201,6 +238,11 @@ export class ProductionMasterVerifier {
           reasons.push(
             `Timeline media for shot "${shotId}" checksum mismatch: timeline file has ${timelineArtifact.checksumSha256}, expected approved canonical ${media.sha256}.`
           );
+        } else if (approval?.mediaSha256 && timelineArtifact.checksumSha256 !== approval.mediaSha256) {
+          allTimelineMediaValid = false;
+          reasons.push(
+            `Timeline media for shot "${shotId}" checksum mismatch: timeline file has ${timelineArtifact.checksumSha256}, expected approved ${approval.mediaSha256}.`
+          );
         }
       }
 
@@ -209,8 +251,33 @@ export class ProductionMasterVerifier {
       if (!qa) {
         allQaPassedAndDefectFree = false;
         allSemanticCoverageVerified = false;
+        allQaChecksumsValid = false;
+        allNoPendingRetakes = false;
         reasons.push(`Visual QA evidence missing for shot "${shotId}".`);
       } else {
+        // QA checksum binding
+        if (qa.mediaSha256 && qa.mediaSha256 !== media.sha256) {
+          allQaChecksumsValid = false;
+          allQaPassedAndDefectFree = false;
+          reasons.push(
+            `Shot "${shotId}" QA evidence checksum mismatch: QA evaluated on ${qa.mediaSha256}, recorded media is ${media.sha256}. Re-QA required.`
+          );
+        }
+        if (qa.mediaSha256 && verif.checksumSha256 && verif.checksumSha256 !== qa.mediaSha256) {
+          allQaChecksumsValid = false;
+          allQaPassedAndDefectFree = false;
+          reasons.push(
+            `Shot "${shotId}" QA evidence checksum mismatch: QA evaluated on ${qa.mediaSha256}, current disk file has ${verif.checksumSha256}. Re-QA required.`
+          );
+        }
+        if (approval?.mediaSha256 && qa.mediaSha256 && qa.mediaSha256 !== approval.mediaSha256) {
+          allQaChecksumsValid = false;
+          allQaPassedAndDefectFree = false;
+          reasons.push(
+            `Shot "${shotId}" QA media checksum (${qa.mediaSha256}) does not match approved checksum (${approval.mediaSha256}). FAIL CLOSED.`
+          );
+        }
+
         // QA structural pass
         if (!qa.passed) {
           allQaPassedAndDefectFree = false;
@@ -226,6 +293,7 @@ export class ProductionMasterVerifier {
         }
         if (qa.retakesRecommended > 0) {
           allQaPassedAndDefectFree = false;
+          allNoPendingRetakes = false;
           reasons.push(`Shot "${shotId}" has ${qa.retakesRecommended} pending retake recommendation(s).`);
         }
 
@@ -279,10 +347,13 @@ export class ProductionMasterVerifier {
     checksSummary.zeroTestOrSmokeLeakage = zeroLeakage;
     checksSummary.allCandidatesApprovedIntoCanon = allApprovedIntoCanon;
     checksSummary.humanApprovalVerified = allHumanApproved;
+    checksSummary.approvalChecksumMatchesMedia = allApprovalChecksumsValid;
     checksSummary.noSimulatedMediaInProduction = noSimulatedFlow;
     checksSummary.timelineUsesApprovedCanonMedia = allTimelineMediaValid;
     checksSummary.qaPassedAndDefectFree = allQaPassedAndDefectFree;
+    checksSummary.qaChecksumMatchesMedia = allQaChecksumsValid;
     checksSummary.visualSemanticCoverageEvaluated = allSemanticCoverageVerified;
+    checksSummary.noPendingRetakes = allNoPendingRetakes;
 
     // Check 12: Continuity QA
     if (!continuityReport) {
@@ -301,6 +372,18 @@ export class ProductionMasterVerifier {
       }
       checksSummary.continuityQAMeetsProductionCriteria = contPassed;
     }
+
+    // Check 18: Acceptance bundle validation
+    let acceptanceValid = true;
+    if (input.acceptanceBundle) {
+      if (!input.acceptanceBundle.valid) {
+        acceptanceValid = false;
+        reasons.push(
+          `Acceptance bundle verification failed:\n- ${(input.acceptanceBundle.reasons || []).join('\n- ')}`
+        );
+      }
+    }
+    checksSummary.acceptanceBundleVerified = acceptanceValid;
 
     // Check 13: Final master file existence and non-zero size
     let masterSha256 = '';
@@ -357,6 +440,7 @@ export class ProductionMasterVerifier {
       checksSummary.allCandidatesApprovedIntoCanon &&
       checksSummary.timelineUsesApprovedCanonMedia &&
       checksSummary.qaPassedAndDefectFree &&
+      checksSummary.qaChecksumMatchesMedia &&
       checksSummary.finalMasterFilePhysicallyExistsAndNonZero &&
       checksSummary.finalMasterFFprobeValidStream;
 
@@ -364,9 +448,12 @@ export class ProductionMasterVerifier {
       structuralPassed &&
       checksSummary.zeroTestOrSmokeLeakage &&
       checksSummary.humanApprovalVerified &&
+      checksSummary.approvalChecksumMatchesMedia &&
       checksSummary.noSimulatedMediaInProduction &&
       checksSummary.visualSemanticCoverageEvaluated &&
-      checksSummary.continuityQAMeetsProductionCriteria;
+      checksSummary.continuityQAMeetsProductionCriteria &&
+      checksSummary.noPendingRetakes &&
+      checksSummary.acceptanceBundleVerified;
 
     if (productionTruthPassed) {
       const evidence: MasterProductionEvidence = {

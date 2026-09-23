@@ -47,7 +47,7 @@ export const LEGAL_PRODUCTION_RUN_TRANSITIONS: Record<ProductionRunStatus, Produ
   WAITING_FOR_IMPORT: ['VERIFYING_MEDIA', 'NEEDS_USER_ACTION', 'FAILED', 'CANCELLED'],
   VERIFYING_MEDIA: ['VISUAL_QA', 'WAITING_FOR_IMPORT', 'FAILED', 'CANCELLED'],
   VISUAL_QA: ['APPROVAL_REQUIRED', 'WAITING_FOR_PROVIDER', 'NEEDS_USER_ACTION', 'FAILED', 'CANCELLED'],
-  APPROVAL_REQUIRED: ['ASSEMBLING', 'RUNNING', 'NEEDS_USER_ACTION', 'FAILED', 'CANCELLED'],
+  APPROVAL_REQUIRED: ['ASSEMBLING', 'RUNNING', 'NEEDS_USER_ACTION', 'VERIFYING_MEDIA', 'FAILED', 'CANCELLED'],
   ASSEMBLING: ['MASTER_QA', 'FAILED', 'CANCELLED'],
   MASTER_QA: ['COMPLETED', 'APPROVAL_REQUIRED', 'FAILED', 'CANCELLED'],
   COMPLETED: [], // Terminal
@@ -167,7 +167,7 @@ export const ProductionMediaEvidenceSchema = z.object({
   fps: z.number().positive().nullable().default(null),
   verificationTimestamp: z.string().datetime(),
   provenance: z.string().min(1),
-  generationSource: z.enum(['HYPERFRAMES', 'FLOW_ASSISTED', 'LIVE_PROVIDER', 'IMPORTED', 'SIMULATED_FLOW']),
+  generationSource: z.enum(['HYPERFRAMES', 'FLOW_ASSISTED', 'LIVE_PROVIDER', 'IMPORTED', 'SIMULATED_FLOW', 'GOOGLE_FLOW_REAL']),
   approvalStatus: z.enum(['PENDING', 'APPROVED', 'REJECTED']).default('PENDING'),
   rejectionReason: z.string().optional(),
 });
@@ -179,6 +179,8 @@ export type ProductionMediaEvidence = z.infer<typeof ProductionMediaEvidenceSche
 export const ProductionQAEvidenceSchema = z.object({
   shotId: z.string().min(1),
   reportId: z.string().min(1),
+  mediaSha256: z.string().min(64).max(64).optional(),
+  candidateAssetId: z.string().optional(),
   overallStatus: z.enum(['PASS', 'WARN', 'FAIL', 'NOT_EVALUATED', 'MISSING_ARTIFACT']),
   passed: z.boolean(),
   mechanism: z.string(),
@@ -205,6 +207,8 @@ export const ProductionApprovalEvidenceSchema = z.object({
   shotId: z.string().min(1),
   candidateAssetId: z.string().min(1),
   canonicalAssetId: z.string().optional(),
+  mediaSha256: z.string().min(64).max(64).optional(),
+  qaReportId: z.string().optional(),
   status: z.enum(['APPROVED', 'REJECTED']),
   approvalType: ApprovalTypeSchema.default('HUMAN'),
   actorId: z.string().optional(),
@@ -216,6 +220,48 @@ export const ProductionApprovalEvidenceSchema = z.object({
   notes: z.string().optional(),
 });
 export type ProductionApprovalEvidence = z.infer<typeof ProductionApprovalEvidenceSchema>;
+
+/**
+ * Acceptance Manifest & Bundle Metadata Schemas
+ */
+export const AcceptanceManifestFileRecordSchema = z.object({
+  path: z.string(),
+  sha256: z.string().min(64).max(64),
+  sizeBytes: z.number().int().nonnegative(),
+});
+export type AcceptanceManifestFileRecord = z.infer<typeof AcceptanceManifestFileRecordSchema>;
+
+export const AcceptanceManifestSchema = z.object({
+  manifestVersion: z.string().default('1.0.0'),
+  runId: z.string().min(1),
+  projectId: z.string().min(1),
+  seriesId: z.string().min(1),
+  createdAt: z.string().datetime().default(() => new Date().toISOString()),
+  files: z.record(AcceptanceManifestFileRecordSchema),
+  manifestSha256: z.string().min(64).max(64).optional(),
+});
+export type AcceptanceManifest = z.infer<typeof AcceptanceManifestSchema>;
+
+export const AcceptanceBundleMetadataSchema = z.object({
+  bundleVersion: z.string().default('1.0.0'),
+  runId: z.string().min(1),
+  projectId: z.string().min(1),
+  seriesId: z.string().min(1),
+  createdAt: z.string().datetime(),
+  completedAt: z.string().datetime(),
+  providerModelIds: z.array(z.string()).default([]),
+  requiredShotIds: z.array(z.string()).default([]),
+  finalMasterChecksum: z.string().min(64).max(64),
+  verificationStatus: z.enum([
+    'MASTER_PRODUCTION_VERIFIED',
+    'OFFLINE_REHEARSAL_VERIFIED',
+    'LOCAL_PRODUCTION_PIPELINE_VERIFIED',
+    'FAILED_VERIFICATION',
+  ]),
+  allChecksPassed: z.boolean(),
+  checksSummary: z.record(z.boolean()).default({}),
+});
+export type AcceptanceBundleMetadata = z.infer<typeof AcceptanceBundleMetadataSchema>;
 
 /**
  * Final Master Production Evidence

@@ -87,6 +87,8 @@ import {
   ProductionRunRepository,
   EvidenceStore,
   ProductionMasterVerifier,
+  LiveProviderPreflight,
+  ProductionAcceptanceBundle,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -193,8 +195,12 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const { runProductionLiveSmoke } = await import('./smoke/production-live-smoke.js');
         await runProductionLiveSmoke();
         return 0;
+      } else if (subCommand === 'acceptance-contract') {
+        const { runAcceptanceContractSmoke } = await import('./smoke/acceptance-contract-smoke.js');
+        await runAcceptanceContractSmoke();
+        return 0;
       } else {
-        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow, visual-qa, visual-qa-live, production, production-live`);
+        console.error(`Unknown smoke test: "${subCommand}". Supported: golden, media, gemini, flow, visual-qa, visual-qa-live, production, production-live, acceptance-contract`);
         return 1;
       }
     }
@@ -1381,6 +1387,128 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return 0;
       }
 
+      if (subCommand === 'accept') {
+        const targetRunId = args[2];
+        if (!targetRunId) {
+          console.error('Error: Run ID required. Usage: studio production accept <runId>');
+          return 1;
+        }
+
+        const runRecord = await findRunById(targetRunId);
+        if (!runRecord) {
+          console.error(`Error: ProductionRun "${targetRunId}" not found in .studio/production/`);
+          return 1;
+        }
+
+        console.log(`\n==================================================`);
+        console.log(`🚀 PRODUCTION ACCEPTANCE HARNESS: ${targetRunId}`);
+        console.log(`Project: ${runRecord.projectId} | Series: ${runRecord.seriesId}`);
+        console.log(`==================================================\n`);
+
+        const assetRegistry = new FileSystemAssetRegistry(storage);
+        const gemini = new GeminiProvider();
+
+        // 1. PREFLIGHT & LIVE PROVIDER CHECK
+        console.log('1️⃣ PREFLIGHT: Live Provider Verification...');
+        const isLiveConfirmed = args.includes('--live') || process.env.RUN_LIVE_PROVIDER_TESTS === 'true';
+        const preflight = await LiveProviderPreflight.verify({
+          provider: gemini,
+          requireLiveOptIn: true,
+          liveConfirmed: isLiveConfirmed,
+        });
+
+        if (!preflight.passed) {
+          console.error('\n❌ Live Provider Preflight Check Failed:');
+          for (const reason of preflight.reasons) {
+            console.error(` - ${reason}`);
+          }
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('STATUS: WAITING_FOR_PROVIDER / NEEDS_USER_ACTION');
+          console.log('Production acceptance requires a verified live provider (LIVE_EXTERNAL).');
+          console.log('Ensure GEMINI_API_KEY is configured and RUN_LIVE_PROVIDER_TESTS=true is set.');
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+          return 1;
+        }
+
+        console.log(`✅ Live Provider Verified: ${preflight.providerName} (${preflight.activeModel || 'active'}) [${preflight.providerTrust}]`);
+
+        // 2. RUN / RESUME PIPELINE
+        console.log('\n2️⃣ EXECUTION: Orchestrating Production Run...');
+        const orchestrator = new ProductionOrchestrator(storage, assetRegistry, gemini);
+        const executedRun = await orchestrator.execute(runRecord.projectId, targetRunId);
+
+        if (executedRun.status === 'WAITING_FOR_PROVIDER') {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('STATUS: WAITING_FOR_PROVIDER');
+          console.log(`Provider: ${gemini.metadata.name}`);
+          console.log(`Reason  : ${executedRun.resumeMetadata.blockedReason}`);
+          console.log('All completed work preserved.');
+          console.log(`Resume when quota resets:\nstudio production accept ${targetRunId}`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          return 0;
+        }
+
+        if (executedRun.status === 'NEEDS_USER_ACTION') {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('STATUS: NEEDS_USER_ACTION');
+          console.log(`Shot    : ${executedRun.currentShotId}`);
+          console.log('Renderer: Google Flow — Real External');
+          console.log(`Package : .studio/flow/packages/${runRecord.projectId}/${executedRun.currentShotId}`);
+          console.log('Next action: Generate clip in Google Flow, then import downloaded MP4:');
+          console.log(`studio production import ${targetRunId} ${executedRun.currentShotId} <path_to_downloaded_mp4> --source google-flow --real-external`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          return 0;
+        }
+
+        if (executedRun.status === 'APPROVAL_REQUIRED') {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('STATUS: APPROVAL_REQUIRED');
+          const targetShot = executedRun.resumeMetadata.targetShotId || executedRun.currentShotId;
+          const media = targetShot ? executedRun.mediaEvidence[targetShot] : undefined;
+          console.log(`Shot          : ${targetShot}`);
+          if (media) {
+            console.log(`Candidate     : ${media.assetId}`);
+            console.log(`Media SHA-256 : ${media.sha256}`);
+            console.log(`Source        : ${media.generationSource}`);
+          }
+          console.log('Human director sign-off required before timeline assembly.');
+          console.log(`Approve command:\nstudio production approve ${targetRunId} ${targetShot} --human`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          return 0;
+        }
+
+        if (executedRun.status === 'COMPLETED' && executedRun.masterEvidence) {
+          // 3. DURABLE ACCEPTANCE BUNDLE VALIDATION
+          console.log('\n3️⃣ VERIFYING FINAL ACCEPTANCE BUNDLE...');
+          const acceptanceDir = `.studio/production/${runRecord.projectId}/${targetRunId}/acceptance`;
+          const bundleValidation = await ProductionAcceptanceBundle.validate(acceptanceDir, storage);
+
+          if (!bundleValidation.valid) {
+            console.error('\n❌ Acceptance Bundle Manifest Validation Failed:');
+            for (const r of bundleValidation.reasons) {
+              console.error(` - ${r}`);
+            }
+            console.log('STATUS: FAILED_VERIFICATION');
+            return 1;
+          }
+
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('🏆 REAL PRODUCTION ACCEPTANCE PASSED — MASTER_PRODUCTION_VERIFIED!');
+          console.log(` - Run ID        : ${targetRunId}`);
+          console.log(` - Project ID    : ${runRecord.projectId}`);
+          console.log(` - Master MP4    : ${executedRun.masterEvidence.masterVideoPath}`);
+          console.log(` - Master SHA-256: ${executedRun.masterEvidence.masterSha256}`);
+          console.log(` - Verification  : ${executedRun.masterEvidence.verificationStatus} ✅`);
+          console.log(` - Acceptance Dir: ${acceptanceDir}`);
+          console.log(` - Manifest Hash : ${bundleValidation.manifest?.manifestSha256}`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+          return 0;
+        }
+
+        console.log(`Current run status: ${executedRun.status}. Stage: ${executedRun.currentStage}`);
+        return 0;
+      }
+
       if (subCommand === 'status') {
         const targetRunId = args[2];
         if (!targetRunId) {
@@ -1393,21 +1521,59 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           return 1;
         }
 
-        console.log(`📊 Production Run Status [${targetRunId}]:`);
-        console.log(` - Project ID     : ${runRecord.projectId}`);
-        console.log(` - Series ID      : ${runRecord.seriesId}`);
-        console.log(` - Status         : ${runRecord.status}`);
-        console.log(` - Execution Mode : ${runRecord.mode}`);
-        console.log(` - Stage          : ${runRecord.currentStage}`);
-        if (runRecord.currentShotId) console.log(` - Active Shot    : ${runRecord.currentShotId}`);
-        console.log(` - Completed Shots: ${runRecord.completedShotIds.length} (${runRecord.completedShotIds.join(', ') || 'None'})`);
-        console.log(` - Blocked Shots  : ${runRecord.blockedShotIds.length} (${runRecord.blockedShotIds.join(', ') || 'None'})`);
+        const evidenceStore = new EvidenceStore(storage);
+        const provs = await evidenceStore.loadProviderEvidence(runRecord.projectId, targetRunId);
+        const media = await evidenceStore.loadMediaEvidence(runRecord.projectId, targetRunId);
+        const qas = await evidenceStore.loadQAEvidence(runRecord.projectId, targetRunId);
+        const apps = await evidenceStore.loadApprovalEvidence(runRecord.projectId, targetRunId);
+        const master = await evidenceStore.loadMasterEvidence(runRecord.projectId, targetRunId);
+
+        // Check continuity report
+        const continuityPath = `.studio/production/${runRecord.projectId}/${targetRunId}/continuity_report.json`;
+        let continuityStatus = 'PENDING';
+        if (await storage.exists(continuityPath)) {
+          const cont = await storage.readJson<any>(continuityPath);
+          continuityStatus = cont.overallPassed ? 'VERIFIED' : 'FAILED';
+        }
+
+        // Check acceptance bundle
+        const acceptanceDir = `.studio/production/${runRecord.projectId}/${targetRunId}/acceptance`;
+        let acceptanceStatus = 'NOT VERIFIED';
+        if (await storage.exists(`${acceptanceDir}/acceptance-manifest.json`)) {
+          const val = await ProductionAcceptanceBundle.validate(acceptanceDir, storage);
+          acceptanceStatus = val.valid ? 'VERIFIED' : 'FAILED';
+        }
+
+        const totalPlanned = runRecord.completedShotIds.length + runRecord.pendingShotIds.length;
+        const totalShots = totalPlanned > 0 ? totalPlanned : Math.max(Object.keys(media).length, 1);
+
+        const realFlowShots = Object.values(media).filter((m) => m.generationSource === 'GOOGLE_FLOW_REAL').length;
+        const liveProvs = provs.filter((p) => p.providerTrust === 'LIVE_EXTERNAL' && p.status === 'SUCCESS');
+        const liveProviderStatus = liveProvs.length > 0 ? 'VERIFIED' : 'NOT VERIFIED';
+
+        const humanApprovals = Object.values(apps).filter((a) => a.approvalType === 'HUMAN' && a.status === 'APPROVED').length;
+        const passedQas = Object.values(qas).filter((q) => q.passed && q.overallStatus !== 'FAIL').length;
+        const masterStatus = master?.verificationStatus ?? 'NOT VERIFIED';
+
+        console.log(`\n==================================================`);
+        console.log(`PRODUCTION ACCEPTANCE STATUS: ${targetRunId}`);
+        console.log(`==================================================`);
+        console.log(`RUN                 : ${runRecord.status} (Stage: ${runRecord.currentStage}, Mode: ${runRecord.mode})`);
+        console.log(`LIVE PROVIDER       : ${liveProviderStatus}`);
+        console.log(`REAL FLOW MEDIA     : ${realFlowShots}/${totalShots} VERIFIED`);
+        console.log(`VISUAL QA           : ${passedQas}/${totalShots} PASS`);
+        console.log(`HUMAN APPROVAL      : ${humanApprovals}/${totalShots} VERIFIED`);
+        console.log(`CONTINUITY          : ${continuityStatus}`);
+        console.log(`MASTER              : ${masterStatus}`);
+        console.log(`ACCEPTANCE BUNDLE   : ${acceptanceStatus}`);
+        console.log(`--------------------------------------------------`);
         if (runRecord.resumeMetadata.nextAction) {
-          console.log(` - Next Action    : ${runRecord.resumeMetadata.nextAction}`);
+          console.log(`NEXT ACTION: ${runRecord.resumeMetadata.nextAction}`);
         }
         if (runRecord.resumeMetadata.recommendedCommand) {
-          console.log(` - Resume Command : ${runRecord.resumeMetadata.recommendedCommand}`);
+          console.log(`RECOMMENDED: ${runRecord.resumeMetadata.recommendedCommand}`);
         }
+        console.log(`==================================================\n`);
         return 0;
       }
 
@@ -1458,7 +1624,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const videoPath = args[4];
 
         if (!targetRunId || !targetShotId || !videoPath) {
-          console.error('Error: Required arguments missing. Usage: studio production import <runId> <shotId> <videoPath>');
+          console.error('Error: Required arguments missing. Usage: studio production import <runId> <shotId> <videoPath> [--source <source>] [--real-external]');
           return 1;
         }
 
@@ -1468,14 +1634,50 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           return 1;
         }
 
-        console.log(`📥 Importing media for shot "${targetShotId}" into run "${targetRunId}" from: ${videoPath}...`);
+        const srcIdx = args.indexOf('--source');
+        const sourceVal = srcIdx !== -1 && args[srcIdx + 1] ? args[srcIdx + 1].toLowerCase() : 'imported';
+        const isRealExternal = args.includes('--real-external');
+
+        let generationSource: 'HYPERFRAMES' | 'FLOW_ASSISTED' | 'LIVE_PROVIDER' | 'IMPORTED' | 'SIMULATED_FLOW' | 'GOOGLE_FLOW_REAL' = 'IMPORTED';
+        let provenance = `External Media Import: ${path.basename(videoPath)}`;
+
+        if (sourceVal === 'google-flow' || sourceVal === 'flow') {
+          if (!isRealExternal) {
+            console.error('❌ Error: Importing Google Flow media into production requires explicit operator confirmation via "--real-external".');
+            console.error('If this is a simulated or rehearsal download, use: --source simulated-flow');
+            return 1;
+          }
+          generationSource = 'GOOGLE_FLOW_REAL';
+          provenance = 'Google Flow — Real External Generation (Operator Verified)';
+        } else if (sourceVal === 'simulated-flow') {
+          generationSource = 'SIMULATED_FLOW';
+          provenance = 'Simulated Flow Download';
+        }
+
+        console.log(`📥 Importing media for shot "${targetShotId}" into run "${targetRunId}"...`);
+        console.log(` - Source      : ${generationSource}`);
+        console.log(` - File Path   : ${videoPath}`);
+
         const assetRegistry = new FileSystemAssetRegistry(storage);
         const orchestrator = new ProductionOrchestrator(storage, assetRegistry);
-        const updated = await orchestrator.importShotMedia(runRecord.projectId, targetRunId, targetShotId, videoPath);
+        const updated = await orchestrator.importShotMedia(runRecord.projectId, targetRunId, targetShotId, videoPath, {
+          generationSource,
+          provenance,
+          realExternal: isRealExternal,
+        });
 
+        const recordedMedia = updated.mediaEvidence[targetShotId];
         console.log(`✅ Media successfully imported, verified with FFprobe, and evaluated with Visual QA!`);
-        console.log(` - Status: ${updated.status}`);
-        console.log(` - Next Step: studio production approve ${targetRunId} ${targetShotId}`);
+        if (recordedMedia) {
+          console.log(` - Physical Path : ${recordedMedia.physicalPath}`);
+          console.log(` - Size          : ${recordedMedia.sizeBytes} bytes`);
+          console.log(` - SHA-256       : ${recordedMedia.sha256}`);
+          console.log(` - Format        : ${recordedMedia.width}x${recordedMedia.height} @ ${recordedMedia.fps || 24}fps (${recordedMedia.durationSeconds}s)`);
+          console.log(` - Codec         : video=${recordedMedia.videoCodec}, audio=${recordedMedia.audioCodec || 'none'}`);
+          console.log(` - Provenance    : ${recordedMedia.provenance}`);
+        }
+        console.log(` - Run Status    : ${updated.status}`);
+        console.log(`\nNext step: Human review & approve:\nstudio production approve ${targetRunId} ${targetShotId} --human`);
         return 0;
       }
 
@@ -1484,7 +1686,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const targetShotId = args[3];
 
         if (!targetRunId || !targetShotId) {
-          console.error('Error: Run ID and Shot ID required. Usage: studio production approve <runId> <shotId>');
+          console.error('Error: Run ID and Shot ID required. Usage: studio production approve <runId> <shotId> [--human]');
           return 1;
         }
 
@@ -1494,14 +1696,61 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           return 1;
         }
 
-        console.log(`✍️  Approving candidate shot "${targetShotId}" into Canon...`);
+        const isHuman = args.includes('--human');
+        const isAutomated = args.includes('--automated');
+        const actorIdx = args.indexOf('--actor');
+        const actorDisplayName = actorIdx !== -1 && args[actorIdx + 1] ? args[actorIdx + 1] : (isHuman ? 'Lead Director (Human Operator)' : 'Automated Test Harness');
+
+        let approvalType: 'HUMAN' | 'AUTOMATED_TEST' = 'HUMAN';
+        let confirmedByOperator = false;
+
+        if (isHuman) {
+          approvalType = 'HUMAN';
+          confirmedByOperator = true;
+        } else if (isAutomated) {
+          approvalType = 'AUTOMATED_TEST';
+        } else {
+          // If neither flag passed
+          const isTty = Boolean(process.stdin.isTTY);
+          if (isTty) {
+            approvalType = 'HUMAN';
+            confirmedByOperator = true;
+          } else {
+            approvalType = 'AUTOMATED_TEST';
+            console.log('⚠️  Notice: Defaulting to AUTOMATED_TEST approval in non-interactive environment.');
+            console.log('To confirm genuine human review, re-run with: studio production approve <runId> <shotId> --human');
+          }
+        }
+
+        console.log(`✍️  Approving candidate shot "${targetShotId}" into Canon (${approvalType})...`);
         const assetRegistry = new FileSystemAssetRegistry(storage);
         const orchestrator = new ProductionOrchestrator(storage, assetRegistry);
-        const updated = await orchestrator.approveShot(runRecord.projectId, targetRunId, targetShotId);
+        const updated = await orchestrator.approveShot(
+          runRecord.projectId,
+          targetRunId,
+          targetShotId,
+          actorDisplayName,
+          undefined,
+          {
+            approvalType,
+            confirmedByOperator,
+            actorDisplayName,
+            interactive: isHuman,
+            approvalSource: 'studio production approve',
+          }
+        );
 
+        const appRecord = updated.approvalEvidence[targetShotId];
         console.log(`✅ Shot "${targetShotId}" promoted to Canon!`);
-        console.log(` - Run Status: ${updated.status}`);
-        console.log(` - Next Step  : studio production resume ${targetRunId}`);
+        if (appRecord) {
+          console.log(` - Canon Asset ID : ${appRecord.canonicalAssetId}`);
+          console.log(` - Media SHA-256  : ${appRecord.mediaSha256}`);
+          console.log(` - QA Report ID   : ${appRecord.qaReportId}`);
+          console.log(` - Approval Type  : ${appRecord.approvalType}`);
+          console.log(` - Approved By    : ${appRecord.decidedBy}`);
+        }
+        console.log(` - Run Status     : ${updated.status}`);
+        console.log(`\nNext step to continue production:\nstudio production resume ${targetRunId}`);
         return 0;
       }
 

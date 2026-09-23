@@ -25,6 +25,7 @@
     "smoke:visual-qa-live": "tsx packages/cli/src/index.ts smoke visual-qa-live",
     "smoke:production": "tsx packages/cli/src/index.ts smoke production",
     "smoke:production-live": "tsx packages/cli/src/index.ts smoke production-live",
+    "smoke:acceptance-contract": "tsx packages/cli/src/index.ts smoke acceptance-contract",
     "studio": "tsx packages/cli/src/index.ts",
     "clean": "npm run --workspaces --if-present clean"
   },

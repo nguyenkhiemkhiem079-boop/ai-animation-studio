@@ -33,6 +33,7 @@ import { TimelineAssembler } from '../timeline/timeline-assembler.js';
 import { RealAudioMixer } from '../audio/real-audio-mixer.js';
 import { ContinuityQAEvaluator } from '../qa/continuity-qa-evaluator.js';
 import { VideoRenderer } from '../export/video-renderer.js';
+import { ProductionAcceptanceBundle } from '../production-verifier/acceptance-bundle.js';
 
 export interface CreateProductionRunOptions {
   projectId: string;
@@ -324,6 +325,8 @@ export class ProductionOrchestrator {
         sm.recordQAEvidence({
           shotId,
           reportId: report.reportId,
+          mediaSha256: mediaEvidence.sha256,
+          candidateAssetId: mediaEvidence.assetId,
           overallStatus: report.status,
           passed: report.passed,
           mechanism: report.evaluationMechanism,
@@ -425,6 +428,8 @@ export class ProductionOrchestrator {
       shots: plannedShots,
       timelineSequence: sequence,
     });
+    const continuityPath = `.studio/production/${projectId}/${runId}/continuity_report.json`;
+    await this.storage.writeJson(continuityPath, continuityReport);
 
     // Master Video Rendering
     const masterDir = path.resolve('.studio', 'production', projectId, runId, 'master');
@@ -439,7 +444,7 @@ export class ProductionOrchestrator {
     });
 
     // 5. MASTER QA & VERIFICATION
-    sm.transition('MASTER_QA', 'Auditing final master deliverable against 13-point production gate');
+    sm.transition('MASTER_QA', 'Auditing final master deliverable against 18-point production gate');
     sm.setStage('master_qa');
 
     const masterEvidence = ProductionMasterVerifier.assertVerified({
@@ -457,6 +462,17 @@ export class ProductionOrchestrator {
 
     sm.recordMasterEvidence(masterEvidence);
     await this.evidenceStore.saveMasterEvidence(projectId, runId, masterEvidence);
+
+    // Build durable acceptance bundle
+    await ProductionAcceptanceBundle.build({
+      projectId,
+      runId,
+      storage: this.storage,
+      run: sm.getRun(),
+      masterEvidence,
+      requiredShotIds: allShotIds,
+      providerModelIds: this.llm ? [this.llm.metadata.id] : [],
+    });
 
     // 6. COMPLETED
     sm.transition('COMPLETED', 'Production run completed and master verified');
@@ -480,12 +496,21 @@ export class ProductionOrchestrator {
     shotId: string,
     videoPath: string,
     options?: {
-      generationSource?: 'HYPERFRAMES' | 'FLOW_ASSISTED' | 'LIVE_PROVIDER' | 'IMPORTED' | 'SIMULATED_FLOW';
+      generationSource?: 'HYPERFRAMES' | 'FLOW_ASSISTED' | 'LIVE_PROVIDER' | 'IMPORTED' | 'SIMULATED_FLOW' | 'GOOGLE_FLOW_REAL';
       provenance?: string;
+      realExternal?: boolean;
     }
   ): Promise<ProductionRun> {
     const run = await this.repository.findById(projectId, runId);
     if (!run) throw new Error(`Production run "${runId}" not found.`);
+
+    // Verify source classification: GOOGLE_FLOW_REAL requires explicit realExternal confirmation
+    let source = options?.generationSource ?? 'IMPORTED';
+    if (source === 'GOOGLE_FLOW_REAL' && !options?.realExternal) {
+      throw new ProductionSafetyError(
+        `Explicit operator confirmation (--real-external) required to record generationSource="GOOGLE_FLOW_REAL" for shot "${shotId}".`
+      );
+    }
 
     const sm = new ProductionRunStateMachine(run);
     sm.transition('VERIFYING_MEDIA', `Importing external media for shot "${shotId}"`);
@@ -496,7 +521,7 @@ export class ProductionOrchestrator {
       assetId: `ASSET_IMPORT_${shotId}_${Date.now()}`,
       filePath: videoPath,
       provenance: options?.provenance ?? `External Media Import: ${path.basename(videoPath)}`,
-      generationSource: options?.generationSource ?? 'IMPORTED',
+      generationSource: source,
       executionMode: sm.mode,
     });
 
@@ -558,6 +583,8 @@ export class ProductionOrchestrator {
     sm.recordQAEvidence({
       shotId,
       reportId: report.reportId,
+      mediaSha256: mediaEvidence.sha256,
+      candidateAssetId: mediaEvidence.assetId,
       overallStatus: report.status,
       passed: report.passed,
       mechanism: report.evaluationMechanism,
@@ -605,6 +632,7 @@ export class ProductionOrchestrator {
       actorDisplayName?: string;
       approvalSource?: string;
       interactive?: boolean;
+      confirmedByOperator?: boolean;
     }
   ): Promise<ProductionRun> {
     const run = await this.repository.findById(projectId, runId);
@@ -616,6 +644,16 @@ export class ProductionOrchestrator {
       throw new ProductionSafetyError(`Cannot approve shot "${shotId}": No media evidence recorded.`);
     }
 
+    // Verify current media on disk has not changed from recorded evidence
+    if (fs.existsSync(media.physicalPath)) {
+      const diskCheck = ArtifactVerifier.verify(media.physicalPath);
+      if (diskCheck.checksumSha256 && diskCheck.checksumSha256 !== media.sha256) {
+        throw new ProductionSafetyError(
+          `Cannot approve shot "${shotId}": Media on disk (${diskCheck.checksumSha256}) has changed from recorded media evidence (${media.sha256}). Re-import or re-render required.`
+        );
+      }
+    }
+
     const qa = run.qaEvidence[shotId];
     if (!qa || !qa.passed) {
       throw new ProductionSafetyError(
@@ -623,12 +661,28 @@ export class ProductionOrchestrator {
       );
     }
 
+    // Enforce human approval truth: prevent scripted non-interactive spoofing of HUMAN approval
+    const hasOperatorConfirmation = options?.interactive === true || options?.confirmedByOperator === true;
+
+    let approvalType = options?.approvalType;
+    if (!approvalType) {
+      approvalType = hasOperatorConfirmation ? 'HUMAN' : 'AUTOMATED_TEST';
+    }
+
+    if (approvalType === 'HUMAN' && !hasOperatorConfirmation) {
+      throw new ProductionSafetyError(
+        `Cannot record approvalType="HUMAN" without explicit operator confirmation or interactive session. Non-interactive automated scripts must use approvalType="AUTOMATED_TEST".`
+      );
+    }
+
     sm.recordApprovalEvidence({
       shotId,
       candidateAssetId: media.assetId,
       canonicalAssetId: `CANON_${shotId}`,
+      mediaSha256: media.sha256,
+      qaReportId: qa.reportId,
       status: 'APPROVED',
-      approvalType: options?.approvalType ?? 'HUMAN',
+      approvalType,
       actorId: options?.actorId,
       actorDisplayName: options?.actorDisplayName,
       approvalSource: options?.approvalSource,
@@ -676,6 +730,7 @@ export class ProductionOrchestrator {
     sm.recordApprovalEvidence({
       shotId,
       candidateAssetId: media.assetId,
+      mediaSha256: media.sha256,
       status: 'REJECTED',
       approvalType: 'HUMAN',
       interactive: false,
