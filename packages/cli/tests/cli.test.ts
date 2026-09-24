@@ -163,7 +163,7 @@ LAN: Then we move tonight.`;
     expect(listCode).toBe(0);
   });
 
-  it('runs skills check, list, and route via CLI', async () => {
+  it('runs skills check, list, inspect, and route via CLI', async () => {
     const repoRoot = path.resolve(__dirname, '../../..');
     const rootStorage = new FileSystemStorage(repoRoot);
 
@@ -171,20 +171,36 @@ LAN: Then we move tonight.`;
     const checkCode = await runCli(['skills', 'check'], { cwd: repoRoot, storage: rootStorage });
     expect(checkCode).toBe(0);
 
+    const checkJsonCode = await runCli(['skills', 'check', '--json'], { cwd: repoRoot, storage: rootStorage });
+    expect(checkJsonCode).toBe(0);
+
     // 2. skills list
     const listCode = await runCli(['skills', 'list'], { cwd: repoRoot, storage: rootStorage });
     expect(listCode).toBe(0);
 
-    // 3. skills list with category filter
-    const listDevCode = await runCli(['skills', 'list', 'development'], { cwd: repoRoot, storage: rootStorage });
+    // 3. skills list with category filter and json
+    const listDevCode = await runCli(['skills', 'list', 'development', '--json'], { cwd: repoRoot, storage: rootStorage });
     expect(listDevCode).toBe(0);
 
-    // 4. skills route
+    // 4. skills inspect
+    const inspectCode = await runCli(['skills', 'inspect', 'live-provider-validation'], { cwd: repoRoot, storage: rootStorage });
+    expect(inspectCode).toBe(0);
+
+    const inspectJsonCode = await runCli(['skills', 'inspect', 'flow-operator-workflow', '--json'], { cwd: repoRoot, storage: rootStorage });
+    expect(inspectJsonCode).toBe(0);
+
+    // 5. skills route
     const routeCode = await runCli(
       ['skills', 'route', 'Check whether Minh stays visually consistent.'],
       { cwd: repoRoot, storage: rootStorage }
     );
     expect(routeCode).toBe(0);
+
+    const routeJsonCode = await runCli(
+      ['skills', 'route', 'check Gemini live', '--json'],
+      { cwd: repoRoot, storage: rootStorage }
+    );
+    expect(routeJsonCode).toBe(0);
   });
 
   it('manages character turnaround sheets, asset resolution, QA, and approval via CLI', async () => {
