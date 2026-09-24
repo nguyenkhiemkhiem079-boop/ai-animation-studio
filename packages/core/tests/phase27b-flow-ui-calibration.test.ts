@@ -109,6 +109,38 @@ describe('Phase 27B — Real Google Flow UI Calibration & Zero-Credit Browser Co
       expect(genericInput.score).toBeLessThan(0.4);
     });
 
+    it('disqualifies project title input with aria-label "Văn bản có thể chỉnh sửa"', () => {
+      const titleInput = scorePromptSurface({
+        tagName: 'input',
+        ariaLabel: 'Văn bản có thể chỉnh sửa',
+      });
+      expect(titleInput.score).toBe(0);
+      expect(titleInput.reasons.some((r) => r.includes('title'))).toBe(true);
+    });
+
+    it('scores contenteditable inside composer / adjacent to generate button with high confidence', () => {
+      const composerDiv = scorePromptSurface({
+        tagName: 'div',
+        isContentEditable: true,
+        hasNearbyGenerate: true,
+        inComposer: true,
+      });
+      expect(composerDiv.score).toBeGreaterThanOrEqual(0.7);
+    });
+
+    it('unambiguously distinguishes contenteditable composer from project title input', () => {
+      const composerDiv = scorePromptSurface({
+        tagName: 'div',
+        isContentEditable: true,
+        hasNearbyGenerate: true,
+      });
+      const titleInput = scorePromptSurface({
+        tagName: 'input',
+        ariaLabel: 'Văn bản có thể chỉnh sửa',
+      });
+      expect(composerDiv.score - titleInput.score).toBeGreaterThanOrEqual(0.6);
+    });
+
     it('fails closed when prompt input is ambiguous', async () => {
       const mockPage = new MockFlowPage();
       mockPage.promptInputAmbiguous = true;

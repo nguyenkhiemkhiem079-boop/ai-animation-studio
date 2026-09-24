@@ -250,6 +250,22 @@ export function parseCreditText(rawText?: string | null): {
     };
   }
 
+  if (
+    lower.includes('gói thành viên') ||
+    lower.includes('membership') ||
+    lower.includes('subscription') ||
+    lower.includes('gói đăng ký')
+  ) {
+    return {
+      rawText: clean,
+      parsedCredits: null,
+      confidence: 0.8,
+      isCertain: true,
+      tier: 'MEMBER',
+      details: `Active membership/subscription tier detected: "${clean}"`,
+    };
+  }
+
   return {
     rawText: clean,
     parsedCredits: null,
@@ -268,26 +284,68 @@ export function scorePromptSurface(candidate: {
   ariaLabel?: string | null;
   className?: string | null;
   isContentEditable?: boolean;
+  hasNearbyGenerate?: boolean;
+  inComposer?: boolean;
 }): { score: number; reasons: string[] } {
   let score = 0;
   const reasons: string[] = [];
   const tag = candidate.tagName.toLowerCase();
 
+  const pText = (candidate.placeholder || '').toLowerCase();
+  const aText = (candidate.ariaLabel || '').toLowerCase();
+  const cText = (candidate.className || '').toLowerCase();
+
+  // Disqualify search inputs
+  if (pText.includes('search') || aText.includes('search') || pText.includes('tìm kiếm') || aText.includes('tìm kiếm')) {
+    return { score: 0, reasons: ['Search input disqualified'] };
+  }
+
+  // Disqualify project/document title or rename inputs (e.g. Google Drive/Docs/Flow title header)
+  if (
+    aText.includes('văn bản có thể chỉnh sửa') ||
+    aText.includes('tiêu đề') ||
+    aText.includes('title') ||
+    aText.includes('rename') ||
+    pText.includes('tiêu đề') ||
+    pText.includes('title')
+  ) {
+    if (!pText.includes('prompt') && !pText.includes('câu lệnh') && !candidate.hasNearbyGenerate) {
+      return { score: 0, reasons: ['Document/project title input disqualified'] };
+    }
+  }
+
   if (tag === 'textarea') {
-    score += 0.3;
-    reasons.push('textarea element (+0.3)');
+    score += 0.35;
+    reasons.push('textarea element (+0.35)');
   } else if (candidate.isContentEditable) {
-    score += 0.25;
-    reasons.push('contenteditable element (+0.25)');
+    score += 0.35;
+    reasons.push('contenteditable element (+0.35)');
   } else if (tag === 'input') {
     score += 0.1;
     reasons.push('input element (+0.1)');
   }
 
-  const promptKeywords = ['prompt', 'describe', 'instruct', 'generate', 'ask', 'message', 'imagine', 'create', 'story'];
-  const pText = (candidate.placeholder || '').toLowerCase();
-  const aText = (candidate.ariaLabel || '').toLowerCase();
-  const cText = (candidate.className || '').toLowerCase();
+  const promptKeywords = [
+    'prompt',
+    'describe',
+    'instruct',
+    'generate',
+    'ask',
+    'message',
+    'imagine',
+    'create',
+    'story',
+    'câu lệnh',
+    'nhập câu lệnh',
+    'nhập',
+    'mô tả',
+    'ý tưởng',
+    'lời nhắc',
+    'hỏi',
+    'tạo',
+    'instrucción',
+    'décrire',
+  ];
 
   for (const kw of promptKeywords) {
     if (pText.includes(kw)) {
@@ -305,9 +363,23 @@ export function scorePromptSurface(candidate: {
     }
   }
 
-  if (cText.includes('prompt') || cText.includes('chat-input') || cText.includes('composer')) {
-    score += 0.2;
-    reasons.push(`class indicates prompt/composer (+0.2)`);
+  if (
+    cText.includes('prompt') ||
+    cText.includes('chat-input') ||
+    cText.includes('composer') ||
+    cText.includes('cdk-textarea-autosize') ||
+    cText.includes('mat-input-element') ||
+    cText.includes('instruction') ||
+    cText.includes('ql-editor') ||
+    cText.includes('prosemirror')
+  ) {
+    score += 0.25;
+    reasons.push(`class indicates prompt/composer (+0.25)`);
+  }
+
+  if (candidate.hasNearbyGenerate || candidate.inComposer) {
+    score += 0.35;
+    reasons.push('located inside composer container / adjacent to generate control (+0.35)');
   }
 
   return { score: Math.min(1.0, score), reasons };
@@ -322,13 +394,38 @@ export async function findEditablePromptSurface(page: Page): Promise<SemanticDis
   try {
     const rawCandidates: any[] = await page.evaluate(() => {
       const elements: any[] = [];
-      const queryList = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]'));
+      const queryList = Array.from(
+        document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"], input[type="text"], input:not([type])')
+      );
 
       queryList.forEach((el, index) => {
         const rect = el.getBoundingClientRect();
         const style = window.getComputedStyle(el);
         const isVisible = style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
         if (!isVisible) return;
+
+        // Check for dedicated composer/prompt containers, avoiding generic '[class*="input"]'
+        const parentComposer = el.closest(
+          '[class*="composer"], [class*="prompt-box"], [class*="prompt-container"], [class*="chat-input"], [class*="agent-composer"], [class*="input-bar"], form'
+        );
+
+        // Check if generate control is nearby (in same composer or immediate ancestral block <= 5 levels)
+        let hasNearbyGenerate = false;
+        if (parentComposer) {
+          hasNearbyGenerate = Boolean(
+            parentComposer.querySelector('.generate-icon-button, [class*="generate"], [aria-label*="tạo"], [aria-label*="generate"]')
+          );
+        }
+        if (!hasNearbyGenerate) {
+          let ancestor: Element | null = el.parentElement;
+          for (let depth = 0; depth < 5 && ancestor; depth++) {
+            if (ancestor.querySelector('.generate-icon-button, [class*="generate"], [aria-label*="tạo"], [aria-label*="generate"]')) {
+              hasNearbyGenerate = true;
+              break;
+            }
+            ancestor = ancestor.parentElement;
+          }
+        }
 
         elements.push({
           index,
@@ -340,6 +437,8 @@ export async function findEditablePromptSurface(page: Page): Promise<SemanticDis
           id: el.id || '',
           width: Math.round(rect.width),
           height: Math.round(rect.height),
+          hasNearbyGenerate,
+          inComposer: Boolean(parentComposer),
         });
       });
       return elements;
@@ -367,14 +466,40 @@ export async function findEditablePromptSurface(page: Page): Promise<SemanticDis
     const runnerUp = scored[1];
 
     // High confidence single match (score >= 0.6 and significantly better than runner-up)
-    if (best.score >= 0.6 && (!runnerUp || best.score - runnerUp.score >= 0.25)) {
-      const selector = best.id
+    if (best.score >= 0.6 && (!runnerUp || best.score - runnerUp.score >= 0.2)) {
+      let selector = best.id
         ? `#${best.id}`
         : best.placeholder
         ? `${best.tagName}[placeholder="${best.placeholder.replace(/"/g, '\\"')}"]`
         : best.ariaLabel
         ? `${best.tagName}[aria-label="${best.ariaLabel.replace(/"/g, '\\"')}"]`
-        : `${best.tagName}:nth-of-type(${best.index + 1})`;
+        : '';
+
+      if (!selector && typeof (page as any).evaluate === 'function') {
+        const stamped = await (page as any).evaluate((targetIndex: number) => {
+          const queryList = Array.from(
+            document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"], input[type="text"], input:not([type])')
+          );
+          const el = queryList[targetIndex];
+          if (el) {
+            el.setAttribute('data-studio-prompt', 'true');
+            return true;
+          }
+          return false;
+        }, best.index).catch(() => false);
+
+        if (stamped) {
+          selector = '[data-studio-prompt="true"]';
+        }
+      }
+
+      if (!selector && best.isContentEditable) {
+        selector = '[contenteditable="true"]';
+      }
+
+      if (!selector) {
+        selector = `${best.tagName}:nth-of-type(${best.index + 1})`;
+      }
 
       return {
         status: 'FOUND',
@@ -451,17 +576,30 @@ export async function findGenerateControl(page: Page): Promise<SemanticDiscovery
         const lowerText = text.toLowerCase();
         const lowerAria = ariaLabel.toLowerCase();
         const lowerTitle = title.toLowerCase();
+        const lowerClass = (btn.className || '').toLowerCase();
 
         let score = 0;
         const matches: string[] = [];
 
+        // Exact live class indicator
+        if (lowerClass.includes('generate-icon-button') || lowerClass.includes('generate-button')) {
+          score += 0.85;
+          matches.push('class contains generate-icon-button');
+        }
+
         // Keywords
         if (lowerText === 'generate' || lowerAria === 'generate') {
-          score += 0.8;
+          score += 0.85;
           matches.push('exact generate text/aria');
+        } else if (lowerAria === 'bắt đầu tạo' || lowerText === 'bắt đầu tạo') {
+          score += 0.85;
+          matches.push('exact Vietnamese generate aria/text');
         } else if (lowerText.includes('generate') || lowerAria.includes('generate')) {
-          score += 0.6;
+          score += 0.65;
           matches.push('contains generate');
+        } else if (lowerAria.includes('tạo') && (lowerAria.includes('bắt đầu') || lowerClass.includes('generate'))) {
+          score += 0.7;
+          matches.push('Vietnamese generate match');
         } else if (lowerText === 'run' || lowerAria === 'run' || lowerText === 'create' || lowerAria === 'create') {
           score += 0.5;
           matches.push('run/create text');
@@ -472,9 +610,12 @@ export async function findGenerateControl(page: Page): Promise<SemanticDiscovery
 
         // SVG arrow or send icon indicators
         const hasSvg = btn.querySelector('svg') !== null;
-        if (hasSvg && (lowerAria.includes('send') || lowerAria.includes('submit') || lowerTitle.includes('submit'))) {
+        if (
+          (hasSvg || lowerText.includes('arrow_forward') || lowerText.includes('send')) &&
+          (lowerAria.includes('send') || lowerAria.includes('submit') || lowerTitle.includes('submit') || lowerAria.includes('tạo'))
+        ) {
           score += 0.5;
-          matches.push('svg icon with send/submit aria');
+          matches.push('arrow/send icon with generate/submit aria');
         }
 
         if (score > 0) {
@@ -483,7 +624,7 @@ export async function findGenerateControl(page: Page): Promise<SemanticDiscovery
             text,
             ariaLabel,
             title,
-            score,
+            score: Math.min(1.0, score),
             matches,
             id: btn.id || '',
             className: btn.className || '',
@@ -507,11 +648,13 @@ export async function findGenerateControl(page: Page): Promise<SemanticDiscovery
     const best = candidates[0];
     const runnerUp = candidates[1];
 
-    if (best.score >= 0.6 && (!runnerUp || best.score - runnerUp.score >= 0.3)) {
+    if (best.score >= 0.6 && (!runnerUp || best.score - runnerUp.score >= 0.2)) {
       const selector = best.id
         ? `#${best.id}`
         : best.ariaLabel
         ? `button[aria-label="${best.ariaLabel.replace(/"/g, '\\"')}"]`
+        : best.className?.includes('generate-icon-button')
+        ? 'button.generate-icon-button'
         : `button:nth-of-type(${best.index + 1})`;
 
       return {
@@ -570,7 +713,7 @@ export async function findCreditIndicator(page: Page): Promise<
       // Look for credit container
       const candidates = Array.from(
         document.querySelectorAll(
-          '[aria-label*="Credit" i], [aria-label*="credit" i], [data-testid*="credit" i], [data-testid="credits"], [class*="credit"], [class*="balance"], [class*="token"]'
+          '[aria-label*="Credit" i], [aria-label*="credit" i], [data-testid*="credit" i], [data-testid="credits"], [class*="credit"], [class*="balance"], [class*="token"], [aria-label*="gói thành viên" i], [aria-label*="tín dụng" i]'
         )
       );
 
@@ -578,7 +721,15 @@ export async function findCreditIndicator(page: Page): Promise<
         const text = (el.textContent || '').trim();
         const ariaLabel = el.getAttribute('aria-label') || '';
         const combined = text || ariaLabel;
-        if (combined && (combined.toLowerCase().includes('credit') || combined.toLowerCase().includes('balance'))) {
+        const lower = combined.toLowerCase();
+        if (
+          combined &&
+          (lower.includes('credit') ||
+            lower.includes('balance') ||
+            lower.includes('gói thành viên') ||
+            lower.includes('tín dụng') ||
+            lower.includes('số dư'))
+        ) {
           return {
             rawText: combined,
             tagName: el.tagName.toLowerCase(),
@@ -663,13 +814,21 @@ export async function findAgentControl(page: Page): Promise<SemanticDiscoveryRes
         const isChecked = ariaChecked === 'true' || el.classList.contains('active') || (el as any).checked === true;
 
         const combined = `${text} ${ariaLabel}`.toLowerCase();
-        if (combined.includes('agent') || combined.includes('flow agent')) {
+        const isAgentSignal =
+          combined.includes('agent') ||
+          combined.includes('flow agent') ||
+          combined.includes('nhật ký phiên') ||
+          combined.includes('bắt đầu phiên mới') ||
+          combined.includes('phiên mới') ||
+          combined.includes('trợ lý');
+
+        if (isAgentSignal) {
           matches.push({
             index,
             text,
             ariaLabel,
             role,
-            isActive: isChecked,
+            isActive: isChecked || combined.includes('phiên'),
             tagName: el.tagName.toLowerCase(),
             id: el.id || '',
           });
@@ -688,25 +847,26 @@ export async function findAgentControl(page: Page): Promise<SemanticDiscoveryRes
       };
     }
 
-    if (rawResult.length === 1) {
-      const match = rawResult[0];
-      return {
-        status: 'FOUND',
-        confidence: 0.9,
-        candidateCount: 1,
-        locatorStrategy: match.id ? `#${match.id}` : `button[aria-label*="Agent"]`,
-        evidence: `Text: "${match.text}" aria-label: "${match.ariaLabel}" active=${match.isActive}`,
-        target: match,
-      };
-    }
+    const best =
+      rawResult.find(
+        (m: any) =>
+          m.text?.toLowerCase().includes('bắt đầu phiên mới') ||
+          m.text?.toLowerCase().includes('agent') ||
+          m.ariaLabel?.toLowerCase().includes('agent') ||
+          m.role === 'switch'
+      ) || rawResult[0];
 
     return {
-      status: 'AMBIGUOUS',
-      confidence: 0.5,
+      status: 'FOUND',
+      confidence: 0.9,
       candidateCount: rawResult.length,
-      locatorStrategy: 'AMBIGUOUS_AGENT_CONTROL',
-      details: `Multiple Agent controls found (${rawResult.length})`,
-      evidence: rawResult.map((m: any) => `"${m.text || m.ariaLabel}"`).join(' | '),
+      locatorStrategy: best.id
+        ? `#${best.id}`
+        : best.ariaLabel
+        ? `button[aria-label="${best.ariaLabel.replace(/"/g, '\\"')}"]`
+        : `button:nth-of-type(${best.index + 1})`,
+      evidence: `Text: "${best.text}" aria-label: "${best.ariaLabel}" active=${best.isActive}`,
+      target: best,
     };
   } catch (err: any) {
     return {
