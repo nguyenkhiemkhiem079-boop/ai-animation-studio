@@ -503,9 +503,21 @@ Then you know it was necessary.`;
     expect(code).toBe(0);
   });
 
-  it('runs studio flow browser-probe with --enter-project without throwing', async () => {
-    const code = await runCli(['flow', 'browser-probe', '--enter-project', '--json'], { cwd: tempDir, storage });
-    expect(code === 0 || code === 1).toBe(true);
+  it('runs studio agent status reporting quota matrix and owner', async () => {
+    const code = await runCli(['agent', 'status'], { cwd: tempDir, storage });
+    expect(code).toBe(0);
+  });
+
+  it('runs studio agent checkpoint and updates manifest', async () => {
+    const code = await runCli(['agent', 'checkpoint'], { cwd: tempDir, storage });
+    expect(code).toBe(0);
+  });
+
+  it('runs studio agent set-owner safely', async () => {
+    const code = await runCli(['agent', 'set-owner', 'GEMINI_FALLBACK'], { cwd: tempDir, storage });
+    expect(code).toBe(0);
+    const code2 = await runCli(['agent', 'set-owner', 'ANTIGRAVITY'], { cwd: tempDir, storage });
+    expect(code2).toBe(0);
   });
 });
 

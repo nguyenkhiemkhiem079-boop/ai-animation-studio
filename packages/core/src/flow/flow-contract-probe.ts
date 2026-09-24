@@ -141,6 +141,8 @@ export class FlowContractProbe {
         await flowPage.enterFlowWorkspace();
         rawUrl = page.url();
         sanitizedUrl = rawUrl.split('?')[0];
+        // Allow workspace shell and composer to hydrate after entering
+        await new Promise((r) => setTimeout(r, 1500));
       }
     }
 

@@ -105,6 +105,8 @@ import {
   CreditAwarePlanner,
   FlowBatchCompiler,
   ArtifactVerifier,
+  LongRunManifestManager,
+  GeminiEngineeringWorker,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -840,6 +842,125 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       }
 
       console.error(`Unknown flow subcommand: "${subCommand}". Supported: doctor, prepare, package, status, import, qa, approve, reject, history, smoke`);
+      return 1;
+    }
+
+    case 'agent': {
+      const subCommand = args[1] || 'status';
+      const manifestMgr = new LongRunManifestManager();
+      const exec = await import('node:child_process');
+
+      const getHead = (): string => {
+        try {
+          return exec.execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+        } catch {
+          return 'unknown_head';
+        }
+      };
+
+      if (subCommand === 'status') {
+        const head = getHead();
+        let manifest;
+        if (!manifestMgr.manifestExists()) {
+          manifest = manifestMgr.initialize({
+            head,
+            currentPhase: 'PHASE_28_PROJECT_WORKSPACE_CALIBRATION_AND_END_TO_END_PATH',
+            nextExactAction: 'npm.cmd run studio -- flow browser-probe --enter-project',
+            firstCommandToRun: 'npm.cmd run studio -- flow browser-probe --enter-project',
+            completedTasks: [
+              'Phase 27B: Zero-credit flow contract probe & selector audit',
+              'Phase 27C: Real Chrome session bridge via CDP',
+              'Phase 27D: Zero-credit flow home to project navigation',
+            ],
+            remainingTasks: [
+              'Live project workspace prompt & agent control calibration',
+              'Deterministic end-to-end production vertical slice verification',
+              'Final production gap sweep and acceptance gate verification',
+            ],
+          });
+        } else {
+          manifest = manifestMgr.loadManifest();
+        }
+
+        console.log('\n🤖 AI ANIMATION STUDIO — AGENT RUNTIME STATUS');
+        console.log('============================================================');
+        console.log(`Mission ID            : ${manifest.missionId}`);
+        console.log(`Active Owner          : ${manifest.activeEngineeringOwner}`);
+        console.log(`Current Phase         : ${manifest.currentPhase}`);
+        console.log(`Repository HEAD       : ${manifest.repositoryHead}`);
+        console.log(`Last Green HEAD       : ${manifest.lastGreenHead}`);
+        console.log(`Updated At            : ${manifest.updatedAt}\n`);
+
+        console.log('QUOTA STATE MATRIX:');
+        console.log(` - Primary Agent Quota : ${manifest.quotaState.primaryAgent}`);
+        console.log(` - Gemini Engineering  : ${manifest.quotaState.geminiEngineering}`);
+        console.log(` - Gemini Visual QA    : ${manifest.quotaState.geminiVisualQA}`);
+        console.log(` - Google Flow Credits : ${manifest.quotaState.flowCredits}`);
+        console.log(` - Paid Video API      : ${manifest.quotaState.paidVideoApi} (STRICT FREE_ONLY)\n`);
+
+        console.log(`Next Exact Action     : ${manifest.nextExactAction}`);
+        console.log(`First Command to Run  : ${manifest.firstCommandToRun}\n`);
+
+        console.log('FALLBACK TELEMETRY:');
+        console.log(` - Primary Quota Events: ${manifest.fallbackHistory.primaryAgentQuotaEvents}`);
+        console.log(` - Fallback Used       : ${manifest.fallbackHistory.geminiEngineeringFallbackUsed ? 'YES' : 'NO'}`);
+        console.log(` - Fallback Requests   : ${manifest.fallbackHistory.geminiEngineeringRequestCount}`);
+        console.log(` - Fallback Commits    : ${manifest.fallbackHistory.fallbackCommits.length}`);
+        console.log(` - Takeovers by Primary: ${manifest.fallbackHistory.primaryAgentTakeovers}`);
+        console.log(` - Dual Quota Blocks   : ${manifest.fallbackHistory.dualQuotaBlockEvents}`);
+        console.log('============================================================\n');
+        return 0;
+      }
+
+      if (subCommand === 'checkpoint') {
+        const head = getHead();
+        let manifest;
+        if (!manifestMgr.manifestExists()) {
+          manifest = manifestMgr.initialize({
+            head,
+            currentPhase: 'PHASE_28_PROJECT_WORKSPACE_CALIBRATION_AND_END_TO_END_PATH',
+            nextExactAction: 'npm.cmd run studio -- flow browser-probe --enter-project',
+            firstCommandToRun: 'npm.cmd run studio -- flow browser-probe --enter-project',
+          });
+        } else {
+          manifest = manifestMgr.loadManifest();
+        }
+        manifest.repositoryHead = head;
+        manifest.lastGreenHead = head;
+        manifest.updatedAt = new Date().toISOString();
+        manifestMgr.saveManifest(manifest);
+        console.log(`\n✅ Saved Agent Runtime Checkpoint to ${manifestMgr.getManifestPath()}`);
+        console.log(`📄 Generated Mission Resume Doc at ${manifestMgr.getResumeMdPath()}\n`);
+        return 0;
+      }
+
+      if (subCommand === 'resume') {
+        if (!manifestMgr.manifestExists()) {
+          console.error('\n❌ No long-run manifest found. Initialize with "studio agent checkpoint"\n');
+          return 1;
+        }
+        const manifest = manifestMgr.loadManifest();
+        console.log('\n🔄 RESUMING LONG-RUN MISSION');
+        console.log(`Owner: ${manifest.activeEngineeringOwner}`);
+        console.log(`Phase: ${manifest.currentPhase}`);
+        console.log(`Next Action: ${manifest.nextExactAction}\n`);
+        console.log(`Run command:\n  ${manifest.firstCommandToRun}\n`);
+        return 0;
+      }
+
+      if (subCommand === 'set-owner') {
+        const newOwner = args[2] as any;
+        if (newOwner !== 'ANTIGRAVITY' && newOwner !== 'GEMINI_FALLBACK') {
+          console.error('Error: Owner must be ANTIGRAVITY or GEMINI_FALLBACK');
+          return 1;
+        }
+        const head = getHead();
+        const updated = manifestMgr.updateOwner(newOwner, head);
+        console.log(`\n✅ Engineering Owner updated to: ${updated.activeEngineeringOwner}\n`);
+        return 0;
+      }
+
+      console.error(`Unknown agent subcommand: "${subCommand}". Supported: status, checkpoint, resume, set-owner`);
       return 1;
     }
 

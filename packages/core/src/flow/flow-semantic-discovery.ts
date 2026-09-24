@@ -1053,13 +1053,45 @@ export async function findStartCreatingControl(page: Page): Promise<
     const best = candidates[0];
     const runnerUp = candidates[1];
 
-    const selector = best.id
+    let selector = best.id
       ? `#${best.id}`
       : best.ariaLabel
       ? `[aria-label="${best.ariaLabel.replace(/"/g, '\\"')}"]`
       : best.href
       ? `a[href="${best.href.replace(/"/g, '\\"')}"]`
-      : `button:nth-of-type(${best.index + 1})`;
+      : '';
+
+    // If no unique id/aria/href, stamp the element in live DOM with data-studio-nav
+    if (!selector) {
+      if (typeof (page as any).evaluate === 'function') {
+        const stamped = await (page as any).evaluate((targetIndex: number, targetText: string) => {
+          try {
+            const clickables = Array.from(
+              document.querySelectorAll(
+                'button, [role="button"], a[href], div[role="button"], span[role="button"], input[type="button"]'
+              )
+            ) as HTMLElement[];
+            let el = clickables[targetIndex];
+            if (!el || (el.textContent || '').trim().replace(/\s+/g, ' ') !== targetText) {
+              el = clickables.find((c) => (c.textContent || '').trim().replace(/\s+/g, ' ') === targetText) as HTMLElement;
+            }
+            if (el) {
+              el.setAttribute('data-studio-nav', 'start-creating');
+              return true;
+            }
+          } catch {}
+          return false;
+        }, best.index, best.text).catch(() => false);
+
+        if (stamped) {
+          selector = '[data-studio-nav="start-creating"]';
+        }
+      }
+    }
+
+    if (!selector) {
+      selector = '[data-studio-nav="start-creating"]';
+    }
 
     // Check for ambiguity
     if (runnerUp && Math.abs(best.score - runnerUp.score) < 0.2) {
@@ -1109,25 +1141,34 @@ export async function findIntermediateWorkspaceAction(page: Page): Promise<
 > {
   try {
     const result: any = await page.evaluate(() => {
-      // Look for active dialog or modal container
-      const dialog = document.querySelector('[role="dialog"], [class*="modal"], [class*="dialog"], [aria-modal="true"]');
-      const root = dialog || document;
-
       const clickables = Array.from(
-        root.querySelectorAll('button, [role="button"], a[href], div[role="button"]')
+        document.querySelectorAll('button, [role="button"], a[href], div[role="button"]')
       );
 
-      const safeIntermediateKeywords = [
+      const primarySetupKeywords = [
         'blank canvas',
         'blank project',
         'blank video',
         'start from scratch',
         'default',
         'empty project',
+        'create project',
+        'new project',
+        'get started',
+        'bắt đầu',
+      ];
+
+      const secondaryDismissalKeywords = [
+        'got it',
+        'đã hiểu',
+        'tiếp tục',
         'continue',
         'next',
         'skip',
-        'create project',
+        'bỏ qua',
+        'dismiss',
+        'close',
+        'đóng',
       ];
 
       const candidates: any[] = [];
@@ -1140,19 +1181,38 @@ export async function findIntermediateWorkspaceAction(page: Page): Promise<
         const ariaLabel = el.getAttribute('aria-label') || '';
         const combined = `${text} ${ariaLabel}`.toLowerCase();
 
+        // Disqualify accessibility skip links
+        if (combined.includes('skip to') || combined.includes('skip navigation')) {
+          return;
+        }
+
         // Disqualify credit-consuming / template purchasing
         if (combined.includes('generate') || combined.includes('pricing') || combined.includes('buy') || combined.includes('credit')) {
           return;
         }
 
-        for (const kw of safeIntermediateKeywords) {
+        for (const kw of primarySetupKeywords) {
           if (combined === kw || combined.includes(kw)) {
             candidates.push({
               index,
               text,
               ariaLabel,
               id: el.id || '',
-              score: combined === kw ? 0.95 : 0.8,
+              score: combined === kw ? 0.95 : 0.85,
+              keyword: kw,
+            });
+            break;
+          }
+        }
+
+        for (const kw of secondaryDismissalKeywords) {
+          if (combined === kw || (kw === 'skip' ? combined === 'skip' : combined.includes(kw))) {
+            candidates.push({
+              index,
+              text,
+              ariaLabel,
+              id: el.id || '',
+              score: 0.7,
               keyword: kw,
             });
             break;
@@ -1188,10 +1248,39 @@ export async function findIntermediateWorkspaceAction(page: Page): Promise<
         isSafeNavigation: false,
         classification: 'UNKNOWN',
         details: `Multiple candidate intermediate actions discovered (${result.length})`,
+        evidence: result.slice(0, 5).map((c: any) => `"${c.text || c.ariaLabel}" (kw=${c.keyword}, score=${c.score})`).join(' | '),
       };
     }
 
-    const selector = best.id ? `#${best.id}` : `button:nth-of-type(${best.index + 1})`;
+    let selector = best.id ? `#${best.id}` : '';
+    if (!selector) {
+      if (typeof (page as any).evaluate === 'function') {
+        const stamped = await (page as any).evaluate((targetIndex: number, targetText: string) => {
+          try {
+            const clickables = Array.from(
+              document.querySelectorAll('button, [role="button"], a[href], div[role="button"]')
+            ) as HTMLElement[];
+            let el = clickables[targetIndex];
+            if (!el || (el.textContent || '').trim().replace(/\s+/g, ' ') !== targetText) {
+              el = clickables.find((c) => (c.textContent || '').trim().replace(/\s+/g, ' ') === targetText) as HTMLElement;
+            }
+            if (el) {
+              el.setAttribute('data-studio-intermediate', 'true');
+              return true;
+            }
+          } catch {}
+          return false;
+        }, best.index, best.text).catch(() => false);
+
+        if (stamped) {
+          selector = '[data-studio-intermediate="true"]';
+        }
+      }
+    }
+    if (!selector) {
+      selector = '[data-studio-intermediate="true"]';
+    }
+
     return {
       status: 'FOUND',
       confidence: best.score,

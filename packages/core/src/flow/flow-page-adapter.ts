@@ -206,14 +206,53 @@ export class PuppeteerFlowPage implements IFlowPage {
     }
 
     // 2. Click safe navigation control (ZERO generation, navigation only)
-    const clicked = await this.page.evaluate((selector: string) => {
-      const el = document.querySelector(selector) as HTMLElement | null;
-      if (el) {
-        el.click();
+    const clicked = await this.page.evaluate((selector: string, expectedText: string) => {
+      // Try selector first
+      try {
+        if (selector) {
+          const el = document.querySelector(selector) as HTMLElement | null;
+          if (el) {
+            el.scrollIntoView({ behavior: 'instant', block: 'center' });
+            el.click();
+            return true;
+          }
+        }
+      } catch {}
+
+      // Try data-studio-nav attribute
+      try {
+        const stamped = document.querySelector('[data-studio-nav="start-creating"]') as HTMLElement | null;
+        if (stamped) {
+          stamped.scrollIntoView({ behavior: 'instant', block: 'center' });
+          stamped.click();
+          return true;
+        }
+      } catch {}
+
+      // Fallback: semantic search by text/role
+      const clickables = Array.from(
+        document.querySelectorAll(
+          'button, [role="button"], a[href], div[role="button"], span[role="button"], input[type="button"]'
+        )
+      ) as HTMLElement[];
+
+      const match = clickables.find((el) => {
+        const t = (el.textContent || '').trim().replace(/\s+/g, ' ');
+        const a = el.getAttribute('aria-label') || '';
+        return (
+          t.toLowerCase() === expectedText.toLowerCase() ||
+          a.toLowerCase() === expectedText.toLowerCase() ||
+          t.toLowerCase().startsWith(expectedText.toLowerCase())
+        );
+      });
+
+      if (match) {
+        match.scrollIntoView({ behavior: 'instant', block: 'center' });
+        match.click();
         return true;
       }
       return false;
-    }, navControl.locatorStrategy);
+    }, navControl.locatorStrategy, (navControl as any).target?.text || 'Start Creating');
 
     if (!clicked) {
       throw new Error(`[FLOW_NAVIGATION_CLICK_FAILED] Failed to click navigation control: ${navControl.locatorStrategy}`);
@@ -231,9 +270,9 @@ export class PuppeteerFlowPage implements IFlowPage {
       const currentDom = await this.page.evaluate(() => (document.body ? document.body.innerHTML.slice(0, 3000) : '')).catch(() => '');
       pageState = FlowContractProbe.categorizePageState(currentUrl, currentBody, currentDom);
 
-      // Check prompt composer existence
+      // 1. Check prompt composer existence
       const promptSurface = await findEditablePromptSurface(this.page);
-      if (pageState === 'FLOW_PROJECT' || promptSurface.status === 'FOUND') {
+      if (promptSurface.status === 'FOUND') {
         const projectMatch = currentUrl.match(/\/(?:projects?|workspace|p)\/([a-zA-Z0-9_-]+)/);
         const browserProjectReference = projectMatch ? projectMatch[1] : `project_${Date.now()}`;
         return {
@@ -244,7 +283,7 @@ export class PuppeteerFlowPage implements IFlowPage {
         };
       }
 
-      // Check intermediate modal/dialog (e.g. Blank Canvas template)
+      // 2. Check if intermediate modal/dialog (e.g. Blank Canvas template, "Bắt đầu" welcome modal) needs safe action
       const intermediate = await findIntermediateWorkspaceAction(this.page);
       if (intermediate.status === 'FOUND' && intermediate.isSafeNavigation) {
         if (intermediateStepsTaken >= maxIntermediateSteps) {
@@ -253,18 +292,37 @@ export class PuppeteerFlowPage implements IFlowPage {
           );
         }
         intermediateStepsTaken++;
-        await this.page.evaluate((sel: string) => {
-          const el = document.querySelector(sel) as HTMLElement | null;
-          if (el) el.click();
-        }, intermediate.locatorStrategy);
+        await this.page.evaluate((sel: string, expectedText?: string) => {
+          let el = document.querySelector(sel) as HTMLElement | null;
+          if (!el && expectedText) {
+            const clickables = Array.from(document.querySelectorAll('button, [role="button"], a[href], div[role="button"]')) as HTMLElement[];
+            el = clickables.find(c => (c.textContent || '').trim().toLowerCase().includes(expectedText.toLowerCase())) || null;
+          }
+          if (el) {
+            el.scrollIntoView({ behavior: 'instant', block: 'center' });
+            el.click();
+          }
+        }, intermediate.locatorStrategy, (intermediate as any).target?.text);
+        await new Promise((r) => setTimeout(r, 800));
         continue;
       }
 
-      if (intermediate.status === 'AMBIGUOUS' || (currentDom.includes('role="dialog"') && intermediate.status === 'NOT_FOUND')) {
-        await this.captureDiagnostics('intermediate_ui_ambiguous').catch(() => {});
+      if (intermediate.status === 'AMBIGUOUS') {
         throw new Error(
-          '[FLOW_NAVIGATION_REQUIRES_CALIBRATION] Intermediate UI detected without clear safe navigation path. Diagnostics captured.'
+          `[FLOW_NAVIGATION_REQUIRES_CALIBRATION] Intermediate UI detected without clear safe navigation path: ${intermediate.details} | Evidence: ${intermediate.evidence || 'none'}`
         );
+      }
+
+      // 3. Fallback: if already inside project URL and no blocking modal, return FLOW_PROJECT
+      if (pageState === 'FLOW_PROJECT') {
+        const projectMatch = currentUrl.match(/\/(?:projects?|workspace|p)\/([a-zA-Z0-9_-]+)/);
+        const browserProjectReference = projectMatch ? projectMatch[1] : `project_${Date.now()}`;
+        return {
+          projectId: browserProjectReference,
+          url: currentUrl.split('?')[0],
+          pageState: 'FLOW_PROJECT',
+          browserProjectReference,
+        };
       }
     }
 
