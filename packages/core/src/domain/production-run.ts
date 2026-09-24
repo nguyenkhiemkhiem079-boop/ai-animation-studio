@@ -210,7 +210,7 @@ export const ProductionApprovalEvidenceSchema = z.object({
   mediaSha256: z.string().min(64).max(64).optional(),
   qaReportId: z.string().optional(),
   status: z.enum(['APPROVED', 'REJECTED']),
-  approvalType: ApprovalTypeSchema.default('HUMAN'),
+  approvalType: ApprovalTypeSchema.default('AUTOMATED_TEST'),
   actorId: z.string().optional(),
   actorDisplayName: z.string().optional(),
   approvalSource: z.string().optional(),
@@ -330,6 +330,8 @@ export type ResumeMetadata = z.infer<typeof ResumeMetadataSchema>;
  * Full First-Class Production Run Entity
  */
 export const ProductionRunSchema = z.object({
+  schemaVersion: z.number().int().default(1),
+  revision: z.number().int().default(1),
   runId: z.string().min(1),
   projectId: z.string().min(1),
   seriesId: z.string().min(1),
@@ -364,3 +366,72 @@ export const ProductionRunSchema = z.object({
   resumeMetadata: ResumeMetadataSchema.default({ canResume: true }),
 });
 export type ProductionRun = z.infer<typeof ProductionRunSchema>;
+
+/**
+ * Explicit Production Run Schema Migration Helper (Phase 20.11 - 20.13).
+ *
+ * Safe Structural Defaults:
+ * - schemaVersion: defaults to 1
+ * - revision: defaults to 1
+ * - pilotMode: defaults to false
+ * - approvalChallenges: defaults to {}
+ * - completedShotIds, pendingShotIds, blockedShotIds: default to []
+ * - resumeMetadata: defaults to { canResume: true }
+ *
+ * Security & Trust Boundaries (Never Upgraded):
+ * - If approvalEvidence exists without approvalType, defaults strictly to 'AUTOMATED_TEST' (NEVER 'HUMAN')
+ * - If mediaEvidence exists without generationSource, defaults to 'SIMULATED_FLOW' (NEVER 'GOOGLE_FLOW_REAL')
+ * - If qaEvidence exists without providerTrust, remains undefined/OFFLINE (NEVER 'LIVE_EXTERNAL')
+ */
+export function migrateProductionRun(raw: unknown): ProductionRun {
+  if (!raw || typeof raw !== 'object') {
+    throw new ProductionSafetyError('Cannot migrate non-object production run artifact.');
+  }
+
+  const obj = { ...(raw as Record<string, any>) };
+
+  // 1. Safe structural defaults
+  if (obj.schemaVersion === undefined) obj.schemaVersion = 1;
+  if (obj.revision === undefined) obj.revision = 1;
+  if (obj.pilotMode === undefined) obj.pilotMode = false;
+  if (obj.approvalChallenges === undefined) obj.approvalChallenges = {};
+  if (obj.completedShotIds === undefined) obj.completedShotIds = [];
+  if (obj.pendingShotIds === undefined) obj.pendingShotIds = [];
+  if (obj.blockedShotIds === undefined) obj.blockedShotIds = [];
+  if (obj.providerJobs === undefined) obj.providerJobs = {};
+  if (obj.mediaEvidence === undefined) obj.mediaEvidence = {};
+  if (obj.qaEvidence === undefined) obj.qaEvidence = {};
+  if (obj.approvalEvidence === undefined) obj.approvalEvidence = {};
+  if (obj.resumeMetadata === undefined) obj.resumeMetadata = { canResume: true };
+
+  // 2. Security invariant enforcement across historical approval evidence
+  if (obj.approvalEvidence && typeof obj.approvalEvidence === 'object') {
+    const migratedApprovals: Record<string, any> = {};
+    for (const [shotId, app] of Object.entries(obj.approvalEvidence as Record<string, any>)) {
+      if (app && typeof app === 'object') {
+        const appCopy = { ...app };
+        // Missing approvalType must NEVER default to HUMAN
+        if (!appCopy.approvalType) {
+          appCopy.approvalType = 'AUTOMATED_TEST';
+        }
+        migratedApprovals[shotId] = appCopy;
+      }
+    }
+    obj.approvalEvidence = migratedApprovals;
+  }
+
+  // 3. Security invariant enforcement across historical media evidence
+  if (obj.mediaEvidence && typeof obj.mediaEvidence === 'object') {
+    for (const [shotId, med] of Object.entries(obj.mediaEvidence as Record<string, any>)) {
+      if (med && typeof med === 'object') {
+        // Missing generationSource must NEVER default to GOOGLE_FLOW_REAL
+        if (!med.generationSource) {
+          med.generationSource = 'SIMULATED_FLOW';
+        }
+      }
+    }
+  }
+
+  // 4. Validate through standard schema
+  return ProductionRunSchema.parse(obj);
+}

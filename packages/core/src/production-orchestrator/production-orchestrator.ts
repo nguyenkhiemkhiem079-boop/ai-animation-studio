@@ -80,6 +80,8 @@ export class ProductionOrchestrator {
     }
 
     const initialRun: ProductionRun = {
+      schemaVersion: 1,
+      revision: 1,
       runId,
       projectId: safeProjectId,
       seriesId: safeSeriesId,

@@ -92,35 +92,54 @@ export class ProductionAcceptanceBundle {
       return JSON.parse(cleaned);
     };
 
+    // Helper to deterministically sort object keys for reproducible manifests and checksums
+    const deterministicSort = (val: any): any => {
+      if (Array.isArray(val)) {
+        return val.map(deterministicSort);
+      }
+      if (val && typeof val === 'object') {
+        const sorted: Record<string, any> = {};
+        for (const k of Object.keys(val).sort()) {
+          sorted[k] = deterministicSort(val[k]);
+        }
+        return sorted;
+      }
+      return val;
+    };
+
     // 1. Gather all evidence
-    const providerEv = sanitize(await evidenceStore.loadProviderEvidence(projectId, runId));
-    const mediaEv = sanitize(await evidenceStore.loadMediaEvidence(projectId, runId));
-    const qaEv = sanitize(await evidenceStore.loadQAEvidence(projectId, runId));
-    const approvalEv = sanitize(await evidenceStore.loadApprovalEvidence(projectId, runId));
-    const challengesEv = sanitize(await evidenceStore.loadApprovalChallenges(projectId, runId));
-    const masterEv = sanitize((await evidenceStore.loadMasterEvidence(projectId, runId)) ?? masterEvidence);
+    const providerEv = deterministicSort(sanitize(await evidenceStore.loadProviderEvidence(projectId, runId)));
+    const mediaEv = deterministicSort(sanitize(await evidenceStore.loadMediaEvidence(projectId, runId)));
+    const qaEv = deterministicSort(sanitize(await evidenceStore.loadQAEvidence(projectId, runId)));
+    const approvalEv = deterministicSort(sanitize(await evidenceStore.loadApprovalEvidence(projectId, runId)));
+    const challengesEv = deterministicSort(sanitize(await evidenceStore.loadApprovalChallenges(projectId, runId)));
+    const masterEv = deterministicSort(sanitize((await evidenceStore.loadMasterEvidence(projectId, runId)) ?? masterEvidence));
 
     // Continuity report
     const continuityPath = `.studio/production/${projectId}/${runId}/continuity_report.json`;
     let continuityEv: any = {};
     if (await storage.exists(continuityPath)) {
-      continuityEv = sanitize(await storage.readJson(continuityPath));
+      continuityEv = deterministicSort(sanitize(await storage.readJson(continuityPath)));
     }
 
-    const metadata: AcceptanceBundleMetadata = {
+    const rawModelIds: string[] = providerModelIds.length > 0 ? providerModelIds : (providerEv as any[]).map((p) => p.actualModel);
+    const sortedModelIds = Array.from(new Set(rawModelIds.filter(Boolean))).sort();
+    const sortedShotIds = [...requiredShotIds].sort();
+
+    const metadata: AcceptanceBundleMetadata = deterministicSort({
       bundleVersion: '1.0.0',
       runId,
       projectId,
       seriesId: run.seriesId,
       createdAt: run.createdAt,
       completedAt: new Date().toISOString(),
-      providerModelIds: providerModelIds.length > 0 ? providerModelIds : (providerEv as any[]).map((p) => p.actualModel),
-      requiredShotIds,
+      providerModelIds: sortedModelIds,
+      requiredShotIds: sortedShotIds,
       finalMasterChecksum: masterEvidence.masterSha256,
       verificationStatus: masterEvidence.verificationStatus,
       allChecksPassed: masterEvidence.verificationStatus === 'MASTER_PRODUCTION_VERIFIED',
       checksSummary: masterEvidence.checksSummary,
-    };
+    });
 
     // 2. Write individual evidence files
     const fileContents: Record<string, string> = {

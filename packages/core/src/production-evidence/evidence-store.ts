@@ -15,6 +15,7 @@ import {
   ProductionApprovalChallengeSchema,
   MasterProductionEvidence,
   MasterProductionEvidenceSchema,
+  migrateProductionRun,
 } from '../domain/production-run.js';
 import { z } from 'zod';
 
@@ -40,7 +41,7 @@ export class EvidenceStore {
     const filePath = `${this.getProductionDir(projectId, runId)}/production-run.json`;
     if (!(await this.storage.exists(filePath))) return null;
     const data = await this.storage.readJson<unknown>(filePath);
-    const parsed = ProductionRunSchema.parse(data);
+    const parsed = migrateProductionRun(data);
     const challengesPath = `${this.getProductionDir(projectId, runId)}/approval-challenges.json`;
     if (await this.storage.exists(challengesPath)) {
       const challenges = await this.loadApprovalChallenges(projectId, runId);
