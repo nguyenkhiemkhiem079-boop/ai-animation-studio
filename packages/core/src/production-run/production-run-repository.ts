@@ -11,10 +11,10 @@ export class ProductionRunRepository {
     this.evidenceStore = new EvidenceStore(storage);
   }
 
-  public async save(run: ProductionRun): Promise<void> {
+  public async save(run: ProductionRun, options?: { expectedRevision?: number }): Promise<void> {
     assertSafeIdentifier(run.projectId, 'projectId');
     assertSafeIdentifier(run.runId, 'runId');
-    await this.evidenceStore.saveProductionRun(run);
+    await this.evidenceStore.saveProductionRun(run, options);
   }
 
   public async findById(projectId: string, runId: string): Promise<ProductionRun | null> {

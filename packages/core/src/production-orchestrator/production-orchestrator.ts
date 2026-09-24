@@ -1142,4 +1142,35 @@ export class ProductionOrchestrator {
     await this.repository.save(sm.getRun());
     return sm.getRun();
   }
+
+  /**
+   * Safely cancels an active or paused production run (Phase 22.4).
+   * Transitions legally to CANCELLED without deleting durable evidence.
+   */
+  public async cancelRun(
+    projectId: string,
+    runId: string,
+    reason = 'Cancelled by operator'
+  ): Promise<ProductionRun> {
+    assertSafeIdentifier(projectId, 'projectId');
+    assertSafeIdentifier(runId, 'runId');
+    const run = await this.repository.findById(projectId, runId);
+    if (!run) throw new Error(`Production run "${runId}" not found.`);
+
+    if (run.status === 'COMPLETED') {
+      throw new ProductionSafetyError(`Cannot cancel completed production run "${runId}".`);
+    }
+
+    const sm = new ProductionRunStateMachine(run);
+    sm.transition('CANCELLED', `Run cancelled: ${reason}`);
+
+    run.resumeMetadata = {
+      canResume: false,
+      blockedReason: `Production run cancelled: ${reason}`,
+    };
+    run.updatedAt = new Date().toISOString();
+
+    await this.repository.save(run);
+    return run;
+  }
 }

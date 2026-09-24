@@ -81,3 +81,44 @@ export function assertPathContained(targetPath: string, expectedBaseDir: string,
     );
   }
 }
+
+/**
+ * Error thrown when durable persisted production evidence is unparseable or corrupted (Phase 22.9).
+ */
+export class CorruptedEvidenceError extends ProductionSafetyError {
+  constructor(
+    public readonly filePath: string,
+    message: string,
+    public readonly recoveryAction = 'Inspect file for syntax corruption or restore from backup.'
+  ) {
+    super(`CORRUPTED EVIDENCE: Failed to parse "${filePath}": ${message}. Recovery: ${recoveryAction}`);
+    this.name = 'CorruptedEvidenceError';
+  }
+}
+
+/**
+ * Redacts secrets (API keys, tokens, auth headers, query params) from error messages, logs, or JSON payloads (Phase 22.17).
+ */
+export function redactSecrets(input: unknown): string {
+  if (input === null || input === undefined) return '';
+  let str: string;
+  if (input instanceof Error) {
+    str = `${input.name}: ${input.message}\n${input.stack || ''}`;
+  } else if (typeof input === 'object') {
+    try {
+      str = JSON.stringify(input);
+    } catch {
+      str = String(input);
+    }
+  } else {
+    str = String(input);
+  }
+
+  return str
+    .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_GEMINI_KEY]')
+    .replace(/AIzaSy[A-Za-z0-9_-]{33}/g, '[REDACTED_GEMINI_KEY]')
+    .replace(/sk-[0-9A-Za-z-_]{32,}/g, '[REDACTED_API_KEY]')
+    .replace(/Bearer\s+[A-Za-z0-9_.\-~+/]+=*/gi, 'Bearer [REDACTED_TOKEN]')
+    .replace(/"(key|apiKey|password|secret|token|GEMINI_API_KEY)":\s*"[^"]*"/gi, '"$1": "[REDACTED]"')
+    .replace(/[?&](key|api_key|token|access_token)=[^&\s"]+/gi, '$1=[REDACTED]');
+}
