@@ -96,6 +96,10 @@ import {
   GeminiVeoVideoProvider,
   ClipService,
   VEO_MODEL_MAP,
+  FreeFirstVideoRouter,
+  VideoCostMode,
+  resolveVideoCostMode,
+  isPaidVideoAllowed,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -156,7 +160,10 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log(` - Headless Browser: ${toolchain.browser.available ? 'READY ✅' : 'NOT FOUND ⚠️'} (${toolchain.browser.path ?? 'N/A'})`);
       console.log(` - Google Flow     : MANUAL WORKSPACE (Assisted browser bridge, zero credentials required)`);
 
+      const costMode = process.env.VIDEO_COST_MODE || 'FREE_ONLY';
+      const allowPaid = process.env.ALLOW_PAID_VIDEO_API === 'true';
       console.log('\n[LIVE-ONLY — External Providers (Opt-In)]');
+      console.log(` - Video Cost Mode : ${costMode} (${costMode === 'PAID_ALLOWED' && allowPaid ? 'PAID ALLOWED ⚠️' : 'FREE ONLY — Paid Video APIs Blocked 🔒'})`);
       console.log(` - Gemini API Key  : ${geminiConfigured ? 'CONFIGURED ✅' : 'NOT CONFIGURED ℹ️ (Required only for live pilot)'}`);
       console.log(` - Gemini Live Ping: ${isLive ? (geminiConfigured ? 'TESTED ✅' : 'NOT CONFIGURED ❌') : 'NOT TESTED ℹ️ (Use "studio doctor --live" or "studio gemini doctor --live")'}`);
 
@@ -3782,6 +3789,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       }
 
       // Parse flags
+      const isDryRun = clipArgs.includes('--dry-run');
       const getFlag = (name: string, fallback: string): string => {
         const idx = clipArgs.indexOf(name);
         return idx !== -1 && clipArgs[idx + 1] ? clipArgs[idx + 1] : fallback;
@@ -3796,37 +3804,70 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       const clipOutput = getFlag('--output', '');
       const clipProject = getFlag('--project', 'default');
       const enableQA = !clipArgs.includes('--no-qa');
+      const costModeFlag = getFlag('--cost-mode', '');
+      const costMode = resolveVideoCostMode(costModeFlag as VideoCostMode);
+      const allowPaidApi = process.env.ALLOW_PAID_VIDEO_API?.trim().toLowerCase() === 'true';
+      const paidAllowed = isPaidVideoAllowed(costMode, allowPaidApi);
 
-      // Check configuration
+      // Preflight route planning via FreeFirstVideoRouter
+      const routePlan = FreeFirstVideoRouter.planRoute({
+        prompt: clipPrompt,
+        costMode,
+        allowPaidApi,
+        aspectRatio: clipAspect,
+        resolution: clipResolution,
+        durationSeconds: isNaN(clipDuration) ? defaultDuration : clipDuration,
+      });
+
+      console.log('');
+      console.log('🎬 AI Animation Studio — Video Clip Pipeline');
+      console.log('================================================');
+      console.log(`Prompt    : ${clipPrompt.slice(0, 100)}${clipPrompt.length > 100 ? '…' : ''}`);
+      console.log(`COST MODE : ${costMode}`);
+      console.log(`PAID API  : ${paidAllowed ? 'AUTHORIZED' : 'BLOCKED'}`);
+      console.log(`ROUTE     : ${routePlan.route}`);
+      console.log(`ENGINE    : ${routePlan.engineName}`);
+      console.log(`PAID COST : $${routePlan.estimatedPaidCostUsd.toFixed(2)}`);
+      console.log(`Aspect    : ${clipAspect}`);
+      console.log(`Duration  : ${isNaN(clipDuration) ? defaultDuration : clipDuration}s`);
+      console.log(`QA        : ${enableQA ? 'Enabled' : 'Disabled'}`);
+      console.log(`Type      : PREVIEW_CLIP (no Canon approval required)`);
+      console.log('');
+
+      // ── Zero-Cost Preflight (--dry-run) ──────────────────────────────────
+      if (isDryRun) {
+        console.log('------------------------------------------------');
+        console.log('📋 ZERO-COST DRY-RUN PREFLIGHT RESULT');
+        console.log('------------------------------------------------');
+        console.log(`COST MODE     : ${routePlan.costMode}`);
+        console.log(`ROUTE         : ${routePlan.route}`);
+        console.log(`ENGINE        : ${routePlan.engineName}`);
+        console.log(`PAID COST     : $${routePlan.estimatedPaidCostUsd} (Zero paid API calls)`);
+        console.log(`MANUAL ACTIONS: ${routePlan.manualActionsRequired}${routePlan.manualActionDescription ? ' — ' + routePlan.manualActionDescription : ''}`);
+        console.log(`WHY CHOSEN    : ${routePlan.rationale}`);
+        console.log('------------------------------------------------\n');
+        return 0;
+      }
+
+      // Check credential ONLY if paid Veo direct is specifically routed
       const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
+      if (routePlan.route === 'PAID_VEO_DIRECT' && !apiKey) {
         console.error('❌ GEMINI_API_KEY is not set.');
-        console.error('   Set it in your environment or .env file to enable direct Veo generation.');
-        console.error('   Fallback: use Google Flow assisted workflow with "studio flow prepare".');
+        console.error('   Set GEMINI_API_KEY to enable direct Veo generation.');
+        console.error('   Or run in FREE_ONLY mode (default) for local rendering / Flow handoff.');
         return 1;
       }
 
-      const gemini = new GeminiProvider({ allowLiveCalls: true });
+      const gemini = apiKey ? new GeminiProvider({ allowLiveCalls: true }) : undefined;
       const clipSvc = new ClipService({
         apiKey,
         llm: gemini,
         profile: clipProfile,
-        enableQA,
+        enableQA: enableQA && Boolean(apiKey),
         pollIntervalMs: 8000,
+        costMode,
+        allowPaidApi,
       });
-
-      console.log('');
-      console.log('🎬 AI Animation Studio — Direct Veo Generation');
-      console.log('================================================');
-      console.log(`Prompt   : ${clipPrompt.slice(0, 100)}${clipPrompt.length > 100 ? '…' : ''}`);
-      console.log(`Provider : Google Veo (GEMINI_API_KEY)`);
-      console.log(`Profile  : ${clipProfile}`);
-      console.log(`Model    : ${clipModel || VEO_MODEL_MAP[clipProfile as keyof typeof VEO_MODEL_MAP] || VEO_MODEL_MAP.ECONOMY}`);
-      console.log(`Aspect   : ${clipAspect}`);
-      console.log(`Duration : ${isNaN(clipDuration) ? defaultDuration : clipDuration}s`);
-      console.log(`QA       : ${enableQA ? 'Enabled' : 'Disabled'}`);
-      console.log(`Type     : PREVIEW_CLIP (no Canon approval required)`);
-      console.log('');
 
       let clipResult: any;
       if (resumeClipId) {
@@ -3838,7 +3879,14 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           return 1;
         }
       } else {
-        console.log('⏳ Submitting to Veo API...');
+        if (routePlan.route === 'LOCAL_RENDER') {
+          console.log(`⚡ Rendering locally via ${routePlan.engineName} ($0 API)...`);
+        } else if (routePlan.route === 'GOOGLE_FLOW_HANDOFF') {
+          console.log(`📦 Generating Google Flow assisted handoff package ($0 API)...`);
+        } else {
+          console.log('⏳ Submitting to Veo API...');
+        }
+
         try {
           clipResult = await clipSvc.generateClip({
             prompt: clipPrompt,
@@ -3851,6 +3899,8 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
             outputPath: clipOutput || undefined,
             projectId: clipProject,
             enableQA,
+            costMode,
+            allowPaidApi,
           });
         } catch (err: any) {
           console.error(`❌ Clip generation failed: ${err?.message}`);
@@ -3860,17 +3910,51 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
 
       console.log('');
 
+      if (clipResult.status === 'PAID_PROVIDER_DISABLED') {
+        console.log('🚫 PAID PROVIDER DISABLED — Zero paid generation requests submitted.');
+        console.log(`   Cost mode : ${costMode}`);
+        console.log(`   Policy    : Paid video APIs are blocked by default.`);
+        console.log(`   Reason    : ${clipResult.failureReason}`);
+        console.log('   Do NOT wait for quota reset — this project is in FREE_ONLY mode.');
+        if (clipResult.flowHandoff) {
+          console.log('\n📄 Google Flow Operator Handoff Package Created:');
+          console.log(`   Handoff Dir  : ${clipResult.flowHandoff.handoffDir}`);
+          console.log(`   Prompt file  : ${clipResult.flowHandoff.promptPath}`);
+          console.log(`   Instructions : ${clipResult.flowHandoff.instructionsPath}`);
+          console.log('   Follow INSTRUCTIONS.md to complete generation in Google Flow workspace for free.');
+        }
+        return 0;
+      }
+
       if (clipResult.status === 'WAITING_FOR_PROVIDER') {
-        console.log('⏸️  QUOTA EXCEEDED — Generation not submitted.');
-        console.log(`   Reason: ${clipResult.failureReason}`);
-        console.log('   Wait for quota to reset, then re-run the same command.');
+        if (clipResult.errorCode === 'QUOTA_EXCEEDED') {
+          console.log('⏸️  QUOTA EXCEEDED (429 RESOURCE_EXHAUSTED)');
+          console.log(`   Reason: ${clipResult.failureReason}`);
+          console.log('   Wait for quota reset window or check Google Cloud project billing.');
+        } else if (clipResult.errorCode === 'RATE_LIMITED') {
+          console.log('⏸️  TEMPORARY RATE LIMIT');
+          console.log(`   Reason: ${clipResult.failureReason}`);
+          console.log('   Wait a few moments before retrying.');
+        } else if (clipResult.errorCode === 'PROVIDER_UNAVAILABLE') {
+          console.log('⚠️  PROVIDER UNAVAILABLE (503 / Network Error)');
+          console.log(`   Reason: ${clipResult.failureReason}`);
+        } else {
+          console.log('⏸️  PROVIDER DELAY');
+          console.log(`   Reason: ${clipResult.failureReason}`);
+        }
         console.log('   Fallback: studio flow prepare <shotId> [projId]');
         return 1;
       }
 
       if (clipResult.status === 'FAILED') {
-        console.log('❌ GENERATION FAILED');
-        console.log(`   Reason: ${clipResult.failureReason}`);
+        if (clipResult.errorCode === 'AUTH_ERROR') {
+          console.log('❌ AUTHENTICATION ERROR (401 / 403)');
+          console.log(`   Reason: ${clipResult.failureReason}`);
+          console.log('   Check GEMINI_API_KEY validity.');
+        } else {
+          console.log('❌ GENERATION FAILED');
+          console.log(`   Reason: ${clipResult.failureReason}`);
+        }
         return 1;
       }
 

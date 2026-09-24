@@ -24,6 +24,37 @@ import { GoogleGenAI } from '@google/genai';
 import { IProvider, ProviderMetadata, ProviderTask, ProviderResult, ProviderHealthReport } from '../providers/index.js';
 import { VeoOperationStore, VeoOperationRecord } from './veo-operation-store.js';
 
+// ─── Cost Policy ──────────────────────────────────────────────────────────────
+
+export type VideoCostMode = 'FREE_ONLY' | 'PAID_ALLOWED';
+
+/**
+ * Resolves active video cost mode from environment or explicit override.
+ * Default is strictly FREE_ONLY.
+ */
+export function resolveVideoCostMode(override?: VideoCostMode): VideoCostMode {
+  if (override) return override;
+  const env = process.env.VIDEO_COST_MODE?.trim().toUpperCase();
+  if (env === 'PAID_ALLOWED') return 'PAID_ALLOWED';
+  return 'FREE_ONLY';
+}
+
+/**
+ * Verifies whether paid video generation API calls are permitted.
+ * Requires DUAL explicit authorization:
+ *   1. VIDEO_COST_MODE === 'PAID_ALLOWED'
+ *   2. ALLOW_PAID_VIDEO_API === 'true' (or explicit override boolean)
+ */
+export function isPaidVideoAllowed(
+  costMode?: VideoCostMode,
+  allowPaidApiOverride?: boolean
+): boolean {
+  const mode = resolveVideoCostMode(costMode);
+  const allowPaidEnv = process.env.ALLOW_PAID_VIDEO_API?.trim().toLowerCase() === 'true';
+  const allowPaid = allowPaidApiOverride !== undefined ? allowPaidApiOverride : allowPaidEnv;
+  return mode === 'PAID_ALLOWED' && allowPaid;
+}
+
 // ─── Generation Profile & Models ──────────────────────────────────────────────
 
 export type VeoGenerationProfile = 'ECONOMY' | 'BALANCED' | 'QUALITY';
@@ -231,14 +262,60 @@ export interface VeoGenerateResult {
 
 // ─── Error types ──────────────────────────────────────────────────────────────
 
+export type VideoErrorCode =
+  | 'PAID_PROVIDER_DISABLED'
+  | 'QUOTA_EXCEEDED'
+  | 'RATE_LIMITED'
+  | 'AUTH_ERROR'
+  | 'PROVIDER_UNAVAILABLE'
+  | 'TIMEOUT'
+  | 'VALIDATION_ERROR'
+  | 'UNKNOWN';
+
+export class PaidProviderDisabledError extends Error {
+  public readonly code: 'PAID_PROVIDER_DISABLED' = 'PAID_PROVIDER_DISABLED';
+  constructor(
+    message = 'Paid video generation API is disabled by policy (FREE_ONLY mode). Explicit authorization required: set VIDEO_COST_MODE=PAID_ALLOWED and ALLOW_PAID_VIDEO_API=true.'
+  ) {
+    super(message);
+    this.name = 'PaidProviderDisabledError';
+  }
+}
+
 export class VeoQuotaError extends Error {
+  public readonly code: 'QUOTA_EXCEEDED' = 'QUOTA_EXCEEDED';
   constructor(message: string) {
     super(message);
     this.name = 'VeoQuotaError';
   }
 }
 
+export class VeoRateLimitError extends Error {
+  public readonly code: 'RATE_LIMITED' = 'RATE_LIMITED';
+  constructor(message: string) {
+    super(message);
+    this.name = 'VeoRateLimitError';
+  }
+}
+
+export class VeoAuthError extends Error {
+  public readonly code: 'AUTH_ERROR' = 'AUTH_ERROR';
+  constructor(message: string) {
+    super(message);
+    this.name = 'VeoAuthError';
+  }
+}
+
+export class VeoProviderUnavailableError extends Error {
+  public readonly code: 'PROVIDER_UNAVAILABLE' = 'PROVIDER_UNAVAILABLE';
+  constructor(message: string) {
+    super(message);
+    this.name = 'VeoProviderUnavailableError';
+  }
+}
+
 export class VeoTimeoutError extends Error {
+  public readonly code: 'TIMEOUT' = 'TIMEOUT';
   constructor(operationName: string, pollCount: number) {
     super(`Veo operation "${operationName}" timed out after ${pollCount} polls.`);
     this.name = 'VeoTimeoutError';
@@ -266,6 +343,10 @@ export interface GeminiVeoVideoProviderOptions {
   defaultProfile?: VeoGenerationProfile;
   /** Allow live API calls (default: true if GEMINI_API_KEY is set) */
   allowLiveCalls?: boolean;
+  /** Cost mode: FREE_ONLY (default) or PAID_ALLOWED */
+  costMode?: VideoCostMode;
+  /** Explicit authorization for paid video APIs (default: env ALLOW_PAID_VIDEO_API === 'true') */
+  allowPaidApi?: boolean;
   /**
    * Injectable API client factory for testing.
    * When provided, bypasses GoogleGenAI instantiation entirely.
@@ -282,6 +363,8 @@ export class GeminiVeoVideoProvider implements IProvider {
   private readonly maxPollAttempts: number;
   private readonly defaultProfile: VeoGenerationProfile;
   private readonly allowLiveCalls: boolean;
+  private readonly costMode: VideoCostMode;
+  private readonly allowPaidApi: boolean;
   private readonly clientFactory?: () => { models: any; operations: any; files?: any };
 
   constructor(options: GeminiVeoVideoProviderOptions = {}) {
@@ -291,6 +374,10 @@ export class GeminiVeoVideoProvider implements IProvider {
     this.maxPollAttempts = options.maxPollAttempts ?? 150;
     this.defaultProfile = options.defaultProfile ?? 'ECONOMY';
     this.clientFactory = options.clientFactory;
+    this.costMode = resolveVideoCostMode(options.costMode);
+    this.allowPaidApi = options.allowPaidApi !== undefined
+      ? options.allowPaidApi
+      : process.env.ALLOW_PAID_VIDEO_API?.trim().toLowerCase() === 'true';
     // allowLiveCalls: explicitly true/false takes precedence; otherwise based on key presence
     this.allowLiveCalls = options.allowLiveCalls !== undefined
       ? options.allowLiveCalls
@@ -309,6 +396,10 @@ export class GeminiVeoVideoProvider implements IProvider {
 
   public isConfigured(): boolean {
     return Boolean(this.clientFactory) || (Boolean(this.apiKey) && this.allowLiveCalls);
+  }
+
+  public isPaidAuthorized(): boolean {
+    return isPaidVideoAllowed(this.costMode, this.allowPaidApi);
   }
 
   public async healthCheck(): Promise<boolean> {
@@ -344,6 +435,16 @@ export class GeminiVeoVideoProvider implements IProvider {
         isLocal: false,
         capabilities: this.metadata.capabilities,
         details: 'GEMINI_API_KEY is set but allowLiveCalls=false. Pass --live to enable.',
+      };
+    }
+    if (!this.isPaidAuthorized()) {
+      return {
+        providerId: this.metadata.id,
+        name: this.metadata.name,
+        status: 'TEST_ONLY',
+        isLocal: false,
+        capabilities: this.metadata.capabilities,
+        details: 'Paid Veo generation is disabled by policy (VIDEO_COST_MODE=FREE_ONLY). Free local rendering and Google Flow handoff are active.',
       };
     }
     return {
@@ -407,6 +508,14 @@ export class GeminiVeoVideoProvider implements IProvider {
    * that operation instead of submitting a new one.
    */
   public async generateClip(req: VeoGenerateRequest): Promise<VeoGenerateResult> {
+    // ── Paid provider guard: require explicit dual authorization ─────────
+    if (!this.isPaidAuthorized()) {
+      throw new PaidProviderDisabledError(
+        'Gemini Veo paid video generation API is disabled by policy (FREE_ONLY mode). ' +
+        'Set VIDEO_COST_MODE=PAID_ALLOWED and ALLOW_PAID_VIDEO_API=true to explicitly authorize paid video API requests.'
+      );
+    }
+
     // ── Local parameter validation (rejects invalid combinations before API call) ──
     const validated = validateVeoRequest(req);
 
@@ -452,11 +561,23 @@ export class GeminiVeoVideoProvider implements IProvider {
         config,
       });
     } catch (err: any) {
-      const reason = this._categorizeError(err);
+      const reason = this.categorizeError(err);
+      if (reason === 'PAID_PROVIDER_DISABLED') {
+        throw err instanceof PaidProviderDisabledError ? err : new PaidProviderDisabledError(err?.message);
+      }
       if (reason === 'QUOTA_EXCEEDED') {
         throw new VeoQuotaError(
-          `Gemini Veo API quota exceeded before submission. Wait for quota reset. (${err?.message})`
+          `Gemini Veo API quota exceeded or billing not enabled. (${err?.message})`
         );
+      }
+      if (reason === 'RATE_LIMITED') {
+        throw new VeoRateLimitError(`Gemini Veo API rate limit reached. (${err?.message})`);
+      }
+      if (reason === 'AUTH_ERROR') {
+        throw new VeoAuthError(`Gemini Veo API authentication error: ${err?.message}`);
+      }
+      if (reason === 'PROVIDER_UNAVAILABLE') {
+        throw new VeoProviderUnavailableError(`Gemini Veo API provider unavailable: ${err?.message}`);
       }
       throw new VeoGenerationError(`Veo generation submission failed: ${err?.message}`, undefined);
     }
@@ -669,16 +790,60 @@ export class GeminiVeoVideoProvider implements IProvider {
     return new GoogleGenAI({ apiKey: this.apiKey! }) as any;
   }
 
-  private _categorizeError(err: any): string {
-    const msg = String(err?.message || err || '').toLowerCase();
-    if (msg.includes('429') || msg.includes('resourceexhausted') || msg.includes('quota') || msg.includes('rate')) {
-      return 'QUOTA_EXCEEDED';
+  public categorizeError(err: any): VideoErrorCode {
+    if (err instanceof PaidProviderDisabledError || err?.code === 'PAID_PROVIDER_DISABLED') {
+      return 'PAID_PROVIDER_DISABLED';
     }
-    if (msg.includes('401') || msg.includes('403') || msg.includes('unauthorized') || msg.includes('permission')) {
+    const msg = String(err?.message || err || '').toLowerCase();
+    if (
+      msg.includes('paid_provider_disabled') ||
+      msg.includes('paid video generation api is disabled') ||
+      msg.includes('free_only mode')
+    ) {
+      return 'PAID_PROVIDER_DISABLED';
+    }
+    if (
+      msg.includes('401') ||
+      msg.includes('403') ||
+      msg.includes('unauthorized') ||
+      msg.includes('permission') ||
+      msg.includes('api key not valid') ||
+      msg.includes('forbidden')
+    ) {
       return 'AUTH_ERROR';
     }
-    if (msg.includes('timeout') || msg.includes('timed out')) return 'TIMEOUT';
+    if (msg.includes('rate limit') || msg.includes('too many requests')) {
+      return 'RATE_LIMITED';
+    }
+    if (
+      msg.includes('429') ||
+      msg.includes('resourceexhausted') ||
+      msg.includes('quota') ||
+      msg.includes('billing')
+    ) {
+      return 'QUOTA_EXCEEDED';
+    }
+    if (
+      msg.includes('503') ||
+      msg.includes('unavailable') ||
+      msg.includes('econnrefused') ||
+      msg.includes('enotfound') ||
+      msg.includes('network') ||
+      msg.includes('dns')
+    ) {
+      return 'PROVIDER_UNAVAILABLE';
+    }
+    if (msg.includes('timeout') || msg.includes('timed out')) {
+      return 'TIMEOUT';
+    }
+    if (err instanceof VeoValidationError) {
+      return 'VALIDATION_ERROR';
+    }
     return 'UNKNOWN';
+  }
+
+  private _categorizeError(err: any): VideoErrorCode {
+    return this.categorizeError(err);
   }
 
   private _sleep(ms: number): Promise<void> {

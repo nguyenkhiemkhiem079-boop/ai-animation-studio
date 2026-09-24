@@ -20,16 +20,47 @@
  */
 
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
-import { GeminiVeoVideoProvider, VeoGenerateRequest, VeoGenerateResult, VeoQuotaError, VeoTimeoutError, VeoValidationError, VeoGenerationProfile, VEO_MODEL_MAP } from './gemini-veo-provider.js';
+import {
+  GeminiVeoVideoProvider,
+  VeoGenerateRequest,
+  VeoGenerateResult,
+  VeoQuotaError,
+  VeoTimeoutError,
+  VeoValidationError,
+  VeoRateLimitError,
+  VeoAuthError,
+  VeoProviderUnavailableError,
+  PaidProviderDisabledError,
+  VeoGenerationProfile,
+  VEO_MODEL_MAP,
+  VideoCostMode,
+  resolveVideoCostMode,
+  isPaidVideoAllowed,
+  VideoErrorCode,
+} from './gemini-veo-provider.js';
 import { VeoOperationStore } from './veo-operation-store.js';
 import { LLMProvider } from '../llm/llm-provider.js';
 import { VisualSemanticQAEvaluator } from '../qa/visual-semantic-qa-evaluator.js';
+import {
+  FreeFirstVideoRouter,
+  RouteResolution,
+  FlowClipHandoffResult,
+} from './free-first-router.js';
+import { VideoCategory } from '../engines/video-engine-adapter.js';
+import { HtmlMotionEngineAdapter } from '../engines/html-motion-adapter.js';
+import { HyperFramesEngineAdapter } from '../engines/hyperframes-adapter-engine.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type ClipType = 'PREVIEW_CLIP' | 'MASTER_PRODUCTION';
-export type ClipStatus = 'READY' | 'RETAKE_RECOMMENDED' | 'WAITING_FOR_PROVIDER' | 'FAILED';
+export type ClipStatus =
+  | 'READY'
+  | 'RETAKE_RECOMMENDED'
+  | 'WAITING_FOR_PROVIDER'
+  | 'PAID_PROVIDER_DISABLED'
+  | 'FAILED';
 
 export interface ClipServiceOptions {
   /** GEMINI_API_KEY. Defaults to process.env.GEMINI_API_KEY */
@@ -48,6 +79,10 @@ export interface ClipServiceOptions {
   pollIntervalMs?: number;
   /** Max poll attempts override */
   maxPollAttempts?: number;
+  /** Video cost mode: FREE_ONLY (default) or PAID_ALLOWED */
+  costMode?: VideoCostMode;
+  /** Explicit authorization for paid video APIs (default: env ALLOW_PAID_VIDEO_API === 'true') */
+  allowPaidApi?: boolean;
 }
 
 export interface ClipRequest {
@@ -71,6 +106,14 @@ export interface ClipRequest {
   enableQA?: boolean;
   /** Generation profile override */
   profile?: VeoGenerationProfile;
+  /** Optional video category override */
+  category?: VideoCategory;
+  /** Video cost mode override */
+  costMode?: VideoCostMode;
+  /** Explicit authorization override for paid video APIs */
+  allowPaidApi?: boolean;
+  /** Dry-run preflight: returns route and zero-cost plan with ZERO network calls */
+  dryRun?: boolean;
 }
 
 export interface FFprobeEvidence {
@@ -114,8 +157,14 @@ export interface ClipResult {
   };
   generatedAt: string;
   downloadedAt: string;
-  /** Reason for RETAKE_RECOMMENDED or FAILED status */
+  /** Reason for RETAKE_RECOMMENDED, WAITING_FOR_PROVIDER, PAID_PROVIDER_DISABLED, or FAILED status */
   failureReason?: string;
+  /** Structured error classification */
+  errorCode?: VideoErrorCode;
+  /** Decision metadata from the FreeFirstVideoRouter */
+  routePlan?: RouteResolution;
+  /** Google Flow handoff package if routed to flow */
+  flowHandoff?: FlowClipHandoffResult;
 }
 
 // ─── ClipService ──────────────────────────────────────────────────────────────
@@ -125,8 +174,15 @@ export class ClipService {
   private readonly llm?: LLMProvider;
   private readonly enableQA: boolean;
   private readonly outputBaseDir: string;
+  private readonly costMode: VideoCostMode;
+  private readonly allowPaidApi: boolean;
 
   constructor(options: ClipServiceOptions = {}) {
+    this.costMode = resolveVideoCostMode(options.costMode);
+    this.allowPaidApi = options.allowPaidApi !== undefined
+      ? options.allowPaidApi
+      : process.env.ALLOW_PAID_VIDEO_API?.trim().toLowerCase() === 'true';
+
     this.provider = new GeminiVeoVideoProvider({
       apiKey: options.apiKey,
       operationStoreDir: options.operationStoreDir ?? '.studio/veo-operations',
@@ -134,6 +190,8 @@ export class ClipService {
       maxPollAttempts: options.maxPollAttempts,
       defaultProfile: options.profile ?? 'ECONOMY',
       allowLiveCalls: true,
+      costMode: this.costMode,
+      allowPaidApi: this.allowPaidApi,
     });
     this.llm = options.llm;
     this.enableQA = options.enableQA ?? true;
@@ -154,14 +212,178 @@ export class ClipService {
       ? path.dirname(req.outputPath)
       : path.join(this.outputBaseDir, projectId, clipId);
 
-    // ── Preflight ──────────────────────────────────────────────────────────
+    const effectiveCostMode = resolveVideoCostMode(req.costMode ?? this.costMode);
+    const effectiveAllowPaid = req.allowPaidApi !== undefined ? req.allowPaidApi : this.allowPaidApi;
+
+    // ── Route planning via FreeFirstVideoRouter ───────────────────────────
+    const routePlan = FreeFirstVideoRouter.planRoute({
+      prompt: req.prompt,
+      category: req.category,
+      costMode: effectiveCostMode,
+      allowPaidApi: effectiveAllowPaid,
+      aspectRatio: req.aspectRatio,
+      resolution: req.resolution,
+      durationSeconds: req.durationSeconds,
+    });
+
+    // Check if caller explicitly requested Veo model or injected a mock clientFactory
+    const isVeoExplicit = Boolean(req.model?.includes('veo')) || Boolean((this.provider as any).clientFactory);
+    if (isVeoExplicit && isPaidVideoAllowed(effectiveCostMode, effectiveAllowPaid)) {
+      routePlan.route = 'PAID_VEO_DIRECT';
+      routePlan.engineId = 'gemini-veo-video';
+      routePlan.engineName = 'Google Gemini Veo Video Provider';
+    }
+
+    // ── DRY-RUN PREFLIGHT (Zero network calls, zero file writing) ───────────
+    if (req.dryRun) {
+      return {
+        status: 'READY',
+        clipType,
+        clipId,
+        physicalPath: '',
+        sha256: '',
+        sizeBytes: 0,
+        provider: routePlan.engineName,
+        model: routePlan.engineId,
+        operationName: 'DRY_RUN_PREFLIGHT',
+        prompt: req.prompt,
+        promptHash,
+        ffprobe: {
+          hasVideoStream: false,
+          durationSeconds: req.durationSeconds ?? 4,
+          width: req.resolution === '1080p' ? 1920 : 1280,
+          height: req.resolution === '1080p' ? 1080 : 720,
+          fps: 24,
+          codec: 'h264',
+          sizeBytes: 0,
+        },
+        qaStatus: 'SKIPPED',
+        generatedAt: new Date().toISOString(),
+        downloadedAt: new Date().toISOString(),
+        routePlan,
+      };
+    }
+
+    // ── ROUTE 1: LOCAL_RENDER (Free Local Engine) ──────────────────────────
+    if (routePlan.route === 'LOCAL_RENDER') {
+      const defaultDuration = (req.resolution === '1080p' || req.resolution === '4k') ? 8 : 4;
+      const duration = req.durationSeconds ?? defaultDuration;
+      const targetPath = req.outputPath ?? path.join(outputDir, `${clipId}.mp4`);
+
+      const engine = routePlan.engineId === 'hyperframes'
+        ? new HyperFramesEngineAdapter()
+        : new HtmlMotionEngineAdapter();
+
+      const renderRes = await engine.render({
+        prompt: req.prompt,
+        category: routePlan.category,
+        aspectRatio: req.aspectRatio ?? '16:9',
+        resolution: req.resolution ?? '720p',
+        durationSeconds: duration,
+        outputPath: targetPath,
+        projectId,
+        clipId,
+      });
+
+      const verification = ArtifactVerifier.verify(renderRes.physicalPath, {
+        requireVideoStream: true,
+        requireValidMedia: true,
+      });
+
+      const ffprobe: FFprobeEvidence = {
+        hasVideoStream: verification.hasVideoStream ?? false,
+        durationSeconds: verification.durationSeconds ?? renderRes.durationSeconds,
+        width: verification.width ?? renderRes.width ?? 1280,
+        height: verification.height ?? renderRes.height ?? 720,
+        fps: verification.fps ?? renderRes.fps ?? 24,
+        codec: verification.videoCodec ?? 'h264',
+        sizeBytes: verification.sizeBytes ?? renderRes.sizeBytes,
+      };
+
+      const runQA = req.enableQA !== undefined ? req.enableQA : this.enableQA;
+      let qaStatus: ClipResult['qaStatus'] = 'SKIPPED';
+      let qaDetails: string | undefined;
+      let qaReport: ClipResult['qaReport'] | undefined;
+
+      if (runQA) {
+        const qaOutcome = await this._executeVisualQA(renderRes.physicalPath, req.prompt, verification);
+        qaStatus = qaOutcome.status;
+        qaDetails = qaOutcome.details;
+        qaReport = qaOutcome.report;
+      }
+
+      return {
+        status: qaStatus === 'FAIL' ? 'RETAKE_RECOMMENDED' : 'READY',
+        clipType,
+        clipId,
+        physicalPath: renderRes.physicalPath,
+        sha256: renderRes.sha256,
+        sizeBytes: renderRes.sizeBytes,
+        provider: routePlan.engineName,
+        model: routePlan.engineId,
+        operationName: `local_${clipId}`,
+        prompt: req.prompt,
+        promptHash,
+        ffprobe,
+        qaStatus,
+        qaDetails,
+        qaReport,
+        generatedAt: renderRes.renderedAt,
+        downloadedAt: renderRes.renderedAt,
+        routePlan,
+      };
+    }
+
+    // ── ROUTE 2: GOOGLE_FLOW_HANDOFF (Assisted Free Generative Video) ───────
+    if (routePlan.route === 'GOOGLE_FLOW_HANDOFF') {
+      const flowHandoff = await FreeFirstVideoRouter.createFlowClipHandoff(req.prompt, {
+        projectId,
+        clipId,
+        aspectRatio: req.aspectRatio,
+        durationSeconds: req.durationSeconds,
+        resolution: req.resolution,
+      });
+
+      return {
+        status: 'PAID_PROVIDER_DISABLED',
+        errorCode: 'PAID_PROVIDER_DISABLED',
+        clipType,
+        clipId,
+        physicalPath: '',
+        sha256: '',
+        sizeBytes: 0,
+        provider: 'google-flow',
+        model: 'google-flow-free-handoff',
+        operationName: `flow_handoff_${clipId}`,
+        prompt: req.prompt,
+        promptHash,
+        ffprobe: {
+          hasVideoStream: false,
+          durationSeconds: null,
+          width: null,
+          height: null,
+          fps: null,
+          codec: null,
+          sizeBytes: 0,
+        },
+        qaStatus: 'SKIPPED',
+        generatedAt: new Date().toISOString(),
+        downloadedAt: new Date().toISOString(),
+        failureReason:
+          'Paid video generation API is disabled by policy (FREE_ONLY mode). ' +
+          'Google Flow operator handoff package created.',
+        routePlan,
+        flowHandoff,
+      };
+    }
+
+    // ── ROUTE 3: PAID_VEO_DIRECT (Direct Gemini Veo API) ───────────────────
     if (!this.provider.isConfigured()) {
       throw new Error(
         'ClipService: GeminiVeoVideoProvider is not configured. Set GEMINI_API_KEY environment variable.'
       );
     }
 
-    // ── Generate ───────────────────────────────────────────────────────────
     const defaultDuration = (req.resolution === '1080p' || req.resolution === '4k') ? 8 : 4;
     const veoReq: VeoGenerateRequest = {
       prompt: req.prompt,
@@ -180,16 +402,28 @@ export class ClipService {
     try {
       veoResult = await this.provider.generateClip(veoReq);
     } catch (err: any) {
+      if (err instanceof PaidProviderDisabledError) {
+        return this._buildFailedResult(req, clipId, promptHash, clipType, 'PAID_PROVIDER_DISABLED', err.message, 'PAID_PROVIDER_DISABLED', routePlan);
+      }
       if (err instanceof VeoQuotaError) {
-        return this._buildFailedResult(req, clipId, promptHash, clipType, 'WAITING_FOR_PROVIDER', err.message);
+        return this._buildFailedResult(req, clipId, promptHash, clipType, 'WAITING_FOR_PROVIDER', err.message, 'QUOTA_EXCEEDED', routePlan);
+      }
+      if (err instanceof VeoRateLimitError) {
+        return this._buildFailedResult(req, clipId, promptHash, clipType, 'WAITING_FOR_PROVIDER', err.message, 'RATE_LIMITED', routePlan);
+      }
+      if (err instanceof VeoAuthError) {
+        return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', err.message, 'AUTH_ERROR', routePlan);
+      }
+      if (err instanceof VeoProviderUnavailableError) {
+        return this._buildFailedResult(req, clipId, promptHash, clipType, 'WAITING_FOR_PROVIDER', err.message, 'PROVIDER_UNAVAILABLE', routePlan);
       }
       if (err instanceof VeoTimeoutError) {
-        return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', err.message);
+        return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', err.message, 'TIMEOUT', routePlan);
       }
       if (err instanceof VeoValidationError) {
-        return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', err.message);
+        return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', err.message, 'VALIDATION_ERROR', routePlan);
       }
-      return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', `Generation error: ${err?.message}`);
+      return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', `Generation error: ${err?.message}`, 'UNKNOWN', routePlan);
     }
 
     // ── FFprobe verification ───────────────────────────────────────────────
@@ -436,7 +670,9 @@ export class ClipService {
     promptHash: string,
     clipType: ClipType,
     status: ClipStatus,
-    failureReason: string
+    failureReason: string,
+    errorCode?: VideoErrorCode,
+    routePlan?: RouteResolution
   ): ClipResult {
     return {
       status,
@@ -445,8 +681,8 @@ export class ClipService {
       physicalPath: '',
       sha256: '',
       sizeBytes: 0,
-      provider: 'google-veo',
-      model: req.model ?? 'unknown',
+      provider: routePlan?.engineName ?? 'google-veo',
+      model: req.model ?? routePlan?.engineId ?? 'unknown',
       operationName: '',
       prompt: req.prompt,
       promptHash,
@@ -463,6 +699,8 @@ export class ClipService {
       generatedAt: new Date().toISOString(),
       downloadedAt: new Date().toISOString(),
       failureReason,
+      errorCode,
+      routePlan,
     };
   }
 

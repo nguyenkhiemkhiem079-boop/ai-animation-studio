@@ -8,3 +8,4 @@ export * from './generative-video-pipeline-step.js';
 export * from './veo-operation-store.js';
 export * from './gemini-veo-provider.js';
 export * from './clip-service.js';
+export * from './free-first-router.js';
