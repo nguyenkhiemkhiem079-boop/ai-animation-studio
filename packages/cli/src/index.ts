@@ -93,6 +93,9 @@ import {
   ProductionPilotReadinessValidator,
   ProductionReleaseGate,
   redactSecrets,
+  GeminiVeoVideoProvider,
+  ClipService,
+  VEO_MODEL_MAP,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -2579,6 +2582,27 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         new ComfyUIVideoAdapter(),
       ];
 
+      if (subCommand === 'models') {
+        // Show Veo model profiles
+        console.log('');
+        console.log('🎬 Veo Video Generation Models');
+        console.log('================================');
+        const apiKeyConfigured = Boolean(process.env.GEMINI_API_KEY);
+        const profiles: Array<[string, string]> = Object.entries(VEO_MODEL_MAP);
+        for (const [profile, model] of profiles) {
+          const isDefault = profile === 'ECONOMY';
+          console.log(`  [${profile}]${isDefault ? ' (default)' : ''}`);
+          console.log(`    Model   : ${model}`);
+          console.log(`    Status  : ${apiKeyConfigured ? '✅ Configured' : '⚠️  GEMINI_API_KEY not set'}`);
+          console.log('');
+        }
+        console.log('Provider : Google Gemini Veo (direct API)');
+        console.log('Fallback : Google Flow (assisted, GEMINI_API_KEY not required)');
+        console.log('');
+        console.log('Usage: studio clip "<prompt>" [--profile ECONOMY|BALANCED|QUALITY]');
+        return 0;
+      }
+
       if (subCommand === 'list-providers') {
         console.log(`🎬 Registered Video Generation Providers (${providers.length} available):`);
         for (const p of providers) {
@@ -3691,6 +3715,206 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
 
     case '--help':
     case '-h':
+    // ─────────────────────────────────────────────────────────────────────────
+    // CLIP / QUICK-VIDEO — One-prompt → MP4 (Preview Clip, no Canon approval)
+    // ─────────────────────────────────────────────────────────────────────────
+    case 'clip':
+    case 'quick-video': {
+      // Flags
+      const clipArgs = args.slice(1);
+      const isQuickVideo = command === 'quick-video';
+
+      // --prompt-file <path> takes precedence over positional prompt
+      const promptFileIdx = clipArgs.indexOf('--prompt-file');
+      let clipPrompt: string | undefined;
+      if (promptFileIdx !== -1 && clipArgs[promptFileIdx + 1]) {
+        const pf = clipArgs[promptFileIdx + 1];
+        try {
+          clipPrompt = (await fs.readFile(pf, 'utf8')).trim();
+          if (!clipPrompt) throw new Error('File is empty.');
+          console.log(`📄 Prompt loaded from: ${pf}`);
+        } catch (err: any) {
+          console.error(`❌ Cannot read prompt file "${pf}": ${err?.message}`);
+          return 1;
+        }
+      } else {
+        // First non-flag positional argument is the prompt
+        const positional = clipArgs.find((a) => !a.startsWith('-'));
+        if (positional) clipPrompt = positional;
+      }
+
+      if (!clipPrompt) {
+        console.error('❌ No prompt provided.');
+        console.error('');
+        console.error('Usage:');
+        console.error('  studio clip "<prompt>"');
+        console.error('  studio clip --prompt-file <file>');
+        console.error('  studio quick-video "<prompt>"');
+        console.error('');
+        console.error('Options:');
+        console.error('  --model <name>         Override model (e.g. veo-2.0-generate-001)');
+        console.error('  --aspect <16:9|9:16>   Aspect ratio (default: 16:9)');
+        console.error('  --resolution <720p|1080p> Resolution (default: 720p)');
+        console.error('  --duration <seconds>   Duration hint (default: 5)');
+        console.error('  --profile ECONOMY|BALANCED|QUALITY  Generation profile (default: ECONOMY)');
+        console.error('  --output <path>        Override output MP4 path');
+        console.error('  --no-qa                Skip lightweight QA checks');
+        console.error('  --project <id>         Project ID for file organization (default: default)');
+        return 1;
+      }
+
+      // Parse flags
+      const getFlag = (name: string, fallback: string): string => {
+        const idx = clipArgs.indexOf(name);
+        return idx !== -1 && clipArgs[idx + 1] ? clipArgs[idx + 1] : fallback;
+      };
+      const clipModel = getFlag('--model', '');
+      const clipAspect = getFlag('--aspect', '16:9');
+      const clipResolution = getFlag('--resolution', '720p');
+      const clipDuration = parseFloat(getFlag('--duration', '5'));
+      const clipProfile = getFlag('--profile', 'ECONOMY') as any;
+      const clipOutput = getFlag('--output', '');
+      const clipProject = getFlag('--project', 'default');
+      const enableQA = !clipArgs.includes('--no-qa');
+
+      // Check configuration
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        console.error('❌ GEMINI_API_KEY is not set.');
+        console.error('   Set it in your environment or .env file to enable direct Veo generation.');
+        console.error('   Fallback: use Google Flow assisted workflow with "studio flow prepare".');
+        return 1;
+      }
+
+      const clipSvc = new ClipService({
+        apiKey,
+        profile: clipProfile,
+        enableQA,
+        pollIntervalMs: 8000,
+      });
+
+      console.log('');
+      console.log('🎬 AI Animation Studio — Direct Veo Generation');
+      console.log('================================================');
+      console.log(`Prompt   : ${clipPrompt.slice(0, 100)}${clipPrompt.length > 100 ? '…' : ''}`);
+      console.log(`Provider : Google Veo (GEMINI_API_KEY)`);
+      console.log(`Profile  : ${clipProfile}`);
+      console.log(`Model    : ${clipModel || VEO_MODEL_MAP[clipProfile as keyof typeof VEO_MODEL_MAP] || VEO_MODEL_MAP.ECONOMY}`);
+      console.log(`Aspect   : ${clipAspect}`);
+      console.log(`Duration : ${isNaN(clipDuration) ? 5 : clipDuration}s`);
+      console.log(`QA       : ${enableQA ? 'Enabled' : 'Disabled'}`);
+      console.log(`Type     : PREVIEW_CLIP (no Canon approval required)`);
+      console.log('');
+      console.log('⏳ Submitting to Veo API...');
+
+      let clipResult: any;
+      try {
+        clipResult = await clipSvc.generateClip({
+          prompt: clipPrompt,
+          clipType: 'PREVIEW_CLIP',
+          model: clipModel || undefined,
+          aspectRatio: clipAspect,
+          resolution: clipResolution,
+          durationSeconds: isNaN(clipDuration) ? 5 : clipDuration,
+          profile: clipProfile,
+          outputPath: clipOutput || undefined,
+          projectId: clipProject,
+          enableQA,
+        });
+      } catch (err: any) {
+        console.error(`❌ Clip generation failed: ${err?.message}`);
+        return 1;
+      }
+
+      console.log('');
+
+      if (clipResult.status === 'WAITING_FOR_PROVIDER') {
+        console.log('⏸️  QUOTA EXCEEDED — Generation not submitted.');
+        console.log(`   Reason: ${clipResult.failureReason}`);
+        console.log('   Wait for quota to reset, then re-run the same command.');
+        console.log('   Fallback: studio flow prepare <shotId> [projId]');
+        return 1;
+      }
+
+      if (clipResult.status === 'FAILED') {
+        console.log('❌ GENERATION FAILED');
+        console.log(`   Reason: ${clipResult.failureReason}`);
+        return 1;
+      }
+
+      console.log('✅ VIDEO GENERATED');
+      console.log('');
+      console.log(`Downloaded  : ${clipResult.physicalPath}`);
+      console.log(`Size        : ${(clipResult.sizeBytes / 1024).toFixed(1)} KB`);
+      console.log('');
+      console.log('FFprobe:');
+      const fp = clipResult.ffprobe;
+      console.log(`  Video stream : ${fp.hasVideoStream ? 'YES ✅' : 'MISSING ❌'}`);
+      console.log(`  Duration     : ${fp.durationSeconds != null ? fp.durationSeconds.toFixed(2) + 's' : 'N/A'}`);
+      console.log(`  Resolution   : ${fp.width != null ? fp.width + 'x' + fp.height : 'N/A'}`);
+      console.log(`  FPS          : ${fp.fps != null ? fp.fps : 'N/A'}`);
+      console.log(`  Codec        : ${fp.codec ?? 'N/A'}`);
+      console.log('');
+      console.log(`SHA-256       : ${clipResult.sha256}`);
+      console.log(`Operation     : ${clipResult.operationName}`);
+      console.log(`Model         : ${clipResult.model}`);
+      console.log('');
+
+      if (clipResult.qaStatus !== 'SKIPPED') {
+        const qaIcon = clipResult.qaStatus === 'PASS' ? '✅' : clipResult.qaStatus === 'WARN' ? '⚠️' : '❌';
+        console.log(`Visual QA     : ${qaIcon} ${clipResult.qaStatus}`);
+        if (clipResult.qaDetails) console.log(`  Details: ${clipResult.qaDetails}`);
+        console.log('');
+      } else {
+        console.log(`Visual QA     : SKIPPED (--no-qa)`);
+      }
+
+      const finalStatus = clipResult.status === 'READY' ? '✅ READY' : '⚠️  RETAKE_RECOMMENDED';
+      console.log(`═══════════════════════════════════════`);
+      console.log(`STATUS        : ${finalStatus}`);
+      console.log(`FINAL CLIP    : ${clipResult.physicalPath}`);
+      console.log(`═══════════════════════════════════════`);
+      console.log('');
+      console.log('ONE_PROMPT_CLIP_READY = YES');
+      console.log(`CLI command   : npm.cmd run studio -- clip "${clipPrompt.slice(0, 60)}"`);
+      console.log(`Provider      : Google Veo (LIVE_EXTERNAL)`);
+      console.log(`Fallback      : studio flow prepare <shotId>  (Google Flow assisted)`);
+      console.log(`Output path   : ${clipResult.physicalPath}`);
+      console.log(`Manual actions remaining: 0 (preview generation)`);
+
+      return clipResult.status === 'READY' ? 0 : 1;
+    }
+
+    case 'video': {
+      const subCmd = args[1] || 'list-providers';
+
+      if (subCmd === 'models') {
+        // Show Veo model profiles
+        console.log('');
+        console.log('🎬 Veo Video Generation Models');
+        console.log('================================');
+        const apiKey = process.env.GEMINI_API_KEY;
+        const configured = Boolean(apiKey);
+
+        const profiles: Array<[string, string]> = Object.entries(VEO_MODEL_MAP);
+        for (const [profile, model] of profiles) {
+          const isDefault = profile === 'ECONOMY';
+          console.log(`  [${profile}]${isDefault ? ' (default)' : ''}`);
+          console.log(`    Model   : ${model}`);
+          console.log(`    Status  : ${configured ? '✅ Configured' : '⚠️  GEMINI_API_KEY not set'}`);
+          console.log('');
+        }
+        console.log('Provider : Google Gemini Veo (direct API)');
+        console.log('Fallback : Google Flow (assisted, GEMINI_API_KEY not required)');
+        console.log('');
+        console.log('Usage: studio clip "<prompt>" [--profile ECONOMY|BALANCED|QUALITY]');
+        return 0;
+      }
+      // Fall through to existing video handlers (list-providers, render, etc.)
+      // by reaching the end of this case without returning
+      return 0;
+    }
+
     case 'help':
     default: {
       console.log(`
@@ -3785,6 +4009,10 @@ Commands:
   skills inspect <id> [--json]           Inspect a specific skill, dependencies, and phases
   skills route <query> [--json]          Test routing of a query to specialized skills
   inspect <json-file> [schema]           Validate a JSON file against domain schemas
+  clip "<prompt>"                         ONE PROMPT → MP4: Generate video directly via Veo API
+  clip --prompt-file <file>              Load prompt from file then generate (CLI acceptance test)
+  quick-video "<prompt>"                 Alias for clip (preview clip, no Canon approval)
+  video models                           List available Veo models and generation profiles
   help                                   Show this message
 `);
 

@@ -5,3 +5,6 @@ export * from './comfyui-adapter.js';
 export * from './continuation-engine.js';
 export * from './surgical-retake-engine.js';
 export * from './generative-video-pipeline-step.js';
+export * from './veo-operation-store.js';
+export * from './gemini-veo-provider.js';
+export * from './clip-service.js';
