@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { HyperFramesComposition } from '../domain/hyperframes.js';
 import { HeadlessFrameCapture } from './headless-frame-capture.js';
 import { MediaToolchainDoctor } from '../media/toolchain-doctor.js';
@@ -59,17 +59,30 @@ export class HyperFramesVideoBridge {
 
     // Step 2: Encode PNG sequence to MP4 with FFmpeg
     const ffmpegPath = MediaToolchainDoctor.getFfmpegPath();
-    const inputPattern = path.join(framesDir, 'frame_%04d.png').replace(/\\/g, '/');
-    const normalizedOutputPath = outputPath.replace(/\\/g, '/');
+    const inputPattern = path.join(framesDir, 'frame_%04d.png');
 
-    const ffmpegCmd = `"${ffmpegPath}" -y -framerate ${fps} -i "${inputPattern}" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "${normalizedOutputPath}"`;
+    const ffmpegArgs = [
+      '-y',
+      '-framerate',
+      fps.toString(),
+      '-i',
+      inputPattern,
+      '-c:v',
+      'libx264',
+      '-pix_fmt',
+      'yuv420p',
+      '-movflags',
+      '+faststart',
+      outputPath,
+    ];
 
     try {
-      execSync(ffmpegCmd, { stdio: ['ignore', 'pipe', 'pipe'] });
+      execFileSync(ffmpegPath, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 });
     } catch (err: any) {
       const stderr = err?.stderr?.toString() || err?.message;
       throw new Error(`FFmpeg video encoding failed for shot ${composition.shotId}: ${stderr}`);
-    } finally {
+    }
+ finally {
       if (!options.keepFrames && fs.existsSync(framesDir)) {
         try {
           fs.rmSync(framesDir, { recursive: true, force: true });

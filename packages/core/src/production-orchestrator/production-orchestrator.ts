@@ -36,6 +36,7 @@ import { RealAudioMixer } from '../audio/real-audio-mixer.js';
 import { ContinuityQAEvaluator } from '../qa/continuity-qa-evaluator.js';
 import { VideoRenderer } from '../export/video-renderer.js';
 import { ProductionAcceptanceBundle } from '../production-verifier/acceptance-bundle.js';
+import { assertSafeIdentifier } from '../domain/security.js';
 
 export interface CreateProductionRunOptions {
   projectId: string;
@@ -64,13 +65,24 @@ export class ProductionOrchestrator {
    * Initializes a brand-new ProductionRun entity on disk.
    */
   public async createRun(options: CreateProductionRunOptions): Promise<ProductionRun> {
-    const runId = options.targetRunId || `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const safeProjectId = assertSafeIdentifier(options.projectId, 'projectId');
+    const safeSeriesId = assertSafeIdentifier(options.seriesId, 'seriesId');
+    const runId = assertSafeIdentifier(
+      options.targetRunId || `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      'runId'
+    );
     const mode = options.mode || 'PRODUCTION';
+
+    // Pilot story input hardening: strip BOM and reject empty/whitespace-only scripts
+    const cleanedScript = (options.rawScript || '').replace(/^\uFEFF/, '');
+    if (!cleanedScript.trim()) {
+      throw new ProductionSafetyError('Story script cannot be empty or whitespace-only.');
+    }
 
     const initialRun: ProductionRun = {
       runId,
-      projectId: options.projectId,
-      seriesId: options.seriesId,
+      projectId: safeProjectId,
+      seriesId: safeSeriesId,
       status: 'CREATED',
       mode,
       pilotMode: options.pilotMode ?? false,
@@ -96,8 +108,8 @@ export class ProductionOrchestrator {
     const validated = ProductionRunSchema.parse(initialRun);
     await this.repository.save(validated);
     await this.storage.write(
-      `.studio/production/${options.projectId}/${runId}/source_story.txt`,
-      options.rawScript
+      `.studio/production/${safeProjectId}/${runId}/source_story.txt`,
+      cleanedScript
     );
 
     return validated;
@@ -114,6 +126,8 @@ export class ProductionOrchestrator {
       preferFlowAssisted?: boolean;
     }
   ): Promise<ProductionRun> {
+    assertSafeIdentifier(projectId, 'projectId');
+    assertSafeIdentifier(runId, 'runId');
     const existing = await this.repository.findById(projectId, runId);
     if (!existing) {
       throw new Error(`Production run "${runId}" not found for project "${projectId}".`);
@@ -619,6 +633,9 @@ export class ProductionOrchestrator {
       realExternal?: boolean;
     }
   ): Promise<ProductionRun> {
+    assertSafeIdentifier(projectId, 'projectId');
+    assertSafeIdentifier(runId, 'runId');
+    assertSafeIdentifier(shotId, 'shotId');
     const run = await this.repository.findById(projectId, runId);
     if (!run) throw new Error(`Production run "${runId}" not found.`);
 
@@ -767,6 +784,9 @@ export class ProductionOrchestrator {
     action: 'APPROVE' | 'REJECT' = 'APPROVE',
     ttlSeconds: number = 900 // 15 minutes default
   ): Promise<ProductionApprovalChallenge> {
+    assertSafeIdentifier(projectId, 'projectId');
+    assertSafeIdentifier(runId, 'runId');
+    assertSafeIdentifier(shotId, 'shotId');
     const run = await this.repository.findById(projectId, runId);
     if (!run) throw new Error(`Production run "${runId}" not found.`);
 
@@ -855,6 +875,9 @@ export class ProductionOrchestrator {
       confirmedByOperator?: boolean;
     }
   ): Promise<ProductionRun> {
+    assertSafeIdentifier(projectId, 'projectId');
+    assertSafeIdentifier(runId, 'runId');
+    assertSafeIdentifier(shotId, 'shotId');
     const run = await this.repository.findById(projectId, runId);
     if (!run) throw new Error(`Production run "${runId}" not found.`);
 

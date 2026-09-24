@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { ArtifactVerificationResult } from '../domain/execution-mode.js';
 import { MediaToolchainDoctor } from './toolchain-doctor.js';
 
@@ -60,8 +60,11 @@ export class ArtifactVerifier {
       if (isMedia) {
         const ffprobePath = MediaToolchainDoctor.getFfprobePath();
         try {
-          const cmd = `"${ffprobePath}" -v quiet -print_format json -show_format -show_streams "${filePath}"`;
-          const rawOut = execSync(cmd, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+          const rawOut = execFileSync(
+            ffprobePath,
+            ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath],
+            { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }
+          );
           const probeData = JSON.parse(rawOut);
 
           const videoStream = probeData.streams?.find((s: any) => s.codec_type === 'video');

@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { MediaToolchainDoctor } from '../media/toolchain-doctor.js';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
 import { LocalAudioGenerator } from './local-audio-generator.js';
@@ -66,12 +66,12 @@ export class RealAudioMixer {
     }
 
     const ffmpegPath = MediaToolchainDoctor.getFfmpegPath();
-    const inputArgs: string[] = [];
+    const ffmpegArgs: string[] = ['-y'];
     const filterParts: string[] = [];
     const mixLabels: string[] = [];
 
     validStems.forEach((stem, index) => {
-      inputArgs.push(`-i "${stem.filePath.replace(/\\/g, '/')}"`);
+      ffmpegArgs.push('-i', stem.filePath);
       const delayMs = Math.max(0, Math.round(stem.startTimeSeconds * 1000));
       const volume = stem.volume ?? 1.0;
       filterParts.push(
@@ -87,11 +87,10 @@ export class RealAudioMixer {
       filterComplex += `; [a0]apad,atrim=0:${duration}[out]`;
     }
 
-    const normalizedOutputPath = masterAudioPath.replace(/\\/g, '/');
-    const cmd = `"${ffmpegPath}" -y ${inputArgs.join(' ')} -filter_complex "${filterComplex}" -map "[out]" -c:a pcm_s16le -ar 44100 "${normalizedOutputPath}"`;
+    ffmpegArgs.push('-filter_complex', filterComplex, '-map', '[out]', '-c:a', 'pcm_s16le', '-ar', '44100', masterAudioPath);
 
     try {
-      execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] });
+      execFileSync(ffmpegPath, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
     } catch (err: any) {
       const stderr = err?.stderr?.toString() || err?.message;
       throw new Error(`RealAudioMixer failed to mix audio stems: ${stderr}`);

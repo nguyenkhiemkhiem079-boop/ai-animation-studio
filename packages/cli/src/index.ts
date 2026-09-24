@@ -90,6 +90,7 @@ import {
   LiveProviderPreflight,
   ProductionAcceptanceBundle,
   ProductionNextActionResolver,
+  ProductionPilotReadinessValidator,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -1105,86 +1106,28 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.log(`🔍 AI ANIMATION STUDIO — PILOT PREFLIGHT READINESS CHECK`);
         console.log(`==============================================================\n`);
 
-        let allChecksPassed = true;
-        const blockers: string[] = [];
-
-        // 1. Node.js Runtime
-        const nodeVer = process.version;
-        const majorVer = parseInt(nodeVer.replace('v', '').split('.')[0], 10);
-        if (majorVer >= 20) {
-          console.log(`[PASS] Node.js Runtime        : ${nodeVer} (>= 20.0.0 required) ✅`);
-        } else {
-          console.log(`[FAIL] Node.js Runtime        : ${nodeVer} (Must be >= 20.0.0) ❌`);
-          blockers.push(`Node.js version is ${nodeVer}, must be >= 20.0.0.`);
-          allChecksPassed = false;
-        }
-
-        // 2. Media Toolchain (FFmpeg & FFprobe)
-        const mediaDiag = MediaToolchainDoctor.diagnose();
-        if (mediaDiag.ffmpeg.available) {
-          console.log(`[PASS] FFmpeg Executable       : ${mediaDiag.ffmpeg.version || 'available'} (${mediaDiag.ffmpeg.path}) ✅`);
-        } else {
-          console.log(`[FAIL] FFmpeg Executable       : NOT FOUND ❌`);
-          blockers.push(`FFmpeg not found in PATH or configured paths.`);
-          allChecksPassed = false;
-        }
-
-        if (mediaDiag.ffprobe.available) {
-          console.log(`[PASS] FFprobe Executable      : ${mediaDiag.ffprobe.version || 'available'} (${mediaDiag.ffprobe.path}) ✅`);
-        } else {
-          console.log(`[FAIL] FFprobe Executable      : NOT FOUND ❌`);
-          blockers.push(`FFprobe not found in PATH or configured paths.`);
-          allChecksPassed = false;
-        }
-
-        // 3. Story File
-        if (syncFs.existsSync(cleanStoryFile)) {
-          const stats = syncFs.statSync(cleanStoryFile);
-          console.log(`[PASS] Story Script File      : "${cleanStoryFile}" (${stats.size} bytes) ✅`);
-        } else {
-          console.log(`[WARN] Story Script File      : "${cleanStoryFile}" NOT FOUND ⚠️`);
-          blockers.push(`Story file "${cleanStoryFile}" does not exist.`);
-        }
-
-        // 4. Gemini Configuration (Single Gemini Key Architecture)
         const isLiveOptIn = args.includes('--live') || process.env.RUN_LIVE_PROVIDER_TESTS === 'true';
-        const gemini = new GeminiProvider({ allowLiveCalls: isLiveOptIn });
-        const hasKey = gemini.isConfigured();
-        if (hasKey) {
-          console.log(`[PASS] Gemini Credential      : PRESENT (${gemini.getMaskedApiKey()}) ✅`);
-        } else {
-          console.log(`[INFO] Gemini Credential      : ABSENT (GEMINI_API_KEY not configured) ℹ️`);
+        const readiness = await ProductionPilotReadinessValidator.validate({
+          storyFilePath: cleanStoryFile,
+          allowLiveOptIn: isLiveOptIn,
+          storage,
+        });
+
+        for (const c of readiness.checks) {
+          const badge = c.status === 'PASS' ? '✅' : c.status === 'FAIL' ? '❌' : c.status === 'WARN' ? '⚠️' : 'ℹ️';
+          const paddedName = c.name.padEnd(28, ' ');
+          console.log(`[${c.status}] ${paddedName}: ${c.summary} ${badge}`);
+          if (c.details) {
+            console.log(`                               ${c.details}`);
+          }
+          if (c.remediation) {
+            console.log(`                               Action: ${c.remediation}`);
+          }
         }
 
-        // 5. Live Network Call Authorization
-        if (isLiveOptIn) {
-          console.log(`[PASS] Live Authorization     : ENABLED (--live or RUN_LIVE_PROVIDER_TESTS=true) 📡`);
-        } else {
-          console.log(`[INFO] Live Authorization     : DISABLED (Safe offline rehearsal mode) 🛡️`);
-          console.log(`                                To authorize live calls: pass --live or set RUN_LIVE_PROVIDER_TESTS=true`);
-        }
-
-        // 6. Centralized Model Policy
-        const policy = getCentralizedModelPolicy();
-        console.log(`[INFO] Gemini Model Policy    : FAST=${policy.fast}, STRUCTURED=${policy.structured}, QA=${policy.qa}, VISION_QA=${policy.visionQa}`);
-
-        // 7. Storage Write Access
-        try {
-          const testProbePath = path.resolve('.studio', `.preflight_probe_${Date.now()}`);
-          await fs.mkdir(path.dirname(testProbePath), { recursive: true });
-          await fs.writeFile(testProbePath, 'probe', 'utf-8');
-          await fs.unlink(testProbePath);
-          console.log(`[PASS] Storage Write Access   : OK (.studio writable) ✅`);
-        } catch (err: any) {
-          console.log(`[FAIL] Storage Write Access   : FAILED (${err.message}) ❌`);
-          blockers.push(`Cannot write to storage directory: ${err.message}`);
-          allChecksPassed = false;
-        }
-
-        // 8. Verdict
         console.log(`\n--------------------------------------------------------------`);
-        if (blockers.length === 0) {
-          if (hasKey && isLiveOptIn) {
+        if (readiness.blockers.length === 0) {
+          if (readiness.readyForLivePilot) {
             console.log(`VERDICT: READY FOR LIVE HUMAN PILOT 🚀`);
             console.log(`Next step: run 'studio production pilot "${cleanStoryFile}" --live'`);
           } else {
@@ -1194,12 +1137,12 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           }
         } else {
           console.log(`VERDICT: ACTION REQUIRED (BLOCKERS DETECTED) ⚠️`);
-          for (const b of blockers) {
+          for (const b of readiness.blockers) {
             console.log(` - ${b}`);
           }
         }
         console.log(`==============================================================\n`);
-        return blockers.length === 0 ? 0 : 1;
+        return readiness.blockers.length === 0 ? 0 : 1;
       }
 
       const projectId = args[2];
@@ -1488,6 +1431,39 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         } else {
           console.log(`📡 Live Provider: ENABLED (${gemini.metadata.name} - ${gemini.getMaskedApiKey()})\n`);
         }
+        if (args.includes('--dry-run')) {
+          console.log(`\n==============================================================`);
+          console.log(`🔎 AI ANIMATION STUDIO — PILOT DRY RUN`);
+          console.log(`==============================================================`);
+          console.log(`Story File           : ${cleanStoryFile}`);
+          console.log(`Target Project ID    : ${targetProjId}`);
+          console.log(`Target Series ID     : ${targetSeriesId}`);
+          console.log(`Simulated Run ID     : run_pilot_dryrun_simulated`);
+          console.log(`Planned Run Dir      : .studio/production/${targetProjId}/run_pilot_dryrun_simulated/`);
+          console.log(`Planned Handoff Dir  : .studio/production/${targetProjId}/run_pilot_dryrun_simulated/handoff/SHOT_01/`);
+          console.log(`Planned Flow File    : SHOT_01_FLOW_REAL.mp4`);
+          console.log(`Execution Mode       : PRODUCTION (DRY RUN — ZERO NETWORK CALLS)`);
+          console.log(`Live Calls           : 0 (Disabled during dry-run)`);
+          console.log(`Truth Rule           : ZERO state or evidence written to disk.`);
+
+          console.log(`\nPlanned Lifecycle Sequence:`);
+          console.log(` 1. Ingest story & compute lossless character offsets`);
+          console.log(` 2. Plan Scene 1 -> Shot 1 (establishing action)`);
+          console.log(` 3. Generate Flow Handoff package with prompt & references`);
+          console.log(` 4. Wait for Human Operator generation in Google Flow`);
+          console.log(` 5. Human imports downloaded MP4 via 'studio production import'`);
+          console.log(` 6. Visual QA Evaluator audits 8 dimensions against ShotContract`);
+          console.log(` 7. Issue single-use cryptographic challenge nonce`);
+          console.log(` 8. Human operator completes approval ceremony`);
+          console.log(` 9. Assemble timeline, render master MP4, audit continuity`);
+          console.log(` 10. Compile & validate durable acceptance bundle`);
+
+          console.log(`\nDRY RUN RESULT: ALL PRECONDITIONS SATISFIED ✅`);
+          console.log(`To execute real pilot: studio production pilot "${cleanStoryFile}" --live`);
+          console.log(`==============================================================\n`);
+          return 0;
+        }
+
         const assetRegistry = new FileSystemAssetRegistry(storage);
         const orchestrator = new ProductionOrchestrator(storage, assetRegistry, liveProvider);
 

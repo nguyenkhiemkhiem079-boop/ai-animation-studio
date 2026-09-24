@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { MediaToolchainDoctor } from '../media/toolchain-doctor.js';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
 
@@ -60,8 +60,11 @@ export class FrameExtractor {
       const frameFilePath = path.join(outputDir, frameFileName);
 
       try {
-        const cmd = `"${ffmpegPath}" -y -ss ${ts.toFixed(3)} -i "${videoPath}" -vframes 1 -q:v 2 "${frameFilePath}"`;
-        execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] });
+        execFileSync(
+          ffmpegPath,
+          ['-y', '-ss', ts.toFixed(3), '-i', videoPath, '-vframes', '1', '-q:v', '2', frameFilePath],
+          { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 }
+        );
 
         if (fs.existsSync(frameFilePath) && fs.statSync(frameFilePath).size > 0) {
           let base64Data: string | undefined;
@@ -82,8 +85,11 @@ export class FrameExtractor {
         // Fallback: If FFmpeg timestamp seeking fails on short video, try extracting frame 1
         if (!fs.existsSync(frameFilePath)) {
           try {
-            const fallbackCmd = `"${ffmpegPath}" -y -i "${videoPath}" -vframes 1 -q:v 2 "${frameFilePath}"`;
-            execSync(fallbackCmd, { stdio: ['ignore', 'pipe', 'pipe'] });
+            execFileSync(
+              ffmpegPath,
+              ['-y', '-i', videoPath, '-vframes', '1', '-q:v', '2', frameFilePath],
+              { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 }
+            );
             if (fs.existsSync(frameFilePath) && fs.statSync(frameFilePath).size > 0) {
               results.push({
                 frameIndex: idx,

@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { TimelineSequence } from '../domain/timeline.js';
 import { ExportFormat, ExportManifest, OutputFileDescriptor } from '../domain/export.js';
 import { MediaToolchainDoctor } from '../media/toolchain-doctor.js';
@@ -154,28 +154,23 @@ export class VideoRenderer {
 
     // 3. Assemble and execute FFmpeg command
     const ffmpegPath = MediaToolchainDoctor.getFfmpegPath();
-    const normalizedPlan = concatPlanPath.replace(/\\/g, '/');
-    const normalizedOutput = outputPath.replace(/\\/g, '/');
-
-    let audioArgs = '';
+    const ffmpegArgs: string[] = ['-y', '-f', 'concat', '-safe', '0', '-i', concatPlanPath];
     if (includeAudio && masterAudioPath) {
-      const normalizedAudio = masterAudioPath.replace(/\\/g, '/');
-      audioArgs = `-i "${normalizedAudio}" -c:a aac -b:a 192k -shortest`;
+      ffmpegArgs.push('-i', masterAudioPath, '-c:a', 'aac', '-b:a', '192k', '-shortest');
     } else if (includeAudio) {
-      // If audio requested but no stem provided, generate silent AAC track to guarantee audio stream exists
-      audioArgs = `-f lavfi -i anullsrc=r=44100:cl=stereo -c:a aac -b:a 128k -shortest`;
+      ffmpegArgs.push('-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo', '-c:a', 'aac', '-b:a', '128k', '-shortest');
     } else {
-      audioArgs = `-an`;
+      ffmpegArgs.push('-an');
     }
-
-    const cmd = `"${ffmpegPath}" -y -f concat -safe 0 -i "${normalizedPlan}" ${audioArgs} -c:v libx264 -pix_fmt yuv420p -movflags +faststart "${normalizedOutput}"`;
+    ffmpegArgs.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outputPath);
 
     try {
-      execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] });
+      execFileSync(ffmpegPath, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 });
     } catch (err: any) {
       const stderr = err?.stderr?.toString() || err?.message;
       throw new Error(`Master video render failed: ${stderr}`);
-    } finally {
+    }
+ finally {
       if (fs.existsSync(concatPlanPath)) {
         try {
           fs.unlinkSync(concatPlanPath);

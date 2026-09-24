@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { MediaToolchainDoctor } from '../media/toolchain-doctor.js';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
 import { ArtifactVerificationResult } from '../domain/execution-mode.js';
@@ -34,7 +34,6 @@ export class LocalAudioGenerator {
 
     const ffmpegPath = MediaToolchainDoctor.getFfmpegPath();
     const duration = Math.max(0.2, durationSeconds);
-    const normalizedOutputPath = outputPath.replace(/\\/g, '/');
 
     let filter: string;
     switch (type) {
@@ -62,12 +61,10 @@ export class LocalAudioGenerator {
         break;
     }
 
-    const cmd = type === 'silence'
-      ? `"${ffmpegPath}" -y -f lavfi -i "${filter}" -t ${duration} -c:a pcm_s16le -ar 44100 "${normalizedOutputPath}"`
-      : `"${ffmpegPath}" -y -f lavfi -i "${filter}" -t ${duration} -c:a pcm_s16le -ar 44100 "${normalizedOutputPath}"`;
+    const ffmpegArgs = ['-y', '-f', 'lavfi', '-i', filter, '-t', duration.toString(), '-c:a', 'pcm_s16le', '-ar', '44100', outputPath];
 
     try {
-      execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] });
+      execFileSync(ffmpegPath, ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
     } catch (err: any) {
       const stderr = err?.stderr?.toString() || err?.message;
       throw new Error(`Failed to generate local test audio (${type}) at ${outputPath}: ${stderr}`);

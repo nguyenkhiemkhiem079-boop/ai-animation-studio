@@ -2,6 +2,8 @@ import { IStorageProvider } from '../storage/index.js';
 import { EvidenceStore } from '../production-evidence/evidence-store.js';
 import { ProductionRun, ProductionRunSchema } from '../domain/production-run.js';
 
+import { assertSafeIdentifier } from '../domain/security.js';
+
 export class ProductionRunRepository {
   private evidenceStore: EvidenceStore;
 
@@ -10,14 +12,19 @@ export class ProductionRunRepository {
   }
 
   public async save(run: ProductionRun): Promise<void> {
+    assertSafeIdentifier(run.projectId, 'projectId');
+    assertSafeIdentifier(run.runId, 'runId');
     await this.evidenceStore.saveProductionRun(run);
   }
 
   public async findById(projectId: string, runId: string): Promise<ProductionRun | null> {
+    assertSafeIdentifier(projectId, 'projectId');
+    assertSafeIdentifier(runId, 'runId');
     return this.evidenceStore.loadProductionRun(projectId, runId);
   }
 
   public async findLatest(projectId: string): Promise<ProductionRun | null> {
+    assertSafeIdentifier(projectId, 'projectId');
     const runs = await this.listRuns(projectId);
     if (runs.length === 0) return null;
     runs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -25,7 +32,8 @@ export class ProductionRunRepository {
   }
 
   public async listRuns(projectId: string): Promise<ProductionRun[]> {
-    const baseDir = `.studio/production/${projectId}`;
+    const safeProj = assertSafeIdentifier(projectId, 'projectId');
+    const baseDir = `.studio/production/${safeProj}`;
     if (!(await this.storage.exists(baseDir))) return [];
 
     const entries = await this.storage.list(baseDir);

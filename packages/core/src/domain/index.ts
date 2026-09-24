@@ -16,3 +16,4 @@ export * from './visual-qa.js';
 export * from './export.js';
 export * from './execution-mode.js';
 export * from './production-run.js';
+export * from './security.js';

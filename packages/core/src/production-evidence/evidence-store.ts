@@ -18,11 +18,15 @@ import {
 } from '../domain/production-run.js';
 import { z } from 'zod';
 
+import { assertSafeIdentifier } from '../domain/security.js';
+
 export class EvidenceStore {
   constructor(private storage: IStorageProvider) {}
 
   public getProductionDir(projectId: string, runId: string): string {
-    return path.join('.studio', 'production', projectId, runId).replace(/\\/g, '/');
+    const safeProj = assertSafeIdentifier(projectId, 'projectId');
+    const safeRun = assertSafeIdentifier(runId, 'runId');
+    return path.join('.studio', 'production', safeProj, safeRun).replace(/\\/g, '/');
   }
 
   // 1. Production Run
