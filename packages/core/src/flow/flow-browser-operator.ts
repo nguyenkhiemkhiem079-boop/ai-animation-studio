@@ -37,6 +37,7 @@ import {
   FlowContractProbe,
   FlowBrowserProbeReport,
   FlowControlMap,
+  FlowPageState,
 } from './flow-contract-probe.js';
 import {
   ChromeFlowSessionBridge,
@@ -290,9 +291,47 @@ export class FlowBrowserOperator {
         url: this.config.flowUrl,
         projectReference: checkpoint.browserProjectReference,
       });
+
+      if (projRes.pageState !== 'FLOW_PROJECT') {
+        checkpoint.state = 'INITIAL';
+        checkpoint.details = `Cannot proceed with batch execution while page state is ${projRes.pageState}. Expected FLOW_PROJECT.`;
+        this.saveCheckpoint(checkpointPath, checkpoint);
+        return {
+          runId,
+          projectId,
+          finalState: 'INITIAL',
+          creditPlan,
+          evidence: evidenceList,
+          allPassed: false,
+          manualActionsRequired: 1,
+          error: checkpoint.details,
+        };
+      }
+
       checkpoint.browserProjectReference = projRes.browserProjectReference;
       checkpoint.state = 'FLOW_PROJECT_READY';
       this.saveCheckpoint(checkpointPath, checkpoint);
+
+      // Persist stable browser project reference
+      if (projRes.browserProjectReference) {
+        const projRefDir = path.resolve(process.cwd(), '.studio', 'flow-contract');
+        if (!fs.existsSync(projRefDir)) {
+          fs.mkdirSync(projRefDir, { recursive: true });
+        }
+        fs.writeFileSync(
+          path.join(projRefDir, 'project-reference.json'),
+          JSON.stringify(
+            {
+              browserProjectReference: projRes.browserProjectReference,
+              projectUrl: projRes.url.split('?')[0].split('#')[0],
+              observedAt: new Date().toISOString(),
+            },
+            null,
+            2
+          ),
+          'utf8'
+        );
+      }
 
       // 6. Check Credit Availability Guard
       const creditStatus = await page.detectCredits();
@@ -514,7 +553,12 @@ export class FlowBrowserOperator {
    * Prefers the authenticated system Chrome session via CDP.
    * NEVER submits a prompt, clicks generate, or spends credits.
    */
-  public async probe(options: { url?: string; persistEvidence?: boolean; headless?: boolean } = {}): Promise<{
+  public async probe(options: {
+    url?: string;
+    persistEvidence?: boolean;
+    headless?: boolean;
+    enterProject?: boolean;
+  } = {}): Promise<{
     report: FlowBrowserProbeReport;
     controlMap: FlowControlMap;
     formattedReport: string;
@@ -524,12 +568,18 @@ export class FlowBrowserOperator {
     if (this.config.flowPage) {
       // Offline/mock test
       if (typeof (this.config.flowPage as any).url !== 'function') {
+        if (options.enterProject && typeof (this.config.flowPage as any).enterFlowWorkspace === 'function') {
+          await (this.config.flowPage as any).enterFlowWorkspace();
+        }
+        const pageState: FlowPageState = (this.config.flowPage as any).simulatedPageState ?? 'FLOW_PROJECT';
+        const projectUiFound = pageState === 'FLOW_PROJECT';
         const mockReport: FlowBrowserProbeReport = {
           timestamp: new Date().toISOString(),
           url: this.config.flowUrl,
-          pageState: (this.config.flowPage as any).simulatedPageState ?? 'FLOW_PROJECT',
+          pageState,
+          browserProjectReference: projectUiFound ? 'mock_project_alpha' : undefined,
           authenticated: !(this.config.flowPage as any).simulatedAuthBlock?.isBlocked,
-          projectUiFound: true,
+          projectUiFound,
           agentControl: { status: 'FOUND', confidence: 1.0, candidateCount: 1, locatorStrategy: 'mock' },
           promptControl: { status: 'FOUND', confidence: 1.0, candidateCount: 1, locatorStrategy: 'mock' },
           generateControl: { status: 'FOUND', confidence: 1.0, candidateCount: 1, locatorStrategy: 'mock' },
@@ -546,7 +596,7 @@ export class FlowBrowserOperator {
           agentToggleLocator: '[aria-label*="Agent"]',
           creditsLocator: '.credits',
           assetCardLocator: '[data-asset-id]',
-          pageState: 'FLOW_PROJECT',
+          pageState,
           confidenceScores: {
             prompt: 1.0,
             generate: 1.0,
@@ -564,6 +614,7 @@ export class FlowBrowserOperator {
       return FlowContractProbe.probePage(this.config.flowPage as any, {
         persistEvidence: options.persistEvidence ?? true,
         outputDir: path.resolve(process.cwd(), '.studio', 'flow-contract'),
+        enterProject: options.enterProject,
       });
     }
 
@@ -582,6 +633,7 @@ export class FlowBrowserOperator {
         const result = await FlowContractProbe.probePage(session.page, {
           persistEvidence: options.persistEvidence ?? true,
           outputDir: path.resolve(process.cwd(), '.studio', 'flow-contract'),
+          enterProject: options.enterProject,
         });
         return result;
       } finally {
@@ -618,6 +670,7 @@ export class FlowBrowserOperator {
       const result = await FlowContractProbe.probePage(page, {
         persistEvidence: options.persistEvidence ?? true,
         outputDir: path.resolve(process.cwd(), '.studio', 'flow-contract'),
+        enterProject: options.enterProject,
       });
 
       await page.close().catch(() => {});

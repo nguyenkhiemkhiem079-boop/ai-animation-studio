@@ -32,6 +32,7 @@ export interface FlowBrowserProbeReport {
   timestamp: string;
   url: string;
   pageState: FlowPageState;
+  browserProjectReference?: string;
   authenticated: boolean;
   authBlockStatus?: FlowAuthBlockStatus;
   projectUiFound: boolean;
@@ -80,10 +81,12 @@ export class FlowContractProbe {
       return 'UNKNOWN_PAGE';
     }
 
-    // Inside a specific project
+    // Inside a specific project / workspace
     if (
       cleanUrl.includes('/project/') ||
       cleanUrl.includes('/projects/') ||
+      cleanUrl.includes('/workspace/') ||
+      cleanUrl.includes('/editor/') ||
       cleanUrl.includes('/p/') ||
       domSnippet.includes('data-project-id') ||
       pageText.includes('canvas') ||
@@ -116,15 +119,30 @@ export class FlowContractProbe {
     options: {
       persistEvidence?: boolean;
       outputDir?: string;
+      enterProject?: boolean;
     } = {}
   ): Promise<{
     report: FlowBrowserProbeReport;
     controlMap: FlowControlMap;
     formattedReport: string;
   }> {
-    const rawUrl = page.url();
-    // Sanitize URL: strip query parameters that might carry auth or tracking tokens
-    const sanitizedUrl = rawUrl.split('?')[0];
+    let rawUrl = page.url();
+    let sanitizedUrl = rawUrl.split('?')[0];
+
+    // If enterProject is requested and page is on FLOW_HOME:
+    if (options.enterProject) {
+      const initialBody = await page.evaluate(() => (document.body ? document.body.innerText.slice(0, 3000) : '')).catch(() => '');
+      const initialDom = await page.evaluate(() => (document.body ? document.body.innerHTML.slice(0, 3000) : '')).catch(() => '');
+      const initialPageState = this.categorizePageState(sanitizedUrl, initialBody, initialDom);
+
+      if (initialPageState === 'FLOW_HOME' && !sanitizedUrl.includes('/project/')) {
+        const { PuppeteerFlowPage } = await import('./flow-page-adapter.js');
+        const flowPage = new PuppeteerFlowPage(page, sanitizedUrl);
+        await flowPage.enterFlowWorkspace();
+        rawUrl = page.url();
+        sanitizedUrl = rawUrl.split('?')[0];
+      }
+    }
 
     // 1. Detect Auth State
     const authStatus = await this.detectAuthBlock(page);
@@ -158,6 +176,10 @@ export class FlowContractProbe {
 
     const projectUiFound = pageState === 'FLOW_PROJECT' || (pageState === 'FLOW_HOME' && promptControl.status === 'FOUND');
 
+    // Extract browser project reference if inside project
+    const projectMatch = sanitizedUrl.match(/\/(?:projects?|workspace|p)\/([a-zA-Z0-9_-]+)/);
+    const browserProjectReference = projectMatch ? projectMatch[1] : undefined;
+
     // 3. Scan visible semantic controls (sanitized)
     const visibleControls: Array<{ role?: string; label?: string; tag: string }> = await page
       .evaluate(() => {
@@ -188,6 +210,7 @@ export class FlowContractProbe {
       timestamp: new Date().toISOString(),
       url: sanitizedUrl,
       pageState,
+      browserProjectReference,
       authenticated,
       authBlockStatus: authStatus.isBlocked ? authStatus : undefined,
       projectUiFound,
@@ -232,6 +255,21 @@ export class FlowContractProbe {
       fs.writeFileSync(path.join(outDir, 'probe-report.json'), JSON.stringify(report, null, 2));
       fs.writeFileSync(path.join(outDir, 'control-map.json'), JSON.stringify(controlMap, null, 2));
 
+      if (report.browserProjectReference) {
+        fs.writeFileSync(
+          path.join(outDir, 'project-reference.json'),
+          JSON.stringify(
+            {
+              browserProjectReference: report.browserProjectReference,
+              projectUrl: report.url,
+              observedAt: report.timestamp,
+            },
+            null,
+            2
+          )
+        );
+      }
+
       try {
         const screenshotPath = path.join(outDir, 'diagnostics.png');
         await page.screenshot({ path: screenshotPath as any, fullPage: false });
@@ -255,6 +293,9 @@ export class FlowContractProbe {
     lines.push(`AUTHENTICATED:            ${report.authenticated ? 'YES ✅' : 'NO ❌ (BLOCKED_AUTH)'}`);
     lines.push(`PAGE_STATE:               ${report.pageState}`);
     lines.push(`PROJECT_UI_FOUND:         ${report.projectUiFound ? 'YES ✅' : 'NO ❌'}`);
+    if (report.browserProjectReference) {
+      lines.push(`PROJECT_REFERENCE:        ${report.browserProjectReference}`);
+    }
     lines.push(`AGENT_CONTROL_FOUND:      ${report.agentControl.status === 'FOUND' ? 'YES ✅' : report.agentControl.status === 'AMBIGUOUS' ? 'AMBIGUOUS ⚠️' : 'UNKNOWN ❌'}`);
     lines.push(`PROMPT_INPUT_FOUND:       ${report.promptControl.status === 'FOUND' ? 'YES ✅' : report.promptControl.status === 'AMBIGUOUS' ? 'AMBIGUOUS ⚠️' : 'UNKNOWN ❌'}`);
     lines.push(`GENERATE_CONTROL_FOUND:   ${report.generateControl.status === 'FOUND' ? 'YES ✅ (NEVER CLICKED — 0 CREDITS)' : report.generateControl.status === 'AMBIGUOUS' ? 'AMBIGUOUS ⚠️' : 'UNKNOWN ❌'}`);

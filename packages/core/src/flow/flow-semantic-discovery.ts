@@ -35,7 +35,138 @@ export interface FlowDiscoveredAssetContainer {
   rawText?: string;
 }
 
+export type ControlActionClassification = 'SAFE_NAVIGATION' | 'CREDIT_CONSUMING' | 'UNKNOWN';
+
+export interface ActionSafetyClassificationResult {
+  classification: ControlActionClassification;
+  confidence: number;
+  reason: string;
+}
+
 // ─── Pure Utility & Parsing Functions (Deterministic, Local, Testable) ──────────
+
+/**
+ * Explicitly classifies a UI control/action as:
+ *   - SAFE_NAVIGATION: Navigation / workspace entry that cannot generate media or spend credits.
+ *   - CREDIT_CONSUMING: Generation, prompt submission, or paid actions.
+ *   - UNKNOWN: Ambiguous or unverified action.
+ */
+export function classifyControlAction(control: {
+  text?: string | null;
+  ariaLabel?: string | null;
+  title?: string | null;
+  href?: string | null;
+  tagName?: string | null;
+  type?: string | null;
+}): ActionSafetyClassificationResult {
+  const text = (control.text || '').trim();
+  const ariaLabel = (control.ariaLabel || '').trim();
+  const title = (control.title || '').trim();
+  const href = (control.href || '').trim();
+  const type = (control.type || '').trim().toLowerCase();
+
+  const combined = [text, ariaLabel, title].filter(Boolean).join(' ').toLowerCase().trim();
+
+  // 1. Credit-consuming patterns: MUST NEVER BE CLICKED FOR NAVIGATION
+  const creditKeywords = [
+    'generate',
+    'create video',
+    'create media',
+    'render',
+    'produce',
+    'submit prompt',
+    'run prompt',
+    'spend',
+    'credit',
+    'credits',
+    'token',
+    'purchase',
+    'buy credit',
+    'buy credits',
+    'buy',
+    'pricing',
+    'upgrade',
+    'billing',
+  ];
+
+  for (const kw of creditKeywords) {
+    if (combined.includes(kw)) {
+      return {
+        classification: 'CREDIT_CONSUMING',
+        confidence: 0.95,
+        reason: `Matched credit-consuming keyword: "${kw}"`,
+      };
+    }
+  }
+
+  // If type="submit" and no safe navigation keyword
+  if (type === 'submit' && !combined.includes('start creating') && !combined.includes('create project')) {
+    return {
+      classification: 'CREDIT_CONSUMING',
+      confidence: 0.7,
+      reason: 'type="submit" control without explicit safe navigation text',
+    };
+  }
+
+  // 2. Safe navigation patterns:
+  // "Start Creating" (live Google Flow button)
+  // Localized / semantic equivalents:
+  // "Create Project", "New Project", "Start a Project", "Blank Canvas", "Blank Project",
+  // "Get Started", "Start Creation", "Open Workspace"
+  // French: "Commencer à créer", "Nouveau projet"
+  // Spanish: "Empezar a crear", "Nuevo proyecto"
+  // German: "Jetzt erstellen", "Neues Projekt"
+  // Vietnamese: "Bắt đầu tạo", "Tạo dự án mới"
+  // Japanese: "作成を開始", "新しいプロジェクト"
+  const safeNavigationKeywords = [
+    'start creating',
+    'start creation',
+    'create project',
+    'new project',
+    'new workspace',
+    'blank project',
+    'blank canvas',
+    'empty project',
+    'get started',
+    'start a project',
+    'open workspace',
+    'commencer à créer',
+    'nouveau projet',
+    'empezar a crear',
+    'nuevo proyecto',
+    'jetzt erstellen',
+    'neues projekt',
+    'bắt đầu tạo',
+    'tạo dự án',
+    '作成を開始',
+    '新規プロジェクト',
+  ];
+
+  for (const kw of safeNavigationKeywords) {
+    if (combined === kw || combined.startsWith(kw) || combined.includes(kw)) {
+      return {
+        classification: 'SAFE_NAVIGATION',
+        confidence: combined === kw ? 0.95 : 0.85,
+        reason: `Matched safe navigation keyword: "${kw}"`,
+      };
+    }
+  }
+
+  // Href link pointing to project creation or workspace
+  if (href && (href.includes('/project') || href.includes('/workspace') || href.includes('/editor'))) {
+    return {
+      classification: 'SAFE_NAVIGATION',
+      confidence: 0.8,
+      reason: `Safe navigation link pointing to: "${href}"`,
+    };
+  }
+
+  return {
+    classification: 'UNKNOWN',
+    confidence: 0.3,
+    reason: `Unrecognized action with text: "${text || ariaLabel || 'none'}"`,
+  };
+}
 
 /**
  * Parses credit indicator text with confidence scoring.
@@ -776,3 +907,311 @@ export async function findDownloadAction(
     };
   }
 }
+
+/**
+ * Discovers the safe "Start Creating" home navigation control without Playwright text selectors.
+ * Strictly verifies SAFE_NAVIGATION classification; fails closed on ambiguity.
+ */
+export async function findStartCreatingControl(page: Page): Promise<
+  SemanticDiscoveryResult & {
+    isSafeNavigation: boolean;
+    classification: ControlActionClassification;
+  }
+> {
+  try {
+    const candidates: any[] = await page.evaluate(() => {
+      const results: any[] = [];
+      const clickables = Array.from(
+        document.querySelectorAll(
+          'button, [role="button"], a[href], div[role="button"], span[role="button"], input[type="button"]'
+        )
+      );
+
+      // Safe navigation keywords
+      const primaryKeywords = ['start creating', 'start creation', 'create project', 'new project', 'start a project'];
+      const secondaryKeywords = [
+        'get started',
+        'blank canvas',
+        'blank project',
+        'empty project',
+        'commencer à créer',
+        'nouveau projet',
+        'empezar a crear',
+        'nuevo proyecto',
+        'jetzt erstellen',
+        'neues projekt',
+        'bắt đầu tạo',
+        'tạo dự án',
+        '作成を開始',
+        '新規プロジェクト',
+      ];
+      const creditKeywords = ['generate', 'create video', 'render', 'produce', 'spend', 'buy', 'pricing'];
+
+      clickables.forEach((el, index) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        const isVisible =
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          rect.width > 0 &&
+          rect.height > 0;
+        if (!isVisible) return;
+
+        const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
+        const ariaLabel = el.getAttribute('aria-label') || '';
+        const title = el.getAttribute('title') || '';
+        const href = el.getAttribute('href') || '';
+        const id = el.id || '';
+        const className = el.className || '';
+
+        const lowerText = text.toLowerCase();
+        const lowerAria = ariaLabel.toLowerCase();
+        const lowerTitle = title.toLowerCase();
+        const combined = `${lowerText} ${lowerAria} ${lowerTitle}`.trim();
+
+        // 1. Check for credit-consuming disqualifiers
+        let isCreditConsuming = false;
+        for (const kw of creditKeywords) {
+          if (combined.includes(kw)) {
+            isCreditConsuming = true;
+            break;
+          }
+        }
+        if (isCreditConsuming) return;
+
+        let score = 0;
+        const matches: string[] = [];
+
+        // Exact match with known live Google Flow control "Start Creating"
+        if (lowerText === 'start creating' || lowerAria === 'start creating') {
+          score += 0.95;
+          matches.push('exact live "Start Creating" match');
+        } else if (lowerText.startsWith('start creating') || lowerAria.startsWith('start creating')) {
+          score += 0.9;
+          matches.push('starts with "start creating"');
+        } else {
+          for (const p of primaryKeywords) {
+            if (combined === p || combined.startsWith(p)) {
+              score += 0.85;
+              matches.push(`primary match: "${p}"`);
+              break;
+            } else if (combined.includes(p)) {
+              score += 0.75;
+              matches.push(`primary substring: "${p}"`);
+              break;
+            }
+          }
+
+          if (score === 0) {
+            for (const s of secondaryKeywords) {
+              if (combined === s || combined.includes(s)) {
+                score += 0.7;
+                matches.push(`secondary match: "${s}"`);
+                break;
+              }
+            }
+          }
+        }
+
+        // Href bonus if pointing to /project/new or /projects or /workspace
+        if (href && (href.includes('/project') || href.includes('/workspace') || href.includes('/editor'))) {
+          score += 0.2;
+          matches.push(`project href: "${href}"`);
+        }
+
+        if (score >= 0.6) {
+          results.push({
+            index,
+            text,
+            ariaLabel,
+            title,
+            href,
+            id,
+            className,
+            score: Math.min(1.0, score),
+            matches,
+          });
+        }
+      });
+
+      return results;
+    });
+
+    if (!candidates || candidates.length === 0) {
+      return {
+        status: 'NOT_FOUND',
+        confidence: 0,
+        candidateCount: 0,
+        locatorStrategy: 'findStartCreatingControl',
+        isSafeNavigation: false,
+        classification: 'UNKNOWN',
+        details: 'No "Start Creating" or equivalent navigation controls found on current page',
+      };
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    const best = candidates[0];
+    const runnerUp = candidates[1];
+
+    const selector = best.id
+      ? `#${best.id}`
+      : best.ariaLabel
+      ? `[aria-label="${best.ariaLabel.replace(/"/g, '\\"')}"]`
+      : best.href
+      ? `a[href="${best.href.replace(/"/g, '\\"')}"]`
+      : `button:nth-of-type(${best.index + 1})`;
+
+    // Check for ambiguity
+    if (runnerUp && Math.abs(best.score - runnerUp.score) < 0.2) {
+      return {
+        status: 'AMBIGUOUS',
+        confidence: 0.45,
+        candidateCount: candidates.length,
+        locatorStrategy: 'AMBIGUOUS_START_CREATING_CONTROL',
+        isSafeNavigation: false,
+        classification: 'UNKNOWN',
+        details: `Multiple candidate navigation controls discovered (${candidates.length} candidates)`,
+        evidence: candidates.slice(0, 3).map((c) => `"${c.text || c.ariaLabel}" (score=${c.score})`).join(' | '),
+      };
+    }
+
+    return {
+      status: 'FOUND',
+      confidence: best.score,
+      candidateCount: 1,
+      locatorStrategy: selector,
+      isSafeNavigation: true,
+      classification: 'SAFE_NAVIGATION',
+      evidence: `Selected safe control: "${best.text || best.ariaLabel}" [${best.matches.join(', ')}]`,
+      target: best,
+    };
+  } catch (err: any) {
+    return {
+      status: 'NOT_FOUND',
+      confidence: 0,
+      candidateCount: 0,
+      locatorStrategy: 'findStartCreatingControl',
+      isSafeNavigation: false,
+      classification: 'UNKNOWN',
+      details: `Start Creating discovery failed: ${err?.message || String(err)}`,
+    };
+  }
+}
+
+/**
+ * Discovers safe intermediate UI action (e.g. Blank Canvas, Create Blank Project in dialog).
+ */
+export async function findIntermediateWorkspaceAction(page: Page): Promise<
+  SemanticDiscoveryResult & {
+    isSafeNavigation: boolean;
+    classification: ControlActionClassification;
+  }
+> {
+  try {
+    const result: any = await page.evaluate(() => {
+      // Look for active dialog or modal container
+      const dialog = document.querySelector('[role="dialog"], [class*="modal"], [class*="dialog"], [aria-modal="true"]');
+      const root = dialog || document;
+
+      const clickables = Array.from(
+        root.querySelectorAll('button, [role="button"], a[href], div[role="button"]')
+      );
+
+      const safeIntermediateKeywords = [
+        'blank canvas',
+        'blank project',
+        'blank video',
+        'start from scratch',
+        'default',
+        'empty project',
+        'continue',
+        'next',
+        'skip',
+        'create project',
+      ];
+
+      const candidates: any[] = [];
+      clickables.forEach((el, index) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || rect.width === 0 || rect.height === 0) return;
+
+        const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
+        const ariaLabel = el.getAttribute('aria-label') || '';
+        const combined = `${text} ${ariaLabel}`.toLowerCase();
+
+        // Disqualify credit-consuming / template purchasing
+        if (combined.includes('generate') || combined.includes('pricing') || combined.includes('buy') || combined.includes('credit')) {
+          return;
+        }
+
+        for (const kw of safeIntermediateKeywords) {
+          if (combined === kw || combined.includes(kw)) {
+            candidates.push({
+              index,
+              text,
+              ariaLabel,
+              id: el.id || '',
+              score: combined === kw ? 0.95 : 0.8,
+              keyword: kw,
+            });
+            break;
+          }
+        }
+      });
+
+      return candidates;
+    });
+
+    if (!result || result.length === 0) {
+      return {
+        status: 'NOT_FOUND',
+        confidence: 0,
+        candidateCount: 0,
+        locatorStrategy: 'findIntermediateWorkspaceAction',
+        isSafeNavigation: false,
+        classification: 'UNKNOWN',
+        details: 'No intermediate workspace actions found',
+      };
+    }
+
+    result.sort((a: any, b: any) => b.score - a.score);
+    const best = result[0];
+    const runnerUp = result[1];
+
+    if (runnerUp && Math.abs(best.score - runnerUp.score) < 0.15) {
+      return {
+        status: 'AMBIGUOUS',
+        confidence: 0.4,
+        candidateCount: result.length,
+        locatorStrategy: 'AMBIGUOUS_INTERMEDIATE_ACTION',
+        isSafeNavigation: false,
+        classification: 'UNKNOWN',
+        details: `Multiple candidate intermediate actions discovered (${result.length})`,
+      };
+    }
+
+    const selector = best.id ? `#${best.id}` : `button:nth-of-type(${best.index + 1})`;
+    return {
+      status: 'FOUND',
+      confidence: best.score,
+      candidateCount: 1,
+      locatorStrategy: selector,
+      isSafeNavigation: true,
+      classification: 'SAFE_NAVIGATION',
+      evidence: `Safe intermediate action: "${best.text || best.ariaLabel}" (${best.keyword})`,
+      target: best,
+    };
+  } catch (err: any) {
+    return {
+      status: 'NOT_FOUND',
+      confidence: 0,
+      candidateCount: 0,
+      locatorStrategy: 'findIntermediateWorkspaceAction',
+      isSafeNavigation: false,
+      classification: 'UNKNOWN',
+      details: `Intermediate action discovery failed: ${err?.message || String(err)}`,
+    };
+  }
+}
+

@@ -23,6 +23,8 @@ import {
   findAssetContainers,
   findDownloadAction,
   parseCreditText,
+  findStartCreatingControl,
+  findIntermediateWorkspaceAction,
 } from './flow-semantic-discovery.js';
 import { FlowContractProbe, FlowPageState } from './flow-contract-probe.js';
 
@@ -84,10 +86,17 @@ export interface FlowDiagnostics {
 
 export interface IFlowPage {
   /** Ensure Google Flow project exists or is open */
+  /** Ensure Flow project workspace is active, safely entering workspace from FLOW_HOME */
   ensureProject(
     projectName: string,
     options?: { url?: string; projectReference?: string }
   ): Promise<FlowProjectNavigationResult>;
+
+  /** Enter project workspace from FLOW_HOME via safe navigation ("Start Creating") */
+  enterFlowWorkspace(options?: {
+    timeoutMs?: number;
+    maxIntermediateSteps?: number;
+  }): Promise<FlowProjectNavigationResult>;
 
   /** Ensure Flow Agent mode is activated when available */
   ensureAgentMode(): Promise<FlowAgentModeResult>;
@@ -143,6 +152,125 @@ export class PuppeteerFlowPage implements IFlowPage {
     this.defaultFlowUrl = defaultFlowUrl;
   }
 
+  public async enterFlowWorkspace(options: {
+    timeoutMs?: number;
+    maxIntermediateSteps?: number;
+  } = {}): Promise<FlowProjectNavigationResult> {
+    const timeoutMs = options.timeoutMs ?? 20000;
+    const maxIntermediateSteps = options.maxIntermediateSteps ?? 3;
+
+    const rawUrl = this.page.url();
+    const bodyText = await this.page.evaluate(() => (document.body ? document.body.innerText.slice(0, 3000) : '')).catch(() => '');
+    const domSnippet = await this.page.evaluate(() => (document.body ? document.body.innerHTML.slice(0, 3000) : '')).catch(() => '');
+    let pageState = FlowContractProbe.categorizePageState(rawUrl, bodyText, domSnippet);
+
+    // If already in FLOW_PROJECT, extract project reference and return
+    if (pageState === 'FLOW_PROJECT') {
+      const projectMatch = rawUrl.match(/\/(?:projects?|workspace|p)\/([a-zA-Z0-9_-]+)/);
+      const browserProjectReference = projectMatch ? projectMatch[1] : `project_${Date.now()}`;
+      return {
+        projectId: browserProjectReference,
+        url: rawUrl.split('?')[0],
+        pageState: 'FLOW_PROJECT',
+        browserProjectReference,
+      };
+    }
+
+    // Check authentication
+    const auth = await this.detectAuthBlock();
+    if (auth.isBlocked) {
+      throw new Error(`[BLOCKED_AUTH] Authentication required: ${auth.details}`);
+    }
+
+    if (pageState !== 'FLOW_HOME') {
+      throw new Error(`[FLOW_NAVIGATION_INVALID_STATE] Cannot enter workspace from pageState "${pageState}". Expected FLOW_HOME.`);
+    }
+
+    // 1. Discover safe "Start Creating" navigation control
+    const navControl = await findStartCreatingControl(this.page);
+
+    if (navControl.status === 'NOT_FOUND') {
+      throw new Error('[FLOW_NAVIGATION_NOT_FOUND] Safe "Start Creating" navigation control not found on Flow home page.');
+    }
+
+    if (navControl.status === 'AMBIGUOUS') {
+      throw new Error(
+        `[FLOW_NAVIGATION_AMBIGUOUS] Multiple candidate Start Creating controls discovered (${navControl.candidateCount} candidates). Failing closed to prevent accidental click.`
+      );
+    }
+
+    if (!navControl.isSafeNavigation || navControl.classification !== 'SAFE_NAVIGATION') {
+      throw new Error(
+        `[FLOW_NAVIGATION_UNSAFE] Start Creating candidate is not classified as SAFE_NAVIGATION (classified as: ${navControl.classification}). Aborting navigation.`
+      );
+    }
+
+    // 2. Click safe navigation control (ZERO generation, navigation only)
+    const clicked = await this.page.evaluate((selector: string) => {
+      const el = document.querySelector(selector) as HTMLElement | null;
+      if (el) {
+        el.click();
+        return true;
+      }
+      return false;
+    }, navControl.locatorStrategy);
+
+    if (!clicked) {
+      throw new Error(`[FLOW_NAVIGATION_CLICK_FAILED] Failed to click navigation control: ${navControl.locatorStrategy}`);
+    }
+
+    // 3. Wait for workspace to load or intermediate modal
+    const start = Date.now();
+    let intermediateStepsTaken = 0;
+
+    while (Date.now() - start < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 600));
+
+      const currentUrl = this.page.url();
+      const currentBody = await this.page.evaluate(() => (document.body ? document.body.innerText.slice(0, 3000) : '')).catch(() => '');
+      const currentDom = await this.page.evaluate(() => (document.body ? document.body.innerHTML.slice(0, 3000) : '')).catch(() => '');
+      pageState = FlowContractProbe.categorizePageState(currentUrl, currentBody, currentDom);
+
+      // Check prompt composer existence
+      const promptSurface = await findEditablePromptSurface(this.page);
+      if (pageState === 'FLOW_PROJECT' || promptSurface.status === 'FOUND') {
+        const projectMatch = currentUrl.match(/\/(?:projects?|workspace|p)\/([a-zA-Z0-9_-]+)/);
+        const browserProjectReference = projectMatch ? projectMatch[1] : `project_${Date.now()}`;
+        return {
+          projectId: browserProjectReference,
+          url: currentUrl.split('?')[0],
+          pageState: 'FLOW_PROJECT',
+          browserProjectReference,
+        };
+      }
+
+      // Check intermediate modal/dialog (e.g. Blank Canvas template)
+      const intermediate = await findIntermediateWorkspaceAction(this.page);
+      if (intermediate.status === 'FOUND' && intermediate.isSafeNavigation) {
+        if (intermediateStepsTaken >= maxIntermediateSteps) {
+          throw new Error(
+            `[FLOW_NAVIGATION_REQUIRES_CALIBRATION] Exceeded maximum intermediate setup steps (${maxIntermediateSteps}). Failing closed.`
+          );
+        }
+        intermediateStepsTaken++;
+        await this.page.evaluate((sel: string) => {
+          const el = document.querySelector(sel) as HTMLElement | null;
+          if (el) el.click();
+        }, intermediate.locatorStrategy);
+        continue;
+      }
+
+      if (intermediate.status === 'AMBIGUOUS' || (currentDom.includes('role="dialog"') && intermediate.status === 'NOT_FOUND')) {
+        await this.captureDiagnostics('intermediate_ui_ambiguous').catch(() => {});
+        throw new Error(
+          '[FLOW_NAVIGATION_REQUIRES_CALIBRATION] Intermediate UI detected without clear safe navigation path. Diagnostics captured.'
+        );
+      }
+    }
+
+    throw new Error(`[FLOW_NAVIGATION_TIMEOUT] Timed out waiting for Flow project workspace after ${timeoutMs}ms.`);
+  }
+
   public async ensureProject(
     projectName: string,
     options: { url?: string; projectReference?: string } = {}
@@ -164,20 +292,17 @@ export class PuppeteerFlowPage implements IFlowPage {
     const rawUrl = this.page.url();
     const bodyText = await this.page.evaluate(() => (document.body ? document.body.innerText.slice(0, 2000) : '')).catch(() => '');
     const domSnippet = await this.page.evaluate(() => (document.body ? document.body.innerHTML.slice(0, 2000) : '')).catch(() => '');
-    const pageState = FlowContractProbe.categorizePageState(rawUrl, bodyText, domSnippet);
+    let pageState = FlowContractProbe.categorizePageState(rawUrl, bodyText, domSnippet);
 
     const sanitizedProject = projectName.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-    // If on FLOW_HOME without active project canvas, verify if project creation/restoration is safe
+    // If on FLOW_HOME without active project canvas, enter workspace automatically via safe Start Creating
     if (pageState === 'FLOW_HOME' && !rawUrl.includes('/project/')) {
-      // In Flow home: if a specific project ID is requested and no project is currently open,
-      // report exact state rather than pretending project canvas is ready.
-      return {
-        projectId: sanitizedProject,
-        url: rawUrl,
-        pageState: 'FLOW_HOME',
-        browserProjectReference: undefined,
-      };
+      const navRes = await this.enterFlowWorkspace();
+      if (navRes.pageState !== 'FLOW_PROJECT') {
+        throw new Error(`[FLOW_NAVIGATION_FAILED] Failed to navigate to workspace from FLOW_HOME. Page state remained: ${navRes.pageState}`);
+      }
+      return navRes;
     }
 
     // Extract project reference from URL if present
@@ -602,6 +727,10 @@ export class MockFlowPage implements IFlowPage {
   public simulatedFailure?: string;
   public agentModeEnabled = true;
   public simulatedPageState: FlowPageState = 'FLOW_PROJECT';
+  public simulatedNavigationAmbiguous = false;
+  public simulatedUnsafeNavigation = false;
+  public simulatedIntermediateUi = false;
+  public startCreatingClicked = false;
   public generatedAssets = new Map<string, FlowGeneratedAssetDescriptor>();
   public submittedInstructions: Array<{ text: string; options?: any; submittedAt: string }> = [];
   public mockMp4Bytes?: Buffer;
@@ -612,6 +741,43 @@ export class MockFlowPage implements IFlowPage {
     this.mockMp4Bytes = options.mockMp4Bytes;
   }
 
+  public async enterFlowWorkspace(options?: {
+    timeoutMs?: number;
+    maxIntermediateSteps?: number;
+  }): Promise<FlowProjectNavigationResult> {
+    if (this.simulatedAuthBlock.isBlocked) {
+      throw new Error(`[BLOCKED_AUTH] Authentication required: ${this.simulatedAuthBlock.details}`);
+    }
+
+    if (this.simulatedNavigationAmbiguous) {
+      throw new Error(
+        '[FLOW_NAVIGATION_AMBIGUOUS] Multiple candidate Start Creating controls discovered (2 candidates). Failing closed to prevent accidental click.'
+      );
+    }
+
+    if (this.simulatedUnsafeNavigation) {
+      throw new Error(
+        '[FLOW_NAVIGATION_UNSAFE] Start Creating candidate is not classified as SAFE_NAVIGATION (classified as: CREDIT_CONSUMING). Aborting navigation.'
+      );
+    }
+
+    if (this.simulatedIntermediateUi) {
+      throw new Error(
+        '[FLOW_NAVIGATION_REQUIRES_CALIBRATION] Intermediate UI detected without clear safe navigation path. Diagnostics captured.'
+      );
+    }
+
+    this.startCreatingClicked = true;
+    this.simulatedPageState = 'FLOW_PROJECT';
+    const projectId = 'mock_project_alpha';
+    return {
+      projectId,
+      url: `https://flow.google.com/projects/${projectId}`,
+      pageState: 'FLOW_PROJECT',
+      browserProjectReference: projectId,
+    };
+  }
+
   public async ensureProject(
     projectName: string,
     options?: { url?: string; projectReference?: string }
@@ -619,6 +785,11 @@ export class MockFlowPage implements IFlowPage {
     if (this.simulatedAuthBlock.isBlocked) {
       throw new Error(`[BLOCKED_AUTH] Authentication required: ${this.simulatedAuthBlock.details}`);
     }
+
+    if (this.simulatedPageState === 'FLOW_HOME') {
+      return this.enterFlowWorkspace();
+    }
+
     return {
       projectId: projectName,
       url: `https://flow.google.com/projects/${projectName}`,

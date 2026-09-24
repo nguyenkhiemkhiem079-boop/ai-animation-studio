@@ -534,10 +534,14 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const urlIdx = args.indexOf('--url');
         const flowUrl = urlIdx !== -1 && args[urlIdx + 1] ? args[urlIdx + 1] : undefined;
         const headless = !args.includes('--no-headless');
+        const enterProject = args.includes('--enter-project');
 
         if (!isJson) {
           console.log('\n🔍 Probing Google Flow Browser UI Contract (Zero-Credit Mode)...');
           console.log('   Profile: .studio/browser-profiles/google-flow');
+          if (enterProject) {
+            console.log('   Navigation: Safe project workspace entry enabled (--enter-project)');
+          }
           console.log('   Strict rule: ZERO PROMPTS SUBMITTED, ZERO CREDITS CONSUMED.\n');
         }
 
@@ -546,6 +550,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           const { report, controlMap, formattedReport } = await operator.probe({
             url: flowUrl,
             persistEvidence: true,
+            enterProject,
           });
 
           if (isJson) {
@@ -4282,7 +4287,7 @@ Commands:
   flow doctor                            Check Google Flow bridge health, integration mode & tools
   flow login                             Launch persistent browser session for one-time interactive Google sign-in
   flow session-status                    Inspect real Chrome CDP session, Flow tab & auth status
-  flow browser-probe                     Zero-credit inspection of Google Flow UI contract (no credits consumed)
+  flow browser-probe [--enter-project]   Zero-credit inspection of Google Flow UI contract (no credits consumed)
   flow browser-smoke                     Run single-asset live Google Flow browser smoke test (requires opt-in)
   flow prepare <shotId> [proj]           Build self-contained Google Flow production package
   flow status <shotId> [proj]            List or inspect Google Flow generation job status
