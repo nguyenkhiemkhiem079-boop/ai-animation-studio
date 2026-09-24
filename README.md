@@ -253,6 +253,8 @@ npx studio inspect ./project.json project
   * Single-writer concurrency model with optimistic revision checking (`expectedRevision`), `cancelRun` with durable state preservation, `CorruptedEvidenceError` with actionable fail-closed diagnostics, physical checksum caching for read-only status commands, centralized secret redaction (`redactSecrets`) removing API keys and bearer tokens from logs, error reports, and exported evidence.
 - [x] **PHASE 23 — RELEASE CANDIDATE ENGINEERING** (`RC PREPARED`, `OFFLINE_REHEARSAL_VERIFIED`)
   * Truthful doctor diagnostics cleanly categorizing `REQUIRED`, `OPTIONAL`, and `LIVE-ONLY` components; machine-readable `--json` output for `status` and `evidence`; sanitized evidence export (`studio production export-evidence <runId> [destinationDir]`); comprehensive final adversarial chain test verifying tampering detection, per-shot isolation, repair, master rendering, and acceptance integrity; release candidate trust model documentation (`docs/architecture/trust-model.md`).
+- [x] **PHASE 24 — GENUINE LIVE PILOT & RELEASE VALIDATION** (`CLOSED`, `READY_FOR_LIVE_PILOT`, Live Flow: `NEEDS_USER_ACTION`)
+  * Validated single-credential live Gemini integration (`gemini-3.6-flash`, Zod structured extraction, 0 invented events, HTTP 429 quota classification); launched canonical live pilot (`examples/stories/pilot-01.txt`, `run_1790216644143_3iode`); prepared deterministic Google Flow handoff package and safely paused at Human Trust Boundary (`NEEDS_USER_ACTION`); created authoritative `ProductionReleaseGate` (CLI `studio release-gate`, supporting `--json`); implemented 13-vector adversarial reality check test suite (`phase24-reality-check.test.ts`) enforcing fail-closed release invariants; published comprehensive operator runbook (`docs/production/live-pilot-runbook.md`).
 
 ---
 
@@ -265,5 +267,6 @@ npx studio inspect ./project.json project
 | **Phase 21** | **CLOSED** | 3-shot contracts, DAG ordering, continuity, retake isolation, multi-shot acceptance bundle. |
 | **Phase 22** | **CLOSED** | Optimistic revision checking, corrupted JSON recovery, secret redaction, safe cleanup rules. |
 | **Phase 23** | **RC PREPARED** | Doctor audit, `--json` inspector, `export-evidence`, adversarial chain test, trust model guide. |
-| **GENUINE LIVE PILOT** | **PENDING** | **Ready for first genuine operator pilot execution with live Gemini & Google Flow.** |
-| **REAL MASTER PRODUCTION** | **NOT VERIFIED** | **`OFFLINE_REHEARSAL_VERIFIED`** (Master production verification requires live human pilot). |
+| **Phase 24** | **CLOSED** | Single-key live Gemini verified, canonical pilot story, Flow handoff, ProductionReleaseGate, reality check test. |
+| **GENUINE LIVE PILOT** | **NEEDS_USER_ACTION** | **Live story planned; Google Flow handoff ready at `.studio/production/.../handoff/`; awaiting operator Flow video import.** |
+| **REAL MASTER PRODUCTION** | **NOT VERIFIED** | **`READY_FOR_LIVE_PILOT`** / **`NEEDS_USER_ACTION`** (Master verification strictly requires physical Flow video & human approval). |
