@@ -23,6 +23,8 @@ DEVELOPMENT SKILLS          STORY SKILLS              UNIVERSE SKILLS
 - testing                   - canon-conflict
 - debugging
 - phase-gate
+- release-security
+- release-validation
        │
        ├─────────────────────────┬─────────────────────────┐
        ▼                         ▼                         ▼
@@ -39,113 +41,130 @@ PRODUCTION SKILLS           QA SKILLS                 EXTERNAL SKILLS
 - reference-binding         - director-qa             - /hyperframes-animation
 - continuation
 - retake
+- live-provider-validation
+- production-trust-evidence
+- flow-operator-workflow
 ```
 
 ### Knowledge vs Execution
-- **Skills (`.agents/skills/`)**: Provide **KNOWLEDGE**, mental models, guidelines, diagnostic decision trees, and workflow protocols.
+- **Skills (`.agents/skills/`)**: Provide **KNOWLEDGE**, mental models, operational guidelines, diagnostic decision trees, and workflow protocols.
 - **Core Domain (`packages/core/`)**: Provides **EXECUTION**, runtime schemas, algorithms, storage, pipelines, and validation.
 - **Cinematic Registry (`packages/core/src/cinematic-skills/`)**: Provides runtime application-level cinematic capability definitions.
+- **Core Schemas Remain Authoritative**: If a skill instruction conflicts with a Zod schema or runtime invariant, the runtime schema strictly wins.
 
 ---
 
 ## 2. Skill Categories & Directory Layout
 
-All skills reside in `.agents/skills/` organized by domain:
+The repository contains **36 total registered skills** (33 custom domain skills and 3 external HyperFrames skills):
 
-| Category | Description | Primary Skills |
+| Category | Description | Registered Skills |
 | :--- | :--- | :--- |
-| **`studio`** | Central router entry point | `studio/SKILL.md` |
-| **`development`** | Engineering rigor, auditing, and gates | `repo-audit`, `architecture-review`, `implementation`, `testing`, `debugging`, `phase-gate` |
+| **`directing` (Router)** | Central router and directing entry point | `studio`, `scene-direct`, `shot-plan` |
+| **`development`** | Engineering rigor, auditing, security, and release gates | `repo-audit`, `architecture-review`, `implementation`, `testing`, `debugging`, `phase-gate`, `release-security`, `release-validation` |
 | **`story`** | Script ingestion, beat extraction, preservation | `story-analyze`, `source-preservation`, `story-coverage`, `canon-conflict` |
-| **`universe`** | Persistent series canon & state | `universe-resolve`, `character-resolve`, `world-state-check` |
-| **`directing`** | Scene staging, shot planning, cinematic grammar | `scene-direct`, `shot-plan`, `cinematography` |
+| **`universe`** | Persistent series canon & world state | `universe-resolve`, `character-resolve`, `world-state-check` |
+| **`cinematic`** | Cinematic camera, framing, and grammar | `cinematography` |
 | **`character`** | Identity lock, turnarounds, facial QA | `character-consistency`, `identity-qa` |
 | **`world`** | Environments, spatial sets, lighting continuity | `environment-resolve` |
-| **`production`** | Routing, reference binding, retakes, continuation| `production-route`, `hyperframes-production`, `reference-binding`, `continuation`, `retake` |
-| **`qa`** | Continuity audits, visual frame inspection, director QA| `continuity-qa`, `visual-qa`, `director-qa` |
+| **`production`** | Routing, reference binding, retakes, live providers, trust evidence, Flow boundary | `production-route`, `hyperframes-production`, `reference-binding`, `continuation`, `retake`, `live-provider-validation`, `production-trust-evidence`, `flow-operator-workflow` |
+| **`qa`** | Continuity audits, visual frame inspection, director QA | `continuity-qa`, `visual-qa`, `director-qa` |
 | **`external`** | Official third-party framework skills | `hyperframes`, `hyperframes-core`, `hyperframes-animation` |
 
 ---
 
-## 3. External Skills & HyperFrames Integration
+## 3. Modern Production Skills (Phases 18–24+)
 
-Official external skills are installed directly from upstream repositories and tracked in `.agents/skills/registry.json` as `type: EXTERNAL`.
+As the studio advanced through Phase 24 live production, five canonical production skills were established to govern external boundaries, evidence integrity, and release safety:
 
-### HyperFrames Skills
-Installed via:
-```bash
-npx skills add heygen-com/hyperframes
+### 1. `live-provider-validation` (Production)
+- **Purpose**: Governs real external multimodal provider calls (Gemini).
+- **Invariants**: Strictly enforces single-credential architecture (`GEMINI_API_KEY`). Never introduces secondary keys or credential pools. Enforces role-based policies (`FAST`, `REASONING`, `STRUCTURED`, `QA`, `VISION_QA`), structured output schemas, rate limit handling (`WAITING_FOR_PROVIDER`), and provider provenance. Mocks never count as live proof.
+
+### 2. `production-trust-evidence` (Production)
+- **Purpose**: Protects the studio's truth model and fail-closed evidence derivations.
+- **Truth Distinctions**:
+  - `Candidate != Canon`
+  - `QA PASS != HUMAN APPROVAL`
+  - `OFFLINE_TEST_DOUBLE != LIVE_EXTERNAL`
+  - `SIMULATED_FLOW != GOOGLE_FLOW_REAL`
+  - `AUTOMATED_TEST != HUMAN`
+  - `OFFLINE_REHEARSAL_VERIFIED != MASTER_PRODUCTION_VERIFIED`
+- **Derivation Invariant**: `MASTER_PRODUCTION_VERIFIED` can only be derived from verifiable media files, matching SHA-256 bindings, QA logs, and authentic human approvals on disk. Missing, tampered, or contradictory evidence defaults to `UNVERIFIED`.
+
+### 3. `flow-operator-workflow` (Production)
+- **Purpose**: Governs the human-assisted Google Flow generation boundary.
+- **Boundary**: Google Flow is an interactive human creative workspace without a public headless API. Antigravity prepares complete handoff packages, issues `NEEDS_USER_ACTION`, and audits imported media with FFprobe and cryptographic checksums upon operator delivery. Antigravity never fakes the operator step.
+
+### 4. `release-security` (Development)
+- **Purpose**: Enforces zero credential leakage, process injection defenses, and containment.
+- **Coverage**: Prevents hardcoded API keys (`GEMINI_API_KEY`, `AIza...`), unescaped shell commands (`child_process.exec` vs argument array `spawn`), path traversal escapes (`../`), and test double contamination of production release manifests.
+
+### 5. `release-validation` (Development)
+- **Purpose**: Governs the final path to production across ten stratified lifecycle states.
+- **States**: `IMPLEMENTED` → `LOCAL_VERIFIED` → `CI_VERIFIED` → `OFFLINE_REHEARSAL_VERIFIED` → `READY_FOR_LIVE_PILOT` → `WAITING_FOR_PROVIDER` / `NEEDS_USER_ACTION` → `LIVE_PILOT_VERIFIED` → `MASTER_PRODUCTION_VERIFIED` → `RELEASE_READY`.
+
+---
+
+## 4. Multi-Skill Routing Chains
+
+Complex production operations require orchestrated, acyclic chains of skills:
+
 ```
+Genuine Live Pilot Chain:
+  repo-audit ──► architecture-review ──► live-provider-validation ──► production-trust-evidence
+              ──► flow-operator-workflow ──► visual-qa ──► release-security ──► release-validation
+
+Surgical Shot Retake Chain:
+  visual-qa ──► continuity-qa / identity-qa ──► retake ──► reference-binding ──► flow-operator-workflow
+
+Production Bug Chain:
+  repo-audit ──► debugging ──► testing ──► production-trust-evidence ──► phase-gate
+```
+
+---
+
+## 5. CLI Skill Commands
+
+The studio CLI provides full discovery, inspection, and verification tools:
+
+```bash
+# Validate skill registry, dependency graph, and disk entrypoints
+npm run studio -- skills check
+npm run studio -- skills check --json
+
+# List registered skills (with optional category filter)
+npm run studio -- skills list
+npm run studio -- skills list production
+npm run studio -- skills list --json
+
+# Inspect a specific skill, dependencies, and applicable phases
+npm run studio -- skills inspect live-provider-validation
+npm run studio -- skills inspect flow-operator-workflow --json
+
+# Route a query to relevant domain skills
+npm run studio -- skills route "check Gemini live"
+npm run studio -- skills route "prepare Google Flow generation" --json
+```
+
+---
+
+## 6. External Skills & HyperFrames Integration
+
+Official external skills are installed directly from upstream repositories and tracked in `.agents/skills/registry.json` as `type: EXTERNAL` and locked via `skills-lock.json`.
+
 - `/hyperframes`: Root entry point for declarative motion design.
 - `/hyperframes-core`: Core composition primitives, audio, and asset specs.
 - `/hyperframes-animation`: Animation syntax, easing, camera movements, and layer transforms.
 
-### Update & Health Check
-- Check status: `npx hyperframes skills check`
-- Update skills: `npx hyperframes skills update`
-
 > [!IMPORTANT]
-> Never duplicate or edit official HyperFrames skills in our repository. Treat them as external production knowledge. Our internal `hyperframes-production` skill defines *when* and *how* AI Animation Studio translates `ShotContract` semantics into HyperFrames compositions.
+> Never duplicate or edit official HyperFrames skills in our repository. Treat them as authoritative external production knowledge. Our internal `hyperframes-production` skill defines *when* and *how* AI Animation Studio compiles neutral `ShotContract` models into HyperFrames compositions.
 
 ---
 
-## 4. Architectural Influences & Attribution
+## 7. Adding & Validating Custom Skills
 
-AI Animation Studio studied patterns from leading open-source animation and video orchestration projects:
-
-### 1. HyperFrames (`heygen-com/hyperframes`)
-- **Adopted**: Declarative timeline composition, camera choreography, deterministic layer animation, and zero-cost 2D/2.5D transforms.
-- **Rejected/Deferred**: We do not duplicate their compiler or component schemas inside core domain models. We compile our neutral `ShotContract` to their format at production runtime.
-
-### 2. OpenMontage (`calesthio/OpenMontage`)
-- **Adopted**: Agent contracts, stage-based pipelines, provider fallback, resource metadata, retries, cost awareness, and production QA.
-- **Rejected/Deferred**: We intentionally avoided copying AGPL code or vendoring monolithic pipelines. Our modular DAG pipeline and `IProvider` architecture remain authoritative.
-
-### 3. Seedance Skill OS (`Emily2040/seedance-2.0`)
-- **Adopted**: Provider-neutral concepts: reference role binding, sequence state, first/last frame continuation, motion contracts, shot-specific character contracts, retake protocol, and Director DNA.
-- **Rejected/Deferred**: Seedance-specific prompt compilers and client-tied installers were rejected. All concepts are implemented as provider-neutral Studio contracts.
-
----
-
-## 5. Adding & Validating Custom Skills
-
-### Adding a New Skill
 1. Create a directory `.agents/skills/<category>/<skill-id>/`.
-2. Add a `SKILL.md` file with standard YAML frontmatter:
-   ```yaml
-   ---
-   name: my-skill
-   version: 1.0.0
-   category: production
-   description: "Concise summary of skill purpose."
-   dependencies:
-     - production-route
-   applicablePhases:
-     - "Phase 4"
-     - "Phase 5"
-   ---
-   ```
+2. Add a `SKILL.md` file with standard YAML frontmatter (`name`, `version`, `category`, `description`, `dependencies`, `applicablePhases`).
 3. Register the skill in `.agents/skills/registry.json`.
-4. Run validation:
-   ```bash
-   npm run skills:check
-   ```
-
-### Validation Gates
-The validation system verifies:
-- Unique skill IDs across custom and external skills.
-- Semver version strings (e.g. `1.0.0`).
-- Valid category enum.
-- Existing entrypoint files on disk.
-- Dependency existence in the registry.
-- Acyclic dependency graph (no circular dependencies).
-
----
-
-## 6. Skill Security Guidelines
-
-All skills must adhere to strict security constraints:
-- **No Secret Exfiltration**: Skills must never instruct agents or scripts to read, print, or log API keys, secrets, or `.env` files.
-- **No Destructive Commands**: Skills must never recommend unconstrained deletion commands (`rm -rf`, `git clean -fdx`) without explicit user review.
-- **No Private Data Uploads**: Skills must not configure background uploads of user project data to unauthorized external endpoints.
-- **Audit External Skills**: Inspect any newly installed external skill files before running them in production.
+4. Validate with `npm run skills:check`.

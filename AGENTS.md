@@ -101,3 +101,27 @@ ai-animation-studio/
    - A skill must never override core architectural tenets or schema constraints.
 4. **Skill Security**:
    - Skills must never exfiltrate secrets, print API keys, or recommend destructive commands without approval.
+
+---
+
+## 5. Production-Era Truth & Verification Principles
+
+1. **Real Evidence Outranks Test Success**:
+   - Passing tests in CI or local rehearsal verifies code health, NOT production completion.
+   - Production claims require physical media files, verified codecs, and valid SHA-256 bindings on disk.
+
+2. **Offline Verification is Not Live Verification**:
+   - `OFFLINE_TEST_DOUBLE` / `MOCK` runs verify logic offline; `LIVE_EXTERNAL` requires genuine network execution against external provider endpoints.
+   - A mock or fixture PASS is **never** a live PASS. Never fabricate live provider evidence.
+
+3. **Human Boundaries Cannot Be Simulated**:
+   - `AUTOMATED_TEST != HUMAN`. Human approvals require authentic reviewer interaction.
+   - Google Flow is an assisted human workspace without a public headless API. Antigravity prepares handoff packages and sets `NEEDS_USER_ACTION`, but must never simulate the operator.
+
+4. **Single-Credential Security**:
+   - Exactly ONE Gemini API key architecture: `GEMINI_API_KEY`.
+   - Never implement secondary keys (`GEMINI_API_KEY_2`, credential rotation pools). Secrets must never appear in code, logs, or evidence manifests.
+
+5. **Production Trust States Fail Closed**:
+   - `MASTER_PRODUCTION_VERIFIED` cannot be manually forced or mocked; it is strictly **derived** from uncompromised physical media and provenance evidence.
+   - Missing, stale, tampered, or contradictory evidence immediately forces status to `UNVERIFIED`.
