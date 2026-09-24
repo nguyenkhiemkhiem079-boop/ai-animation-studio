@@ -85,6 +85,9 @@
     <button class="nav-tab" id="tab-btn-production" data-target="panel-production">
       <span class="tab-icon">🔬</span> Production Pilot & Evidence
     </button>
+    <button class="nav-tab" id="tab-btn-clip" data-target="panel-clip">
+      <span class="tab-icon">⚡</span> One-Prompt Clip
+    </button>
   </nav>
 
   <!-- Main Workspace Panels -->
@@ -706,6 +709,86 @@
               <div class="item-detail">Master MP4: <code>.studio/production/.../master.mp4</code></div>
               <div class="item-detail">Acceptance Bundle: <code>acceptance-manifest.json</code> (SHA-256 Checksum Verified)</div>
               <div class="item-detail">Truth Rule: MASTER_PRODUCTION_VERIFIED requires genuine live run</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL 8: One-Prompt Auto Clip (Direct Veo Generation) -->
+    <section class="studio-panel" id="panel-clip" aria-labelledby="tab-btn-clip">
+      <div class="panel-header-banner">
+        <div class="banner-title">
+          <h2>⚡ One-Prompt Auto Clip — Direct Google Video Engine</h2>
+          <p class="subtitle">Enter one prompt to generate, poll, verify, and visual-QA an MP4 clip with zero manual Flow clicks.</p>
+        </div>
+        <div class="banner-actions">
+          <span class="status-pill status-success">VEO 2.0 DIRECT</span>
+          <span class="status-pill status-info">PREVIEW CLIPS</span>
+        </div>
+      </div>
+
+      <div class="clip-generator-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding: 24px;">
+        <div class="clip-form-card" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 20px;">
+          <h3 style="margin-top: 0;">1. Video Prompt &amp; Configuration</h3>
+          <div style="margin-bottom: 16px;">
+            <label for="clip-prompt-input" style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #aaa;">Prompt Text</label>
+            <textarea id="clip-prompt-input" rows="4" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #fff; padding: 10px; font-family: inherit; font-size: 14px;" placeholder="A young engineer stands beside a glowing blueprint table. Cinematic slow push-in, moody neon rim light.">A young engineer stands beside a glowing blueprint table. Cinematic slow push-in, moody neon rim light.</textarea>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+            <div>
+              <label for="clip-profile-select" style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #aaa;">Profile</label>
+              <select id="clip-profile-select" class="studio-select" style="width: 100%;">
+                <option value="ECONOMY" selected>Economy (veo-2.0-generate-001)</option>
+                <option value="BALANCED">Balanced</option>
+                <option value="QUALITY">Quality (veo-3-fast-preview)</option>
+              </select>
+            </div>
+            <div>
+              <label for="clip-aspect-select" style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #aaa;">Aspect Ratio</label>
+              <select id="clip-aspect-select" class="studio-select" style="width: 100%;">
+                <option value="16:9" selected>16:9 Landscape</option>
+                <option value="9:16">9:16 Portrait</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #bbb; cursor: pointer;">
+              <input type="checkbox" id="clip-qa-toggle" checked style="accent-color: #3b82f6;">
+              Enable Multimodal Visual Semantic QA on completed clip
+            </label>
+          </div>
+
+          <button id="btn-generate-clip" class="btn btn-primary" style="width: 100%; justify-content: center; padding: 12px; font-size: 14px;">
+            <span class="btn-icon">⚡</span> Generate Clip
+          </button>
+        </div>
+
+        <div class="clip-preview-card" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 20px; display: flex; flex-direction: column;">
+          <h3 style="margin-top: 0;">2. Generation Pipeline &amp; Output</h3>
+          <div id="clip-status-tracker" style="margin-bottom: 16px; padding: 12px; background: rgba(0,0,0,0.25); border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
+            <div id="clip-status-line" style="color: #64748b;">Ready. Enter prompt and click Generate Clip.</div>
+            <div id="clip-operation-line" style="color: #64748b; font-size: 11px; margin-top: 4px;"></div>
+          </div>
+
+          <div id="clip-video-viewport" style="flex: 1; min-height: 220px; background: #000; border-radius: 8px; display: flex; align-items: center; justify-content: center; border: 1px dashed rgba(255,255,255,0.15); overflow: hidden;">
+            <div id="clip-video-placeholder" style="color: #555; text-align: center; font-size: 13px;">
+              <div style="font-size: 32px; margin-bottom: 8px;">🎬</div>
+              <div>Generated video output will appear here</div>
+            </div>
+            <video id="clip-rendered-video" controls style="display: none; width: 100%; height: 100%; object-fit: contain;"></video>
+          </div>
+
+          <div id="clip-evidence-box" style="margin-top: 16px; display: none; font-size: 12px; color: #94a3b8;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span>SHA-256:</span>
+              <code id="clip-sha-display" style="color: #38bdf8;">--</code>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span>Visual QA:</span>
+              <span id="clip-qa-display" style="color: #4ade80;">--</span>
             </div>
           </div>
         </div>

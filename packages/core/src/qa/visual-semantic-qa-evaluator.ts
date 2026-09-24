@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as crypto from 'node:crypto';
 import { ShotContract } from '../domain/director.js';
 import { CharacterDNA, LocationDNA } from '../domain/universe.js';
 import {
@@ -40,6 +41,11 @@ export interface EvaluateShotVideoOptions {
     minOverallScore?: number;
   };
   executionMode?: 'MOCK' | 'LOCAL' | 'PRODUCTION';
+  /**
+   * If true, forces live re-evaluation bypassing the authoritative media SHA cache.
+   * Default: false (cache-first policy).
+   */
+  forceReevaluate?: boolean;
 }
 
 function categorizeProviderFailure(err: any): string {
@@ -80,7 +86,12 @@ function categorizeProviderFailure(err: any): string {
 }
 
 export class VisualSemanticQAEvaluator {
+  private qaCache = new Map<string, VisualSemanticQAReport>();
   private llm?: LLMProvider;
+
+  public clearCache(): void {
+    this.qaCache.clear();
+  }
 
   constructor(llm?: LLMProvider) {
     this.llm = llm;
@@ -157,6 +168,34 @@ export class VisualSemanticQAEvaluator {
         evaluatedAt: new Date().toISOString(),
         evaluationMechanism: 'LOCAL_MEDIA_METADATA',
       };
+    }
+
+    // Compute media SHA-256 for cache-first policy
+    let mediaSha256 = '';
+    try {
+      const fileBuf = fs.readFileSync(videoPath);
+      mediaSha256 = crypto.createHash('sha256').update(fileBuf).digest('hex');
+    } catch {
+      // ignore
+    }
+
+    // Cache-First Policy: if an authoritative LIVE_EXTERNAL QA PASS already exists for this exact mediaSha256 and context on this evaluator
+    const refSummary = referenceImages.map((r) => `${r.entityId}:${r.role}:${r.status ?? 'none'}`).join('|');
+    const charSummary = characterProfiles.map((c) => c.id).join('|');
+    const cacheKey = `${mediaSha256}:${shot.id}:${executionMode}:${refSummary}:${charSummary}`;
+    if (!options.forceReevaluate && mediaSha256 && this.qaCache.has(cacheKey)) {
+      const cached = this.qaCache.get(cacheKey)!;
+      if (cached.passed && cached.metadata?.providerTrust === 'LIVE_EXTERNAL') {
+        return {
+          ...cached,
+          reportId: `vis_qa_${shot.id}_${Date.now()}`,
+          projectId,
+          sceneId,
+          shotId: shot.id,
+          assetId,
+          evaluatedAt: new Date().toISOString(),
+        };
+      }
     }
 
     // 2. Multimodal capability detection
@@ -584,7 +623,7 @@ export class VisualSemanticQAEvaluator {
           this.llm.metadata?.name ??
           'multimodal_vision';
 
-        return {
+        const finalReport: VisualSemanticQAReport = {
           reportId: `vis_qa_${shot.id}_${Date.now()}`,
           projectId,
           sceneId,
@@ -611,6 +650,10 @@ export class VisualSemanticQAEvaluator {
             isSynthetic: isOfflineDouble || providerTrust === 'MOCK',
           },
         };
+        if (passed && providerTrust === 'LIVE_EXTERNAL' && mediaSha256) {
+          this.qaCache.set(cacheKey, finalReport);
+        }
+        return finalReport;
       } catch (err: any) {
         if (executionMode === 'PRODUCTION') {
           const failureReason = categorizeProviderFailure(err);

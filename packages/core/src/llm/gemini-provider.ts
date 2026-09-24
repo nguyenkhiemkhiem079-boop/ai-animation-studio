@@ -22,6 +22,57 @@ import { ProviderError } from '../errors/index.js';
 import { StudioExecutionMode, ProductionSafetyError } from '../domain/execution-mode.js';
 import { LiveAuthorizationPolicy } from './live-authorization.js';
 
+export interface GeminiUsageTelemetry {
+  liveRequestsAttempted: number;
+  liveRequestsSucceeded: number;
+  liveRequestsBlocked: number;
+  liveRequestsFailed: number;
+  cacheHits: number;
+  byRole: {
+    FAST: number;
+    REASONING: number;
+    STRUCTURED: number;
+    QA: number;
+    VISION_QA: number;
+  };
+}
+
+export function createEmptyUsageTelemetry(): GeminiUsageTelemetry {
+  return {
+    liveRequestsAttempted: 0,
+    liveRequestsSucceeded: 0,
+    liveRequestsBlocked: 0,
+    liveRequestsFailed: 0,
+    cacheHits: 0,
+    byRole: {
+      FAST: 0,
+      REASONING: 0,
+      STRUCTURED: 0,
+      QA: 0,
+      VISION_QA: 0,
+    },
+  };
+}
+
+export function formatGeminiUsageSummary(telemetry: GeminiUsageTelemetry): string {
+  const lines = [
+    'Gemini API Usage',
+    '-----------------',
+    `Live requests : ${telemetry.liveRequestsAttempted}`,
+    `Live succeeded: ${telemetry.liveRequestsSucceeded}`,
+    `Cache hits    : ${telemetry.cacheHits}`,
+    `Blocked       : ${telemetry.liveRequestsBlocked}`,
+    `Failed        : ${telemetry.liveRequestsFailed}`,
+    '',
+    `FAST       : ${telemetry.byRole.FAST}`,
+    `REASONING  : ${telemetry.byRole.REASONING}`,
+    `STRUCTURED : ${telemetry.byRole.STRUCTURED}`,
+    `QA         : ${telemetry.byRole.QA}`,
+    `VISION_QA  : ${telemetry.byRole.VISION_QA}`,
+  ];
+  return lines.join('\n');
+}
+
 export interface GeminiProviderConfig {
   apiKey?: string;
   modelPolicy?: ModelPolicy;
@@ -40,6 +91,9 @@ export interface GeminiProviderConfig {
 }
 
 export class GeminiProvider implements LLMProvider {
+  private static globalTelemetry: GeminiUsageTelemetry = createEmptyUsageTelemetry();
+  private telemetry: GeminiUsageTelemetry = createEmptyUsageTelemetry();
+
   public readonly metadata: LLMProviderMetadata;
   private apiKey?: string;
   private client?: GoogleGenAI;
@@ -55,6 +109,49 @@ export class GeminiProvider implements LLMProvider {
   private lastErrorCategory?: LLMErrorCategory;
   private lastUsage?: LLMUsageMetadata;
   private lastModelUsed?: string;
+
+  public static getGlobalUsageTelemetry(): GeminiUsageTelemetry {
+    return JSON.parse(JSON.stringify(GeminiProvider.globalTelemetry));
+  }
+
+  public static resetGlobalUsageTelemetry(): void {
+    GeminiProvider.globalTelemetry = createEmptyUsageTelemetry();
+  }
+
+  public static formatUsageSummary(telemetry?: GeminiUsageTelemetry): string {
+    return formatGeminiUsageSummary(telemetry ?? GeminiProvider.globalTelemetry);
+  }
+
+  public getUsageTelemetry(): GeminiUsageTelemetry {
+    return JSON.parse(JSON.stringify(this.telemetry));
+  }
+
+  private recordAttempt(role: keyof GeminiUsageTelemetry['byRole']): void {
+    this.telemetry.liveRequestsAttempted++;
+    this.telemetry.byRole[role] = (this.telemetry.byRole[role] ?? 0) + 1;
+    GeminiProvider.globalTelemetry.liveRequestsAttempted++;
+    GeminiProvider.globalTelemetry.byRole[role] = (GeminiProvider.globalTelemetry.byRole[role] ?? 0) + 1;
+  }
+
+  private recordSuccess(): void {
+    this.telemetry.liveRequestsSucceeded++;
+    GeminiProvider.globalTelemetry.liveRequestsSucceeded++;
+  }
+
+  private recordFailure(): void {
+    this.telemetry.liveRequestsFailed++;
+    GeminiProvider.globalTelemetry.liveRequestsFailed++;
+  }
+
+  private recordBlocked(): void {
+    this.telemetry.liveRequestsBlocked++;
+    GeminiProvider.globalTelemetry.liveRequestsBlocked++;
+  }
+
+  private recordCacheHit(): void {
+    this.telemetry.cacheHits++;
+    GeminiProvider.globalTelemetry.cacheHits++;
+  }
 
   public getLastUsage(): LLMUsageMetadata | undefined {
     return this.lastUsage;
@@ -172,6 +269,7 @@ export class GeminiProvider implements LLMProvider {
 
     // Live Check requires explicit operator authorization
     if (!LiveAuthorizationPolicy.isLiveAuthorized({ explicitLiveFlag: this.allowLiveCalls })) {
+      this.recordBlocked();
       return {
         providerId: this.metadata.id,
         name: this.metadata.name,
@@ -186,6 +284,7 @@ export class GeminiProvider implements LLMProvider {
     }
 
     const startTime = Date.now();
+    this.recordAttempt('FAST');
     try {
       const liveResult = await this.client!.models.generateContent({
         model: this.modelPolicy.getModelForRole('FAST'),
@@ -196,6 +295,7 @@ export class GeminiProvider implements LLMProvider {
       });
 
       const latencyMs = Date.now() - startTime;
+      this.recordSuccess();
       this.lastSuccessfulRequestAt = new Date().toISOString();
       return {
         providerId: this.metadata.id,
@@ -210,6 +310,7 @@ export class GeminiProvider implements LLMProvider {
         latencyMs,
       };
     } catch (err: any) {
+      this.recordFailure();
       const latencyMs = Date.now() - startTime;
       const category = this.classifyError(err);
       this.lastFailureMessage = err?.message;
@@ -322,6 +423,7 @@ export class GeminiProvider implements LLMProvider {
     const cacheKey = this.cache.computeKey(request, this.metadata.id, model);
     const cached = this.cache.get<LLMTextResult>(cacheKey, request.seriesId);
     if (cached) {
+      this.recordCacheHit();
       return {
         ...cached,
         traceId,
@@ -334,6 +436,8 @@ export class GeminiProvider implements LLMProvider {
 
     // 3. Assemble messages (supporting text and multimodal content)
     const contents = this.convertMessagesToGeminiContents(request.messages, request.prompt);
+    const role: keyof GeminiUsageTelemetry['byRole'] =
+      (request.modelRole as keyof GeminiUsageTelemetry['byRole']) ?? 'FAST';
 
     let attempt = 0;
     let lastErr: any;
@@ -341,6 +445,7 @@ export class GeminiProvider implements LLMProvider {
     while (attempt <= this.maxRetries) {
       const startTime = Date.now();
       try {
+        this.recordAttempt(role);
         const response = await this.client!.models.generateContent({
           model,
           contents,
@@ -356,6 +461,7 @@ export class GeminiProvider implements LLMProvider {
         const usage = this.extractUsageMetadata(response, durationMs, attempt);
         this.lastUsage = usage;
         this.lastModelUsed = model;
+        this.recordSuccess();
 
         const result: LLMTextResult = {
           text,
@@ -382,6 +488,7 @@ export class GeminiProvider implements LLMProvider {
 
         // Daily quota / RPD 429 fails fast immediately with zero retries
         if (category === 'QUOTA_EXCEEDED' || this.isDailyQuotaOrExhausted(err)) {
+          this.recordFailure();
           const providerError = new ProviderError(
             `Gemini generateText failed (${category}): ${err?.message}`,
             this.metadata.id,
@@ -398,6 +505,7 @@ export class GeminiProvider implements LLMProvider {
           continue;
         }
 
+        this.recordFailure();
         const providerError = new ProviderError(
           `Gemini generateText failed (${category}): ${err?.message}`,
           this.metadata.id,
@@ -408,6 +516,7 @@ export class GeminiProvider implements LLMProvider {
       }
     }
 
+    this.recordFailure();
     const lastCat = this.lastErrorCategory || 'UNKNOWN';
     const providerError = new ProviderError(
       `Gemini generateText exhausted retries: ${lastErr?.message}`,
@@ -434,6 +543,7 @@ export class GeminiProvider implements LLMProvider {
     const cacheKey = this.cache.computeKey(request, this.metadata.id, model);
     const cached = this.cache.get<LLMStructuredResult<T>>(cacheKey, request.seriesId);
     if (cached) {
+      this.recordCacheHit();
       return {
         ...cached,
         traceId,
@@ -447,6 +557,8 @@ export class GeminiProvider implements LLMProvider {
     // 3. Prepare responseSchema & assemble contents
     const openApiSchema = convertZodToJsonSchema(request.responseSchema);
     const contents = this.convertMessagesToGeminiContents(request.messages, request.prompt);
+    const role: keyof GeminiUsageTelemetry['byRole'] =
+      (request.modelRole as keyof GeminiUsageTelemetry['byRole']) ?? 'STRUCTURED';
 
     let attempt = 0;
     let lastErr: any;
@@ -454,6 +566,7 @@ export class GeminiProvider implements LLMProvider {
     while (attempt <= this.maxRetries) {
       const startTime = Date.now();
       try {
+        this.recordAttempt(role);
         const response = await this.client!.models.generateContent({
           model,
           contents,
@@ -471,6 +584,7 @@ export class GeminiProvider implements LLMProvider {
         const usage = this.extractUsageMetadata(response, durationMs, attempt);
         this.lastUsage = usage;
         this.lastModelUsed = model;
+        this.recordSuccess();
 
         // 4. Parse JSON
         let parsedJson: unknown;
@@ -526,6 +640,7 @@ export class GeminiProvider implements LLMProvider {
 
         // Daily quota / RPD 429 fails fast immediately with zero retries
         if (category === 'QUOTA_EXCEEDED' || this.isDailyQuotaOrExhausted(err)) {
+          this.recordFailure();
           const providerError = new ProviderError(
             `Gemini generateStructured failed (${category}): ${err?.message}`,
             this.metadata.id,
@@ -537,6 +652,7 @@ export class GeminiProvider implements LLMProvider {
 
         // Never blindly retry schema validation or safety errors with same prompt
         if (category === 'SCHEMA_VALIDATION_FAILED' || category === 'SAFETY_BLOCK' || category === 'INVALID_REQUEST') {
+          this.recordFailure();
           throw err;
         }
 
@@ -547,6 +663,7 @@ export class GeminiProvider implements LLMProvider {
           continue;
         }
 
+        this.recordFailure();
         const providerError = new ProviderError(
           `Gemini generateStructured failed (${category}): ${err?.message}`,
           this.metadata.id,
@@ -557,6 +674,7 @@ export class GeminiProvider implements LLMProvider {
       }
     }
 
+    this.recordFailure();
     const lastCat = this.lastErrorCategory || 'UNKNOWN';
     const providerError = new ProviderError(
       `Gemini generateStructured exhausted retries: ${lastErr?.message}`,
@@ -613,6 +731,7 @@ export class GeminiProvider implements LLMProvider {
 
   private assertExecutionReadiness(taskType: string): void {
     if (!this.isConfigured()) {
+      this.recordBlocked();
       if (this.executionMode === 'PRODUCTION') {
         throw new ProductionSafetyError(
           `Gemini API requested for task "${taskType}" in PRODUCTION mode, but GEMINI_API_KEY is not configured.`
@@ -623,9 +742,14 @@ export class GeminiProvider implements LLMProvider {
         this.metadata.id
       );
     }
-    LiveAuthorizationPolicy.assertLiveAuthorized(`Gemini API call for task "${taskType}"`, {
-      explicitLiveFlag: this.allowLiveCalls,
-    });
+    try {
+      LiveAuthorizationPolicy.assertLiveAuthorized(`Gemini API call for task "${taskType}"`, {
+        explicitLiveFlag: this.allowLiveCalls,
+      });
+    } catch (err) {
+      this.recordBlocked();
+      throw err;
+    }
   }
 
   private extractUsageMetadata(response: any, latencyMs: number, retryCount: number): LLMUsageMetadata {

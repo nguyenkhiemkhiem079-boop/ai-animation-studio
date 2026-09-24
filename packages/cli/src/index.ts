@@ -207,7 +207,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           return 0;
         }
         console.log('🌐 Executing LIVE Gemini Visual Semantic QA smoke...');
-        const gemini = new GeminiProvider();
+        const gemini = new GeminiProvider({ allowLiveCalls: true });
         if (!gemini.isConfigured()) {
           console.error('❌ GEMINI_API_KEY is not configured in environment.');
           return 1;
@@ -319,12 +319,17 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.log(`- QA         : ${models.qa} (env: GEMINI_MODEL_QA)`);
         return 0;
       }
+      if (subCommand === 'telemetry') {
+        const telemetry = GeminiProvider.getGlobalUsageTelemetry();
+        console.log(GeminiProvider.formatUsageSummary(telemetry));
+        return 0;
+      }
       if (subCommand === 'smoke') {
         const { runGeminiSmoke } = await import('./smoke/gemini-smoke.js');
         await runGeminiSmoke();
         return 0;
       }
-      console.error(`Unknown gemini subcommand: "${subCommand}". Supported: doctor, models, smoke`);
+      console.error(`Unknown gemini subcommand: "${subCommand}". Supported: doctor, models, smoke, telemetry`);
       return 1;
     }
 
@@ -3729,10 +3734,16 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       const clipArgs = args.slice(1);
       const isQuickVideo = command === 'quick-video';
 
+      // --resume <clipId> to resume existing pending or polling operation
+      const resumeIdx = clipArgs.indexOf('--resume');
+      const resumeClipId = resumeIdx !== -1 && clipArgs[resumeIdx + 1] ? clipArgs[resumeIdx + 1] : undefined;
+
       // --prompt-file <path> takes precedence over positional prompt
       const promptFileIdx = clipArgs.indexOf('--prompt-file');
       let clipPrompt: string | undefined;
-      if (promptFileIdx !== -1 && clipArgs[promptFileIdx + 1]) {
+      if (resumeClipId) {
+        clipPrompt = `[RESUME: ${resumeClipId}]`;
+      } else if (promptFileIdx !== -1 && clipArgs[promptFileIdx + 1]) {
         const pf = clipArgs[promptFileIdx + 1];
         try {
           clipPrompt = (await fs.readFile(pf, 'utf8')).trim();
@@ -3754,6 +3765,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.error('Usage:');
         console.error('  studio clip "<prompt>"');
         console.error('  studio clip --prompt-file <file>');
+        console.error('  studio clip --resume <clipId>');
         console.error('  studio quick-video "<prompt>"');
         console.error('');
         console.error('Options:');
@@ -3764,6 +3776,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.error('  --profile ECONOMY|BALANCED|QUALITY  Generation profile (default: ECONOMY)');
         console.error('  --output <path>        Override output MP4 path');
         console.error('  --no-qa                Skip lightweight QA checks');
+        console.error('  --resume <clipId>      Resume existing operation by clipId');
         console.error('  --project <id>         Project ID for file organization (default: default)');
         return 1;
       }
@@ -3791,8 +3804,10 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return 1;
       }
 
+      const gemini = new GeminiProvider({ allowLiveCalls: true });
       const clipSvc = new ClipService({
         apiKey,
+        llm: gemini,
         profile: clipProfile,
         enableQA,
         pollIntervalMs: 8000,
@@ -3810,25 +3825,35 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log(`QA       : ${enableQA ? 'Enabled' : 'Disabled'}`);
       console.log(`Type     : PREVIEW_CLIP (no Canon approval required)`);
       console.log('');
-      console.log('⏳ Submitting to Veo API...');
 
       let clipResult: any;
-      try {
-        clipResult = await clipSvc.generateClip({
-          prompt: clipPrompt,
-          clipType: 'PREVIEW_CLIP',
-          model: clipModel || undefined,
-          aspectRatio: clipAspect,
-          resolution: clipResolution,
-          durationSeconds: isNaN(clipDuration) ? 5 : clipDuration,
-          profile: clipProfile,
-          outputPath: clipOutput || undefined,
-          projectId: clipProject,
-          enableQA,
-        });
-      } catch (err: any) {
-        console.error(`❌ Clip generation failed: ${err?.message}`);
-        return 1;
+      if (resumeClipId) {
+        console.log(`🔄 Resuming polling for operation clipId="${resumeClipId}"...`);
+        try {
+          clipResult = await clipSvc.resumeClip(clipProject, resumeClipId, { enableQA });
+        } catch (err: any) {
+          console.error(`❌ Clip resume failed: ${err?.message}`);
+          return 1;
+        }
+      } else {
+        console.log('⏳ Submitting to Veo API...');
+        try {
+          clipResult = await clipSvc.generateClip({
+            prompt: clipPrompt,
+            clipType: 'PREVIEW_CLIP',
+            model: clipModel || undefined,
+            aspectRatio: clipAspect,
+            resolution: clipResolution,
+            durationSeconds: isNaN(clipDuration) ? 5 : clipDuration,
+            profile: clipProfile,
+            outputPath: clipOutput || undefined,
+            projectId: clipProject,
+            enableQA,
+          });
+        } catch (err: any) {
+          console.error(`❌ Clip generation failed: ${err?.message}`);
+          return 1;
+        }
       }
 
       console.log('');

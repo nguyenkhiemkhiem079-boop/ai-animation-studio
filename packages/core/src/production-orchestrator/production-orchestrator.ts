@@ -940,8 +940,22 @@ export class ProductionOrchestrator {
     runId: string,
     shotId: string,
     targetShot: ShotContract,
-    mediaEvidence: { physicalPath: string; sha256: string; assetId: string }
+    mediaEvidence: { physicalPath: string; sha256: string; assetId: string },
+    options: { forceReevaluate?: boolean } = {}
   ): Promise<{ quotaBlocked: boolean; providerFailureReason?: string }> {
+    // Cache-First Policy: if an authoritative LIVE_EXTERNAL QA PASS already exists for this exact mediaSha256, reuse it
+    if (!options.forceReevaluate) {
+      const existingQA = sm.getRun().qaEvidence[shotId];
+      if (
+        existingQA &&
+        existingQA.mediaSha256 === mediaEvidence.sha256 &&
+        existingQA.passed &&
+        existingQA.providerTrust === 'LIVE_EXTERNAL'
+      ) {
+        return { quotaBlocked: false };
+      }
+    }
+
     const evaluator = new VisualSemanticQAEvaluator(this.llm);
     const report = await evaluator.evaluateShotVideo({
       projectId,
@@ -949,6 +963,7 @@ export class ProductionOrchestrator {
       videoPath: mediaEvidence.physicalPath,
       assetId: mediaEvidence.assetId,
       executionMode: sm.mode,
+      forceReevaluate: options.forceReevaluate,
     });
 
     const providerTrust =

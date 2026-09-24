@@ -23,6 +23,8 @@ import * as path from 'node:path';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
 import { GeminiVeoVideoProvider, VeoGenerateRequest, VeoGenerateResult, VeoQuotaError, VeoTimeoutError, VeoGenerationProfile, VEO_MODEL_MAP } from './gemini-veo-provider.js';
 import { VeoOperationStore } from './veo-operation-store.js';
+import { LLMProvider } from '../llm/llm-provider.js';
+import { VisualSemanticQAEvaluator } from '../qa/visual-semantic-qa-evaluator.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,6 +34,8 @@ export type ClipStatus = 'READY' | 'RETAKE_RECOMMENDED' | 'WAITING_FOR_PROVIDER'
 export interface ClipServiceOptions {
   /** GEMINI_API_KEY. Defaults to process.env.GEMINI_API_KEY */
   apiKey?: string;
+  /** LLM Provider for multimodal vision QA (optional) */
+  llm?: LLMProvider;
   /** Enable Visual QA after download (default: true) */
   enableQA?: boolean;
   /** Default output directory for clips */
@@ -94,6 +98,20 @@ export interface ClipResult {
   ffprobe: FFprobeEvidence;
   qaStatus?: 'PASS' | 'FAIL' | 'WARN' | 'SKIPPED';
   qaDetails?: string;
+  qaReport?: {
+    mediaSha256: string;
+    model: string;
+    providerTrust: string;
+    mechanism: string;
+    scores: {
+      overall: number | null;
+      defects: number | null;
+      spatial: number | null;
+      identity: number | null;
+    };
+    defects: Array<{ defectId: string; severity: string; description: string }>;
+    retakeRecommendations: Array<{ strategy: string; rationale: string }>;
+  };
   generatedAt: string;
   downloadedAt: string;
   /** Reason for RETAKE_RECOMMENDED or FAILED status */
@@ -104,6 +122,7 @@ export interface ClipResult {
 
 export class ClipService {
   private readonly provider: GeminiVeoVideoProvider;
+  private readonly llm?: LLMProvider;
   private readonly enableQA: boolean;
   private readonly outputBaseDir: string;
 
@@ -116,6 +135,7 @@ export class ClipService {
       defaultProfile: options.profile ?? 'ECONOMY',
       allowLiveCalls: true,
     });
+    this.llm = options.llm;
     this.enableQA = options.enableQA ?? true;
     this.outputBaseDir = options.outputBaseDir ?? '.studio/clips';
   }
@@ -209,11 +229,13 @@ export class ClipService {
     const runQA = req.enableQA !== undefined ? req.enableQA : this.enableQA;
     let qaStatus: ClipResult['qaStatus'] = 'SKIPPED';
     let qaDetails: string | undefined;
+    let qaReport: ClipResult['qaReport'] | undefined;
 
     if (runQA) {
-      const qaOutcome = await this._runLightweightQA(veoResult.physicalPath, verification);
+      const qaOutcome = await this._executeVisualQA(veoResult.physicalPath, req.prompt, verification);
       qaStatus = qaOutcome.status;
       qaDetails = qaOutcome.details;
+      qaReport = qaOutcome.report;
     }
 
     const status: ClipStatus =
@@ -234,9 +256,133 @@ export class ClipService {
       ffprobe,
       qaStatus,
       qaDetails,
+      qaReport,
       generatedAt: veoResult.generatedAt,
       downloadedAt: veoResult.downloadedAt,
     };
+  }
+
+  /**
+   * Resumes an existing clip operation by clipId (e.g. after crash recovery).
+   */
+  public async resumeClip(projectId: string, clipId: string, options: { enableQA?: boolean } = {}): Promise<ClipResult> {
+    const runQA = options.enableQA !== undefined ? options.enableQA : this.enableQA;
+    let veoResult: VeoGenerateResult;
+    try {
+      veoResult = await this.provider.resumeOperation(projectId, clipId);
+    } catch (err: any) {
+      if (err instanceof VeoQuotaError) {
+        return this._buildFailedResult({ prompt: clipId }, clipId, '', 'PREVIEW_CLIP', 'WAITING_FOR_PROVIDER', err.message);
+      }
+      return this._buildFailedResult({ prompt: clipId }, clipId, '', 'PREVIEW_CLIP', 'FAILED', `Resume failed: ${err?.message}`);
+    }
+
+    const verification = ArtifactVerifier.verify(veoResult.physicalPath, {
+      requireVideoStream: true,
+      requireValidMedia: true,
+    });
+
+    const ffprobe: FFprobeEvidence = {
+      hasVideoStream: verification.hasVideoStream ?? false,
+      durationSeconds: verification.durationSeconds ?? null,
+      width: verification.width ?? null,
+      height: verification.height ?? null,
+      fps: verification.fps ?? null,
+      codec: verification.videoCodec ?? null,
+      sizeBytes: verification.sizeBytes ?? veoResult.sizeBytes,
+    };
+
+    let qaStatus: ClipResult['qaStatus'] = 'SKIPPED';
+    let qaDetails: string | undefined;
+    let qaReport: ClipResult['qaReport'] | undefined;
+
+    if (runQA) {
+      const qaOutcome = await this._executeVisualQA(veoResult.physicalPath, clipId, verification);
+      qaStatus = qaOutcome.status;
+      qaDetails = qaOutcome.details;
+      qaReport = qaOutcome.report;
+    }
+
+    const status: ClipStatus = qaStatus === 'FAIL' ? 'RETAKE_RECOMMENDED' : 'READY';
+
+    return {
+      status,
+      clipType: 'PREVIEW_CLIP',
+      clipId: veoResult.clipId,
+      physicalPath: veoResult.physicalPath,
+      sha256: veoResult.sha256,
+      sizeBytes: veoResult.sizeBytes,
+      provider: 'google-veo',
+      model: veoResult.model,
+      operationName: veoResult.operationName,
+      prompt: clipId,
+      promptHash: '',
+      ffprobe,
+      qaStatus,
+      qaDetails,
+      qaReport,
+      generatedAt: veoResult.generatedAt,
+      downloadedAt: veoResult.downloadedAt,
+    };
+  }
+
+  private async _executeVisualQA(
+    physicalPath: string,
+    prompt: string,
+    verification: ReturnType<typeof ArtifactVerifier.verify>
+  ): Promise<{ status: 'PASS' | 'FAIL' | 'WARN'; details: string; report?: ClipResult['qaReport'] }> {
+    if (this.llm && (typeof (this.llm as any).isConfigured !== 'function' || (this.llm as any).isConfigured())) {
+      try {
+        const evaluator = new VisualSemanticQAEvaluator(this.llm);
+        const shotContract: any = {
+          id: 'preview_shot',
+          sceneId: 'preview_scene',
+          shotNumber: 1,
+          purpose: 'action',
+          complexity: 'simple_generative_video',
+          rendererIntent: 'generative_full_video',
+          frame: { durationSeconds: verification.durationSeconds ?? 5, aspectRatio: '16:9', targetFps: verification.fps ?? 24 },
+          camera: { focalLength: '35mm', shotSize: 'medium', angle: 'eye_level', movement: 'static', semanticSkills: [] },
+          lighting: { keyLightDirection: 'front', mood: 'natural', colorTemperature: 'neutral', fogAtmosphere: false },
+          composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
+          acting: [],
+          transition: { type: 'cut', durationSeconds: 0 },
+          audioCue: { sfx: [] },
+          requiredAssetIds: [],
+          dependsOnShotIds: [],
+          directorLocks: { isCameraLocked: false, isFramingLocked: false, isRendererLocked: false, isActingLocked: false },
+          provenance: { decidedAt: new Date().toISOString() },
+        };
+        const rep = await evaluator.evaluateShotVideo({
+          projectId: 'preview',
+          shot: shotContract,
+          videoPath: physicalPath,
+          executionMode: 'LOCAL',
+        });
+        const qaStatus = rep.passed ? 'PASS' : 'FAIL';
+        return {
+          status: qaStatus,
+          details: `Vision QA ${qaStatus} (score: ${rep.overallVisualContinuityScore?.toFixed(2) ?? 'N/A'}, defects: ${rep.defects.length})`,
+          report: {
+            mediaSha256: (rep as any).mediaSha256 ?? '',
+            model: (rep.metadata as any)?.modelUsed ?? 'gemini-vision',
+            providerTrust: (rep.metadata as any)?.providerTrust ?? 'LIVE_EXTERNAL',
+            mechanism: rep.evaluationMechanism,
+            scores: {
+              overall: rep.overallVisualContinuityScore,
+              defects: rep.visualDefectScore,
+              spatial: rep.spatialPerspectiveScore,
+              identity: rep.identityConsistencyScore,
+            },
+            defects: rep.defects.map((d) => ({ defectId: d.defectId, severity: d.severity, description: d.description })),
+            retakeRecommendations: rep.retakeRecommendations.map((r) => ({ strategy: r.strategy, rationale: r.rationale })),
+          },
+        };
+      } catch {
+        // Fall back to lightweight QA
+      }
+    }
+    return this._runLightweightQA(physicalPath, verification);
   }
 
   /**
