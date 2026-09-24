@@ -1,18 +1,18 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "name": "ai-animation-studio-skill-os",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Machine-readable catalog of Antigravity production knowledge and workflow skills for AI Animation Studio.",
   "skills": [
     {
       "id": "studio",
       "name": "Studio Router",
       "category": "directing",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "Central Antigravity entry point and skill router for AI Animation Studio. Analyzes requests and routes to specialized domain skills.",
       "entryPoint": "studio/SKILL.md",
       "dependencies": [],
-      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "Production", "Release"],
       "status": "ACTIVE"
     },
     {
@@ -23,7 +23,7 @@
       "description": "Inspects repository health, git status, architecture, tests, and dependencies before modifying any code.",
       "entryPoint": "development/repo-audit/SKILL.md",
       "dependencies": [],
-      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "All Engineering"],
       "status": "ACTIVE"
     },
     {
@@ -34,7 +34,7 @@
       "description": "Protects core architectural tenets: provider independence, universe persistence, candidate!=canon, source preservation, determinism.",
       "entryPoint": "development/architecture-review/SKILL.md",
       "dependencies": ["repo-audit"],
-      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "All Engineering"],
       "status": "ACTIVE"
     },
     {
@@ -45,7 +45,7 @@
       "description": "Governs controlled feature implementation using the 8-step cycle: READ -> PLAN -> IMPLEMENT -> TEST -> REVIEW -> FIX -> VALIDATE -> REPORT.",
       "entryPoint": "development/implementation/SKILL.md",
       "dependencies": ["architecture-review"],
-      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "Feature Implementation"],
       "status": "ACTIVE"
     },
     {
@@ -56,7 +56,7 @@
       "description": "Defines mandatory testing gates: typecheck, lint, unit tests, integration tests, build, and regression suites.",
       "entryPoint": "development/testing/SKILL.md",
       "dependencies": [],
-      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "All Engineering"],
       "status": "ACTIVE"
     },
     {
@@ -67,7 +67,7 @@
       "description": "Disciplined debugging workflow: reproduce -> isolate -> root-cause -> regression test -> fix -> verify.",
       "entryPoint": "development/debugging/SKILL.md",
       "dependencies": ["testing"],
-      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "All Engineering"],
       "status": "ACTIVE"
     },
     {
@@ -78,7 +78,29 @@
       "description": "Mandatory readiness checkpoint before concluding any development phase. Outputs COMPLETE or NOT COMPLETE.",
       "entryPoint": "development/phase-gate/SKILL.md",
       "dependencies": ["testing", "architecture-review"],
-      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "All Phase Gates"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "release-security",
+      "name": "Release Security",
+      "category": "development",
+      "version": "1.0.0",
+      "description": "Audits repository, artifacts, and CLI invocations for secret leakage, command injection, path traversal, and test-to-production boundary leakage.",
+      "entryPoint": "development/release-security/SKILL.md",
+      "dependencies": ["repo-audit", "architecture-review"],
+      "applicablePhases": ["Phase 20", "Phase 21", "Phase 22", "Phase 23", "Phase 24", "Security Audit", "Release"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "release-validation",
+      "name": "Release Validation",
+      "category": "development",
+      "version": "1.0.0",
+      "description": "Governs the release gate across ten stratified verification states, enforcing doctor checks, provider provenance, media integrity, human approvals, and security audits.",
+      "entryPoint": "development/release-validation/SKILL.md",
+      "dependencies": ["phase-gate", "testing", "release-security", "production-trust-evidence"],
+      "applicablePhases": ["Phase 22", "Phase 23", "Phase 24", "Release Candidate", "Production Release"],
       "status": "ACTIVE"
     },
     {
@@ -89,7 +111,7 @@
       "description": "Extracts narrative beats, characters, dialogue, locations, and emotional arcs from raw text while preserving original text.",
       "entryPoint": "story/story-analyze/SKILL.md",
       "dependencies": ["source-preservation"],
-      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5"],
+      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5", "Story Ingestion"],
       "status": "ACTIVE"
     },
     {
@@ -100,7 +122,7 @@
       "description": "Enforces user source text immutability and bidirectional source-offset traceability.",
       "entryPoint": "story/source-preservation/SKILL.md",
       "dependencies": [],
-      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5"],
+      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5", "Story Ingestion"],
       "status": "ACTIVE"
     },
     {
@@ -111,7 +133,7 @@
       "description": "Audits narrative coverage against source text to prevent dropped plot beats and hallucinated content.",
       "entryPoint": "story/story-coverage/SKILL.md",
       "dependencies": ["source-preservation"],
-      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5"],
+      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5", "Story Ingestion"],
       "status": "ACTIVE"
     },
     {
@@ -122,7 +144,7 @@
       "description": "Identifies contradictions between story candidate claims and persistent canonical universe facts.",
       "entryPoint": "story/canon-conflict/SKILL.md",
       "dependencies": ["universe-resolve"],
-      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5"],
+      "applicablePhases": ["Phase 2", "Phase 3", "Phase 3.5", "Story Ingestion"],
       "status": "ACTIVE"
     },
     {
@@ -133,7 +155,7 @@
       "description": "Resolves narrative entities against canonical persistent series universe models while respecting namespace boundaries.",
       "entryPoint": "universe/universe-resolve/SKILL.md",
       "dependencies": [],
-      "applicablePhases": ["Phase 1", "Phase 2", "Phase 3", "Phase 3.5"],
+      "applicablePhases": ["Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Universe Resolution"],
       "status": "ACTIVE"
     },
     {
@@ -144,7 +166,7 @@
       "description": "Resolves character mentions to persistent canonical character entities, managing versioning and aliases.",
       "entryPoint": "universe/character-resolve/SKILL.md",
       "dependencies": ["universe-resolve"],
-      "applicablePhases": ["Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4"],
+      "applicablePhases": ["Phase 1", "Phase 2", "Phase 3", "Phase 3.5", "Phase 4", "Universe Resolution"],
       "status": "ACTIVE"
     },
     {
@@ -155,7 +177,7 @@
       "description": "Tracks mutable universe conditions (time of day, weather, damage) and validates continuity across narrative beats.",
       "entryPoint": "universe/world-state-check/SKILL.md",
       "dependencies": ["universe-resolve"],
-      "applicablePhases": ["Phase 1", "Phase 3", "Phase 3.5"],
+      "applicablePhases": ["Phase 1", "Phase 3", "Phase 3.5", "Universe Resolution"],
       "status": "ACTIVE"
     },
     {
@@ -166,7 +188,7 @@
       "description": "Translates narrative beats into scene-level directing strategies, shot breakdowns, and cinematic pacing.",
       "entryPoint": "directing/scene-direct/SKILL.md",
       "dependencies": ["story-analyze", "cinematography"],
-      "applicablePhases": ["Phase 3", "Phase 3.5"],
+      "applicablePhases": ["Phase 3", "Phase 3.5", "Directing"],
       "status": "ACTIVE"
     },
     {
@@ -177,7 +199,7 @@
       "description": "Deconstructs a directed scene beat into a coherent sequence of provider-neutral ShotContracts.",
       "entryPoint": "directing/shot-plan/SKILL.md",
       "dependencies": ["scene-direct", "cinematography"],
-      "applicablePhases": ["Phase 3", "Phase 3.5"],
+      "applicablePhases": ["Phase 3", "Phase 3.5", "Directing"],
       "status": "ACTIVE"
     },
     {
@@ -188,7 +210,7 @@
       "description": "Master cinematography knowledge translating narrative intent into semantic camera, framing, composition, motion, and transitions.",
       "entryPoint": "directing/cinematography/SKILL.md",
       "dependencies": [],
-      "applicablePhases": ["Phase 3", "Phase 3.5", "Phase 4", "Phase 5"],
+      "applicablePhases": ["Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Phase 6", "Phase 24", "Cinematic Direction"],
       "status": "ACTIVE"
     },
     {
@@ -199,7 +221,7 @@
       "description": "Rules and workflows for maintaining visual identity, facial features, proportions, and outfit continuity across shots.",
       "entryPoint": "character/character-consistency/SKILL.md",
       "dependencies": ["character-resolve"],
-      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5", "Phase 20", "Phase 24", "Visual Identity"],
       "status": "ACTIVE"
     },
     {
@@ -210,7 +232,7 @@
       "description": "Quality assurance protocol for verifying visual character fidelity, detecting identity drift, and costume discrepancies.",
       "entryPoint": "character/identity-qa/SKILL.md",
       "dependencies": ["character-consistency"],
-      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5", "Phase 20", "Phase 24", "Visual Identity"],
       "status": "ACTIVE"
     },
     {
@@ -221,7 +243,7 @@
       "description": "Resolves environment, architectural layout, spatial geometry, and lighting states from canonical location DNA.",
       "entryPoint": "world/environment-resolve/SKILL.md",
       "dependencies": ["universe-resolve", "world-state-check"],
-      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5", "World Building"],
       "status": "ACTIVE"
     },
     {
@@ -232,7 +254,7 @@
       "description": "Evaluates ShotContract specifications and chooses optimal execution paths (Deterministic HyperFrames vs Generative Video).",
       "entryPoint": "production/production-route/SKILL.md",
       "dependencies": ["shot-plan", "cinematography"],
-      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "Production"],
       "status": "ACTIVE"
     },
     {
@@ -243,7 +265,7 @@
       "description": "Instructs agents when and how AI Animation Studio delegates deterministic shot execution to HyperFrames compositions.",
       "entryPoint": "production/hyperframes-production/SKILL.md",
       "dependencies": ["production-route"],
-      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "Production"],
       "status": "ACTIVE"
     },
     {
@@ -254,7 +276,7 @@
       "description": "Discipline for binding multimodal reference assets to explicit semantic roles (identity, pose, outfit, environment, motion).",
       "entryPoint": "production/reference-binding/SKILL.md",
       "dependencies": ["character-consistency", "environment-resolve"],
-      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "Production"],
       "status": "ACTIVE"
     },
     {
@@ -265,7 +287,7 @@
       "description": "Chains consecutive shots across cut boundaries, extracting terminal states from shot N to seed shot N+1.",
       "entryPoint": "production/continuation/SKILL.md",
       "dependencies": ["reference-binding", "world-state-check"],
-      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "Production"],
       "status": "ACTIVE"
     },
     {
@@ -276,7 +298,40 @@
       "description": "Root-cause diagnostic and surgical re-generation protocol for failing shots, isolating and modifying only responsible variables.",
       "entryPoint": "production/retake/SKILL.md",
       "dependencies": ["production-route"],
-      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "Production"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "live-provider-validation",
+      "name": "Live Provider Validation",
+      "category": "production",
+      "version": "1.0.0",
+      "description": "Governs live external AI provider execution (Gemini), role-based model policies, single-credential enforcement, quota discipline, and provider provenance without faking live evidence.",
+      "entryPoint": "production/live-provider-validation/SKILL.md",
+      "dependencies": ["architecture-review", "production-route"],
+      "applicablePhases": ["Phase 18", "Phase 19", "Phase 20", "Phase 23", "Phase 24", "Live Provider", "Release"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "production-trust-evidence",
+      "name": "Production Trust & Evidence",
+      "category": "production",
+      "version": "1.0.0",
+      "description": "Guards the production truth model, verifies physical media and cryptographic provenance, and enforces fail-closed derivation of MASTER_PRODUCTION_VERIFIED.",
+      "entryPoint": "production/production-trust-evidence/SKILL.md",
+      "dependencies": ["architecture-review", "live-provider-validation"],
+      "applicablePhases": ["Phase 20", "Phase 21", "Phase 22", "Phase 23", "Phase 24", "Evidence Verification", "Release"],
+      "status": "ACTIVE"
+    },
+    {
+      "id": "flow-operator-workflow",
+      "name": "Flow Operator Workflow",
+      "category": "production",
+      "version": "1.0.0",
+      "description": "Governs the human-assisted Google Flow video generation boundary, handoff packaging, media import validation, and operator escalation protocols.",
+      "entryPoint": "production/flow-operator-workflow/SKILL.md",
+      "dependencies": ["shot-plan", "reference-binding", "cinematography"],
+      "applicablePhases": ["Phase 5", "Phase 6", "Phase 18", "Phase 20", "Phase 23", "Phase 24", "Flow Operation", "Release"],
       "status": "ACTIVE"
     },
     {
@@ -287,7 +342,7 @@
       "description": "Comprehensive continuity verification across character identities, outfits, props, screen direction, lighting, and timeline.",
       "entryPoint": "qa/continuity-qa/SKILL.md",
       "dependencies": ["universe-resolve", "world-state-check"],
-      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 3.5", "Phase 4", "Phase 5", "Phase 6", "Phase 20", "Phase 24", "Production QA"],
       "status": "ACTIVE"
     },
     {
@@ -298,7 +353,7 @@
       "description": "Inspection criteria for rendered video frames and animations, detecting artifacts, anatomical flaws, and layer clipping.",
       "entryPoint": "qa/visual-qa/SKILL.md",
       "dependencies": ["identity-qa"],
-      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6"],
+      "applicablePhases": ["Phase 3.5", "Phase 5", "Phase 6", "Phase 20", "Phase 23", "Phase 24", "Production QA", "Live Pilot"],
       "status": "ACTIVE"
     },
     {
@@ -309,7 +364,7 @@
       "description": "Audits directed shot sequences and ShotContracts against narrative intent, director profile, and cinematic grammar.",
       "entryPoint": "qa/director-qa/SKILL.md",
       "dependencies": ["shot-plan", "cinematography"],
-      "applicablePhases": ["Phase 3", "Phase 3.5", "Phase 4"],
+      "applicablePhases": ["Phase 3", "Phase 3.5", "Phase 4", "Phase 5", "Directing QA"],
       "status": "ACTIVE"
     }
   ],
