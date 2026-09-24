@@ -91,6 +91,7 @@ import {
   ProductionAcceptanceBundle,
   ProductionNextActionResolver,
   ProductionPilotReadinessValidator,
+  ProductionReleaseGate,
   redactSecrets,
 } from '@ai-studio/core';
 import * as path from 'node:path';
@@ -1119,6 +1120,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
   approve <runId> <shotId> [--human]     Approve candidate into Canon with operator challenge
   reject <runId> <shotId> --reason <rsn> Reject candidate shot recording operator reason
   verify <runId>                         Audit run against 13-point Master Production Gate
+  release-gate [runId] [--json]          Authoritative release gate evaluation (fail-closed)
   route <projectId> [shotId]             Evaluate production route for shot
   plan <projectId> [seriesId]            Plan production strategies for all shots
   budget <projectId> [--set-cap <usd>]   Inspect or configure project budget cap
@@ -2202,8 +2204,53 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return runProductionLiveSmoke();
       }
 
+      if (subCommand === 'release-gate' || subCommand === 'gate') {
+        const targetRunId = args.slice(2).find((a) => !a.startsWith('-'));
+        const isJson = args.includes('--json');
+
+        const report = await ProductionReleaseGate.evaluate({
+          runId: targetRunId,
+          storage,
+        });
+
+        if (isJson) {
+          console.log(redactSecrets(report));
+          return report.isVerified ? 0 : 1;
+        }
+
+        console.log(`\n==============================================================`);
+        console.log(`🛡️  AI ANIMATION STUDIO — PRODUCTION RELEASE GATE`);
+        console.log(`==============================================================\n`);
+        console.log(`Status               : ${report.status}`);
+        console.log(`Derived At           : ${report.derivedAt}`);
+        if (report.runId) console.log(`Run ID               : ${report.runId}`);
+        if (report.projectId) console.log(`Project ID           : ${report.projectId}`);
+        console.log(`Master Verified      : ${report.isVerified ? 'YES ✅' : 'NO ❌'}\n`);
+
+        console.log(`CHECKS:`);
+        for (const check of report.checkDetails) {
+          const mark = check.passed ? '✅' : '❌';
+          console.log(` - ${check.name.padEnd(30, ' ')} : ${mark} ${check.message ? `(${check.message})` : ''}`);
+        }
+
+        if (report.reasons.length > 0) {
+          console.log(`\nFINDINGS / BLOCKERS:`);
+          for (const r of report.reasons) {
+            console.log(` - ${r}`);
+          }
+        }
+
+        console.log(`\nNEXT ACTION:`);
+        console.log(report.nextAction);
+        console.log(`\nRECOMMENDED COMMAND:`);
+        console.log(report.recommendedCommand);
+        console.log(`==============================================================\n`);
+
+        return report.isVerified ? 0 : (report.status === 'READY_FOR_LIVE_PILOT' ? 0 : 1);
+      }
+
       console.error(
-        `Unknown production subcommand: "${subCommand}". Supported: create, run, status, resume, evidence, export-evidence, import, approve, reject, verify, verify-live, route, plan, budget`
+        `Unknown production subcommand: "${subCommand}". Supported: create, run, status, resume, evidence, export-evidence, import, approve, reject, verify, verify-live, release-gate, route, plan, budget`
       );
       return 1;
     }
@@ -3458,6 +3505,51 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 0;
     }
 
+    case 'release-gate': {
+      const targetRunId = args.slice(1).find((a) => !a.startsWith('-'));
+      const isJson = args.includes('--json');
+
+      const report = await ProductionReleaseGate.evaluate({
+        runId: targetRunId,
+        storage,
+      });
+
+      if (isJson) {
+        console.log(redactSecrets(report));
+        return report.isVerified ? 0 : 1;
+      }
+
+      console.log(`\n==============================================================`);
+      console.log(`🛡️  AI ANIMATION STUDIO — PRODUCTION RELEASE GATE`);
+      console.log(`==============================================================\n`);
+      console.log(`Status               : ${report.status}`);
+      console.log(`Derived At           : ${report.derivedAt}`);
+      if (report.runId) console.log(`Run ID               : ${report.runId}`);
+      if (report.projectId) console.log(`Project ID           : ${report.projectId}`);
+      console.log(`Master Verified      : ${report.isVerified ? 'YES ✅' : 'NO ❌'}\n`);
+
+      console.log(`CHECKS:`);
+      for (const check of report.checkDetails) {
+        const mark = check.passed ? '✅' : '❌';
+        console.log(` - ${check.name.padEnd(30, ' ')} : ${mark} ${check.message ? `(${check.message})` : ''}`);
+      }
+
+      if (report.reasons.length > 0) {
+        console.log(`\nFINDINGS / BLOCKERS:`);
+        for (const r of report.reasons) {
+          console.log(` - ${r}`);
+        }
+      }
+
+      console.log(`\nNEXT ACTION:`);
+      console.log(report.nextAction);
+      console.log(`\nRECOMMENDED COMMAND:`);
+      console.log(report.recommendedCommand);
+      console.log(`==============================================================\n`);
+
+      return report.isVerified ? 0 : (report.status === 'READY_FOR_LIVE_PILOT' ? 0 : 1);
+    }
+
     case 'inspect': {
       const filePath = args[1];
       const schemaType = args[2] || 'project';
@@ -3540,6 +3632,7 @@ Commands:
   production reject <runId> <sId> --rsn  Reject candidate shot recording human reason
   production verify <runId>              Audit run against 13-point Master Production Gate
   production verify-live <runId>         Opt-in live Gemini provider verification
+  production release-gate [runId] [--json] Authoritative release gate evaluation (fail-closed)
   production route <projId> <shotId>     Evaluate production route (Deterministic vs Generative)
   production plan <projId> [seriesId]    Plan production, breakdown, cost & latency for all shots
   production budget <projId> [--set-cap] View or configure project budget and headroom
