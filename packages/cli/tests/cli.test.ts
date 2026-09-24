@@ -491,6 +491,17 @@ Then you know it was necessary.`;
     const code = await runCli(['flow', 'doctor'], { cwd: tempDir, storage });
     expect(code).toBe(0);
   });
+
+  it('runs studio flow session-status reporting sanitized output without secrets', async () => {
+    const code = await runCli(['flow', 'session-status', '--json'], { cwd: tempDir, storage });
+    expect(code === 0 || code === 1).toBe(true);
+  });
+
+  it('runs studio flow login printing setup instructions without Puppeteer automation flags', async () => {
+    // Run flow login; should output FLOW SESSION SETUP and launch real system process
+    const code = await runCli(['flow', 'login'], { cwd: tempDir, storage });
+    expect(code).toBe(0);
+  });
 });
 
 

@@ -4,13 +4,14 @@
  * Automated operator adapter for Google Flow web UI using persistent Chromium sessions.
  * Implements Zero-Touch production workflow:
  *   - Persistent browser profile (.studio/browser-profiles/google-flow/)
+ *   - Real system Chrome session bridge via CDP (Phase 27C)
  *   - Duplicate credit guard (never blindly regenerate; verify existing physical assets & hashes)
  *   - Checkpoint-driven crash resume
  *   - Credit-aware guard & auth-block fail-closed protection
  *   - Auto-download, ArtifactVerifier FFprobe analysis, SHA-256 calculation
  *   - Visual QA integration with strict 1-retake ceiling
  *   - Zero manual clicks, prompt pasting, downloading, or importing in normal operation
- *   - Zero-Credit browser probe contract (Phase 27B)
+ *   - Zero-Credit browser probe contract
  */
 
 import * as fs from 'node:fs';
@@ -28,8 +29,6 @@ import {
   FlowGeneratedAssetDescriptor,
   FlowPageCreditStatus,
   FlowAuthBlockStatus,
-  FlowProjectNavigationResult,
-  FlowAgentModeResult,
 } from './flow-page-adapter.js';
 import { FlowBatchCompiler, FlowBatchCompilerInput } from './flow-batch-compiler.js';
 import { CreditAwarePlanner, CreditAwarePlan } from './credit-aware-planner.js';
@@ -39,6 +38,10 @@ import {
   FlowBrowserProbeReport,
   FlowControlMap,
 } from './flow-contract-probe.js';
+import {
+  ChromeFlowSessionBridge,
+  ChromeSessionStatus,
+} from './chrome-flow-session-bridge.js';
 
 export type FlowOperatorState =
   | 'INITIAL'
@@ -97,6 +100,10 @@ export interface FlowOperatorConfig {
   flowUrl?: string;
   pollIntervalMs?: number;
   generationTimeoutMs?: number;
+  sessionMode?: 'CDP_ATTACH' | 'PUPPETEER_ISOLATED';
+  cdpPort?: number;
+  cdpHost?: string;
+  autoLaunchChrome?: boolean;
 }
 
 export interface FlowBatchExecutionResult {
@@ -112,8 +119,10 @@ export interface FlowBatchExecutionResult {
 
 export class FlowBrowserOperator {
   private readonly config: Required<Omit<FlowOperatorConfig, 'flowPage'>> & { flowPage?: IFlowPage };
+  private readonly sessionBridge: ChromeFlowSessionBridge;
   private browserInstance?: Browser;
   private flowPageInstance?: IFlowPage;
+  private isStudioOwned = false;
 
   constructor(config: FlowOperatorConfig = {}) {
     this.config = {
@@ -125,7 +134,20 @@ export class FlowBrowserOperator {
       flowUrl: config.flowUrl ?? 'https://flow.google.com',
       pollIntervalMs: config.pollIntervalMs ?? 5000,
       generationTimeoutMs: config.generationTimeoutMs ?? 300000,
+      sessionMode: config.sessionMode ?? 'CDP_ATTACH',
+      cdpPort: config.cdpPort ?? ChromeFlowSessionBridge.DEFAULT_PORT,
+      cdpHost: config.cdpHost ?? ChromeFlowSessionBridge.DEFAULT_HOST,
+      autoLaunchChrome: config.autoLaunchChrome ?? true,
     };
+
+    this.sessionBridge = new ChromeFlowSessionBridge({
+      cdpPort: this.config.cdpPort,
+      cdpHost: this.config.cdpHost,
+      userDataDir: this.config.userDataDir,
+      flowUrl: this.config.flowUrl,
+      headless: this.config.headless,
+      autoLaunch: this.config.autoLaunchChrome,
+    });
   }
 
   /**
@@ -163,7 +185,6 @@ export class FlowBrowserOperator {
       if (fs.existsSync(clipPath)) {
         const verifyRes = ArtifactVerifier.verify(clipPath, { requireVideoStream: true });
         if (verifyRes.exists && verifyRes.nonEmpty && verifyRes.checksumSha256) {
-          // Physical file already exists and is valid. Check QA
           const qaReport = new FlowQAEvaluator().evaluate({
             shot,
             provenance: {
@@ -230,18 +251,17 @@ export class FlowBrowserOperator {
       shots: shotsNeedingGeneration,
     });
 
-    // Check reconciliation: if instruction matches last submission but clips missing
     if (
       checkpoint.submissionId &&
       checkpoint.instructionSha256 === batchCompilation.instructionSha256 &&
       checkpoint.state === 'FLOW_GENERATING'
     ) {
-      // Pending generation exists — do not resubmit blindly!
+      // Pending generation exists — do not resubmit blindly
     } else {
       checkpoint.instructionSha256 = batchCompilation.instructionSha256;
     }
 
-    // 4. Initialize Flow Browser Page
+    // 4. Initialize Flow Browser Page (CDP Attach or Mock)
     const page = await this.getPage();
 
     try {
@@ -261,7 +281,7 @@ export class FlowBrowserOperator {
           creditPlan,
           evidence: evidenceList,
           allPassed: false,
-          manualActionsRequired: 1, // Interactive Google login is the only allowable human action
+          manualActionsRequired: 1, // Interactive Google login in real Chrome is the only allowable human action
           error: `Google authentication required: ${authBlock.details}`,
         };
       }
@@ -385,7 +405,6 @@ export class FlowBrowserOperator {
         if (qaReport.overallStatus === 'FAIL' && currentRetake < this.config.maxRetakesPerShot) {
           currentRetake++;
           checkpoint.retakeCounts[shot.id] = currentRetake;
-          // Attempt 1 retake if budget allows
           const retakePrompt = `RETAKE SHOT ${shot.id}: Correct errors. ${(shot as any).prompt || 'Cinematic shot'}`;
           await page.submitInstruction(retakePrompt).catch(() => {});
         }
@@ -471,7 +490,6 @@ export class FlowBrowserOperator {
         };
       }
 
-      // Diagnostic snapshot on failure
       const diag = await page.captureDiagnostics('operator_failure', path.join(projectRunDir, 'diagnostics'));
       checkpoint.details = `Operator failure: ${err?.message || String(err)}`;
       this.saveCheckpoint(checkpointPath, checkpoint);
@@ -493,6 +511,7 @@ export class FlowBrowserOperator {
 
   /**
    * Executes a Zero-Credit Browser Probe against Google Flow.
+   * Prefers the authenticated system Chrome session via CDP.
    * NEVER submits a prompt, clicks generate, or spends credits.
    */
   public async probe(options: { url?: string; persistEvidence?: boolean; headless?: boolean } = {}): Promise<{
@@ -501,6 +520,79 @@ export class FlowBrowserOperator {
     formattedReport: string;
   }> {
     const targetUrl = options.url || this.config.flowUrl;
+
+    if (this.config.flowPage) {
+      // Offline/mock test
+      if (typeof (this.config.flowPage as any).url !== 'function') {
+        const mockReport: FlowBrowserProbeReport = {
+          timestamp: new Date().toISOString(),
+          url: this.config.flowUrl,
+          pageState: (this.config.flowPage as any).simulatedPageState ?? 'FLOW_PROJECT',
+          authenticated: !(this.config.flowPage as any).simulatedAuthBlock?.isBlocked,
+          projectUiFound: true,
+          agentControl: { status: 'FOUND', confidence: 1.0, candidateCount: 1, locatorStrategy: 'mock' },
+          promptControl: { status: 'FOUND', confidence: 1.0, candidateCount: 1, locatorStrategy: 'mock' },
+          generateControl: { status: 'FOUND', confidence: 1.0, candidateCount: 1, locatorStrategy: 'mock' },
+          creditControl: { status: 'FOUND', confidence: 1.0, candidateCount: 1, locatorStrategy: 'mock', parsedCredits: (this.config.flowPage as any).simulatedCredits ?? 100, isCertain: true },
+          assetRegion: { status: 'FOUND', confidence: 1.0, candidateCount: 0, locatorStrategy: 'mock' },
+          downloadControl: { status: 'NOT_FOUND', confidence: 0, candidateCount: 0, locatorStrategy: 'mock', details: 'No assets' },
+          visibleSemanticControls: [],
+          sanitized: true,
+          zeroCreditVerified: true,
+        };
+        const mockMap: FlowControlMap = {
+          promptInputLocator: 'textarea',
+          generateButtonLocator: 'button[aria-label*="Generate"]',
+          agentToggleLocator: '[aria-label*="Agent"]',
+          creditsLocator: '.credits',
+          assetCardLocator: '[data-asset-id]',
+          pageState: 'FLOW_PROJECT',
+          confidenceScores: {
+            prompt: 1.0,
+            generate: 1.0,
+            agent: 1.0,
+            credits: 1.0,
+            assets: 1.0,
+          },
+        };
+        return {
+          report: mockReport,
+          controlMap: mockMap,
+          formattedReport: FlowContractProbe.formatReportString(mockReport),
+        };
+      }
+      return FlowContractProbe.probePage(this.config.flowPage as any, {
+        persistEvidence: options.persistEvidence ?? true,
+        outputDir: path.resolve(process.cwd(), '.studio', 'flow-contract'),
+      });
+    }
+
+    if (this.config.sessionMode === 'CDP_ATTACH') {
+      let session;
+      try {
+        session = await this.sessionBridge.connect({
+          autoLaunch: this.config.autoLaunchChrome,
+        });
+      } catch (err: any) {
+        throw new Error(
+          `[FLOW_SESSION_UNAVAILABLE] Failed to attach to Google Flow Chrome session: ${err?.message || String(err)}\nRun "studio flow login" to launch persistent system Chrome session.`
+        );
+      }
+      try {
+        const result = await FlowContractProbe.probePage(session.page, {
+          persistEvidence: options.persistEvidence ?? true,
+          outputDir: path.resolve(process.cwd(), '.studio', 'flow-contract'),
+        });
+        return result;
+      } finally {
+        await this.sessionBridge.disconnect(session.browser, {
+          isStudioOwned: session.isStudioOwned,
+          closeIfStudioOwned: false,
+        });
+      }
+    }
+
+    // Isolated fallback
     const browserPath = MediaToolchainDoctor.getBrowserExecutablePath();
     if (!browserPath) {
       throw new Error(
@@ -536,30 +628,25 @@ export class FlowBrowserOperator {
   }
 
   /**
-   * Launches non-headless browser to allow user one-time interactive Google login.
+   * Inspects Chrome session status via CDP without credentials or secret leakage.
    */
-  public async launchInteractiveSession(url?: string): Promise<{ profilePath: string }> {
-    const browserPath = MediaToolchainDoctor.getBrowserExecutablePath();
-    if (!browserPath) {
-      throw new Error('Google Chrome or Chromium required for interactive Flow session.');
-    }
+  public async getSessionStatus(): Promise<{
+    status: ChromeSessionStatus;
+    formatted: string;
+  }> {
+    return this.sessionBridge.getSessionStatus();
+  }
 
-    if (!fs.existsSync(this.config.userDataDir)) {
-      fs.mkdirSync(this.config.userDataDir, { recursive: true });
-    }
-
-    const browser = await puppeteer.launch({
-      executablePath: browserPath,
-      userDataDir: this.config.userDataDir,
-      headless: false,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-
-    const page = await browser.newPage();
-    await page.goto(url || this.config.flowUrl);
-
+  /**
+   * Launches real system Chrome process to allow user one-time interactive Google login.
+   * NEVER uses Puppeteer automation flags to prevent Google login block.
+   */
+  public launchInteractiveSession(url?: string): { process: any; profilePath: string; port: number } {
+    const res = this.sessionBridge.launchSystemChrome({ url: url || this.config.flowUrl });
     return {
-      profilePath: this.config.userDataDir,
+      process: res.process,
+      profilePath: res.profilePath,
+      port: res.port,
     };
   }
 
@@ -572,6 +659,23 @@ export class FlowBrowserOperator {
       return this.flowPageInstance;
     }
 
+    if (this.config.sessionMode === 'CDP_ATTACH') {
+      try {
+        const session = await this.sessionBridge.connect({
+          autoLaunch: this.config.autoLaunchChrome,
+        });
+        this.browserInstance = session.browser;
+        this.isStudioOwned = session.isStudioOwned;
+        this.flowPageInstance = new PuppeteerFlowPage(session.page, this.config.flowUrl);
+        return this.flowPageInstance;
+      } catch (err: any) {
+        throw new Error(
+          `[FLOW_SESSION_UNAVAILABLE] Failed to attach to Google Flow Chrome session: ${err?.message || String(err)}\nRun "studio flow login" to launch persistent system Chrome session.`
+        );
+      }
+    }
+
+    // Isolated fallback
     const browserPath = MediaToolchainDoctor.getBrowserExecutablePath();
     if (!browserPath) {
       throw new Error(
@@ -597,11 +701,21 @@ export class FlowBrowserOperator {
 
   private async cleanup(): Promise<void> {
     if (this.flowPageInstance) {
-      await this.flowPageInstance.close().catch(() => {});
+      if (this.config.sessionMode !== 'CDP_ATTACH' || this.isStudioOwned) {
+        await this.flowPageInstance.close().catch(() => {});
+      }
       this.flowPageInstance = undefined;
     }
     if (this.browserInstance) {
-      await this.browserInstance.close().catch(() => {});
+      if (this.config.sessionMode === 'CDP_ATTACH') {
+        // Disconnect only; do NOT close user's pre-existing browser window
+        await this.sessionBridge.disconnect(this.browserInstance, {
+          closeIfStudioOwned: false,
+          isStudioOwned: this.isStudioOwned,
+        });
+      } else {
+        await this.browserInstance.close().catch(() => {});
+      }
       this.browserInstance = undefined;
     }
   }

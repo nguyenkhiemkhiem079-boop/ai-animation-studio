@@ -494,14 +494,39 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       }
 
       if (subCommand === 'login') {
-        const operator = new FlowBrowserOperator({ headless: false });
-        console.log('🌐 Launching persistent Google Flow browser session for interactive sign-in...');
-        console.log('   Profile: .studio/browser-profiles/google-flow');
-        console.log('   Complete your Google sign-in in the opened browser window.');
-        console.log('   Once signed in, close the browser or return here.');
-        await operator.launchInteractiveSession();
-        console.log('✅ Interactive session closed. Profile saved.');
+        const portIdx = args.indexOf('--port');
+        const customPort = portIdx !== -1 && args[portIdx + 1] ? parseInt(args[portIdx + 1], 10) : undefined;
+        const operator = new FlowBrowserOperator({ cdpPort: customPort, headless: false });
+
+        console.log('\nFLOW SESSION SETUP\n');
+        console.log('1. Sign into Google in the opened Chrome window.');
+        console.log('2. Open Google Flow successfully.');
+        console.log('3. Return to terminal when ready.\n');
+
+        const session = operator.launchInteractiveSession();
+        console.log(`Dedicated Profile: ${session.profilePath}`);
+        console.log(`CDP Port         : ${session.port}`);
+        console.log('\nSystem Chrome launched. Complete sign-in, then run:');
+        console.log('  studio flow session-status\n');
         return 0;
+      }
+
+      if (subCommand === 'session-status' || subCommand === 'status-session') {
+        const isJson = args.includes('--json');
+        const portIdx = args.indexOf('--port');
+        const customPort = portIdx !== -1 && args[portIdx + 1] ? parseInt(args[portIdx + 1], 10) : undefined;
+        const operator = new FlowBrowserOperator({ cdpPort: customPort });
+
+        const { status, formatted } = await operator.getSessionStatus();
+
+        if (isJson) {
+          console.log(JSON.stringify(status, null, 2));
+        } else {
+          console.log('');
+          console.log(formatted);
+          console.log('');
+        }
+        return status.authenticated ? 0 : 1;
       }
 
       if (subCommand === 'browser-probe' || subCommand === 'probe') {
@@ -4256,6 +4281,7 @@ Commands:
   gemini smoke                           Run Gemini structured extraction smoke test
   flow doctor                            Check Google Flow bridge health, integration mode & tools
   flow login                             Launch persistent browser session for one-time interactive Google sign-in
+  flow session-status                    Inspect real Chrome CDP session, Flow tab & auth status
   flow browser-probe                     Zero-credit inspection of Google Flow UI contract (no credits consumed)
   flow browser-smoke                     Run single-asset live Google Flow browser smoke test (requires opt-in)
   flow prepare <shotId> [proj]           Build self-contained Google Flow production package

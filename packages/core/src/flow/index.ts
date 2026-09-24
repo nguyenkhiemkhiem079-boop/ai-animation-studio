@@ -14,3 +14,4 @@ export * from './flow-browser-operator.js';
 export * from './zero-touch-orchestrator.js';
 export * from './flow-semantic-discovery.js';
 export * from './flow-contract-probe.js';
+export * from './chrome-flow-session-bridge.js';
