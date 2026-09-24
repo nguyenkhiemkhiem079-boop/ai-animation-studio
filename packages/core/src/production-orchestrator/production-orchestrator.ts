@@ -165,6 +165,26 @@ export class ProductionOrchestrator {
     }
 
     // 2. RUNNING: Story analysis -> Shot planning -> Character/World resolution -> Routing
+    //
+    // If we are resuming from WAITING_FOR_PROVIDER that was caused by a Visual QA quota failure
+    // (resumeStage === 'VISUAL_QA'), the correct resume path is resumeVisualQAFromExistingMedia().
+    // Do NOT fall through into the main pipeline from that state — that would re-enter shot
+    // generation and attempt to rebuild the Flow handoff package.
+    if (sm.status === 'WAITING_FOR_PROVIDER' && sm.getRun().resumeMetadata.resumeStage === 'VISUAL_QA') {
+      // Caller should use resumeVisualQAFromExistingMedia() for this branch.
+      // Guard: if execute() is called directly, surface a clear message.
+      sm.setResumeMetadata({
+        canResume: true,
+        resumeStage: 'VISUAL_QA',
+        nextAction: 'Gemini Visual QA quota exceeded. Retry using: studio production resume <runId> --live',
+        recommendedCommand: `studio production resume ${runId} --live`,
+        blockedReason: sm.getRun().resumeMetadata.blockedReason ?? 'Gemini visual QA quota exceeded.',
+        targetShotId: sm.getRun().resumeMetadata.targetShotId,
+      });
+      await this.repository.save(sm.getRun());
+      return sm.getRun();
+    }
+
     if (sm.status === 'READY' || sm.status === 'WAITING_FOR_PROVIDER') {
       sm.transition('RUNNING', 'Starting production execution');
       sm.setStage('story_planning');
@@ -696,6 +716,217 @@ export class ProductionOrchestrator {
 
     // Run Visual QA on imported candidate
     sm.transition('VISUAL_QA', `Running visual QA on imported shot "${shotId}"`);
+    const qaResult = await this._runVisualQA(sm, projectId, runId, shotId, targetShot, mediaEvidence);
+
+    // Any previous approval and approval challenge for this shot is invalidated since media has changed
+    sm.invalidateApprovalForShot(shotId);
+    await this.evidenceStore.saveApprovalEvidence(projectId, runId, sm.getRun().approvalEvidence);
+    sm.invalidateApprovalChallengesForShot(shotId);
+    await this.evidenceStore.saveApprovalChallenges(projectId, runId, sm.getRun().approvalChallenges);
+
+    if (qaResult.quotaBlocked) {
+      // Record WAITING_FOR_PROVIDER with resumeStage='VISUAL_QA' so the resume path is unambiguous
+      sm.transition('WAITING_FOR_PROVIDER', `Gemini quota exceeded during visual QA for shot "${shotId}"`);
+      sm.setResumeMetadata({
+        canResume: true,
+        resumeStage: 'VISUAL_QA',
+        targetShotId: shotId,
+        blockedReason: `Gemini visual QA quota exceeded (${qaResult.providerFailureReason}).`,
+        nextAction: 'Retry existing media QA after quota resets.',
+        recommendedCommand: `studio production resume ${runId} --live`,
+      });
+      await this.repository.save(sm.getRun());
+      return sm.getRun();
+    }
+
+    // Move to APPROVAL_REQUIRED
+    sm.transition('APPROVAL_REQUIRED', `Imported shot "${shotId}" requires human approval`);
+    sm.setResumeMetadata({
+      canResume: true,
+      targetShotId: shotId,
+      nextAction: `Approve or reject candidate for shot "${shotId}".`,
+      recommendedCommand: `studio production approve ${runId} ${shotId}`,
+    });
+
+    await this.repository.save(sm.getRun());
+    return sm.getRun();
+  }
+
+  /**
+   * Resumes a WAITING_FOR_PROVIDER production run that was blocked specifically by
+   * a Gemini Visual QA quota/rate-limit failure. This path:
+   *   1. Verifies the run is in WAITING_FOR_PROVIDER with resumeStage === 'VISUAL_QA'
+   *   2. Verifies the physical media file still exists and its SHA-256 matches recorded evidence
+   *   3. Loads the existing ShotContract — does NOT re-import or regenerate the media
+   *   4. Re-runs VisualSemanticQAEvaluator against the existing physical path
+   *   5. Transitions WAITING_FOR_PROVIDER -> RUNNING -> VISUAL_QA -> APPROVAL_REQUIRED on success
+   *   6. Returns to WAITING_FOR_PROVIDER (with evidence intact) if the provider is still rate-limited
+   *
+   * The following are NEVER modified by this method:
+   *   - generationSource (remains GOOGLE_FLOW_REAL)
+   *   - physicalPath
+   *   - media SHA-256
+   *   - provenance
+   *   - Flow handoff package
+   *
+   * Transitions used: WAITING_FOR_PROVIDER -> RUNNING -> VISUAL_QA (legal)
+   * Transitions NOT used: WAITING_FOR_PROVIDER -> VERIFYING_MEDIA (illegal — media already verified)
+   */
+  public async resumeVisualQAFromExistingMedia(
+    projectId: string,
+    runId: string
+  ): Promise<ProductionRun> {
+    assertSafeIdentifier(projectId, 'projectId');
+    assertSafeIdentifier(runId, 'runId');
+
+    const run = await this.repository.findById(projectId, runId);
+    if (!run) throw new Error(`Production run "${runId}" not found.`);
+
+    // ── Guard 1: Must be WAITING_FOR_PROVIDER with resumeStage === 'VISUAL_QA'
+    if (run.status !== 'WAITING_FOR_PROVIDER') {
+      throw new ProductionSafetyError(
+        `resumeVisualQAFromExistingMedia requires status WAITING_FOR_PROVIDER, but run "${runId}" is "${run.status}".`
+      );
+    }
+    if (run.resumeMetadata.resumeStage !== 'VISUAL_QA') {
+      throw new ProductionSafetyError(
+        `resumeVisualQAFromExistingMedia requires resumeStage="VISUAL_QA", but found "${run.resumeMetadata.resumeStage ?? '(none)'}". ` +
+        `Use 'studio production resume ${runId}' (without --live) for general pipeline resume.`
+      );
+    }
+
+    const shotId = run.resumeMetadata.targetShotId;
+    if (!shotId) {
+      throw new ProductionSafetyError(
+        `resumeVisualQAFromExistingMedia: resumeMetadata.targetShotId is missing for run "${runId}".`
+      );
+    }
+
+    // ── Guard 2: mediaEvidence must exist
+    const mediaEvidence = run.mediaEvidence[shotId];
+    if (!mediaEvidence) {
+      throw new ProductionSafetyError(
+        `resumeVisualQAFromExistingMedia: No media evidence recorded for shot "${shotId}" in run "${runId}". ` +
+        `Cannot resume Visual QA without pre-existing verified media.`
+      );
+    }
+
+    // ── Guard 3: Physical file must exist on disk
+    if (!fs.existsSync(mediaEvidence.physicalPath)) {
+      throw new ProductionSafetyError(
+        `resumeVisualQAFromExistingMedia: Physical media file no longer exists at "${mediaEvidence.physicalPath}". ` +
+        `Cannot resume Visual QA. Re-import the media first.`
+      );
+    }
+
+    // ── Guard 4: SHA-256 must match recorded evidence (tamper / replacement detection)
+    const diskCheck = ArtifactVerifier.verify(mediaEvidence.physicalPath);
+    if (diskCheck.checksumSha256 && diskCheck.checksumSha256 !== mediaEvidence.sha256) {
+      throw new ProductionSafetyError(
+        `resumeVisualQAFromExistingMedia: Physical media SHA-256 on disk (${diskCheck.checksumSha256}) ` +
+        `does not match recorded evidence (${mediaEvidence.sha256}) for shot "${shotId}". ` +
+        `Media appears to have changed. Re-import required.`
+      );
+    }
+
+    // ── Guard 5: generationSource provenance must not be downgraded
+    // We preserve whatever source was recorded — we only reject if it is missing.
+    if (!mediaEvidence.generationSource) {
+      throw new ProductionSafetyError(
+        `resumeVisualQAFromExistingMedia: mediaEvidence.generationSource is missing for shot "${shotId}". ` +
+        `Cannot authenticate provenance.`
+      );
+    }
+
+    // ── Load ShotContract
+    const shotsPath = `.studio/production/${projectId}/${runId}/planned_shots.json`;
+    let targetShot: ShotContract | undefined;
+    if (await this.storage.exists(shotsPath)) {
+      const shots = await this.storage.readJson<ShotContract[]>(shotsPath);
+      targetShot = shots.find((s) => s.id === shotId);
+    }
+    if (!targetShot) {
+      // Synthesize a minimal ShotContract from recorded evidence as fallback
+      targetShot = {
+        id: shotId,
+        sceneId: 'SCENE_01',
+        shotNumber: 1,
+        purpose: 'action',
+        complexity: 'complex_generative_video',
+        rendererIntent: 'generative_full_video',
+        frame: { durationSeconds: mediaEvidence.durationSeconds, aspectRatio: '16:9', targetFps: mediaEvidence.fps ?? 24 },
+        camera: { focalLength: '35mm', shotSize: 'medium', angle: 'eye_level', movement: 'static', semanticSkills: [] },
+        lighting: { keyLightDirection: 'front', mood: 'natural', colorTemperature: 'neutral', fogAtmosphere: false },
+        composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
+        acting: [],
+        transition: { type: 'cut', durationSeconds: 0 },
+        audioCue: { sfx: [] },
+        requiredAssetIds: [],
+        dependsOnShotIds: [],
+        directorLocks: { isCameraLocked: false, isFramingLocked: false, isRendererLocked: false, isActingLocked: false },
+        provenance: { decidedAt: new Date().toISOString() },
+      };
+    }
+
+    // ── Legal transition: WAITING_FOR_PROVIDER -> RUNNING -> VISUAL_QA
+    const sm = new ProductionRunStateMachine(run);
+    sm.transition('RUNNING', `Resuming Visual QA for shot "${shotId}" on existing media`);
+    sm.setStage('visual_qa_resume', shotId);
+    await this.repository.save(sm.getRun());
+
+    sm.transition('VISUAL_QA', `Re-running Visual QA on existing media for shot "${shotId}"`);
+    sm.setStage('visual_qa', shotId);
+    await this.repository.save(sm.getRun());
+
+    // ── Re-run VisualSemanticQAEvaluator against the SAME physical path
+    // Uses the exact sha256 recorded in mediaEvidence — not re-hashed.
+    const qaResult = await this._runVisualQA(sm, projectId, runId, shotId, targetShot, mediaEvidence);
+
+    if (qaResult.quotaBlocked) {
+      // Provider still rate-limited — return to WAITING_FOR_PROVIDER preserving all evidence
+      sm.transition('WAITING_FOR_PROVIDER', `Gemini still rate-limited during Visual QA resume for shot "${shotId}"`);
+      sm.setResumeMetadata({
+        canResume: true,
+        resumeStage: 'VISUAL_QA',
+        targetShotId: shotId,
+        blockedReason: `Gemini visual QA quota exceeded (${qaResult.providerFailureReason}). Media evidence preserved.`,
+        nextAction: 'Retry existing media QA after quota resets.',
+        recommendedCommand: `studio production resume ${runId} --live`,
+      });
+      await this.repository.save(sm.getRun());
+      return sm.getRun();
+    }
+
+    // QA succeeded (or is a pass-eligible result) — proceed to APPROVAL_REQUIRED
+    sm.transition('APPROVAL_REQUIRED', `Shot "${shotId}" Visual QA complete — human approval required`);
+    sm.setResumeMetadata({
+      canResume: true,
+      targetShotId: shotId,
+      nextAction: `Approve or reject candidate for shot "${shotId}".`,
+      recommendedCommand: `studio production approve ${runId} ${shotId}`,
+    });
+
+    await this.repository.save(sm.getRun());
+    return sm.getRun();
+  }
+
+  /**
+   * Shared Visual QA execution helper.
+   * Runs VisualSemanticQAEvaluator against existing physical media,
+   * records QA evidence bound to the provided mediaSha256, and
+   * returns a structured result indicating quota failure or success.
+   *
+   * Does NOT transition the state machine — the caller is responsible
+   * for all transitions before and after calling this method.
+   */
+  private async _runVisualQA(
+    sm: ProductionRunStateMachine,
+    projectId: string,
+    runId: string,
+    shotId: string,
+    targetShot: ShotContract,
+    mediaEvidence: { physicalPath: string; sha256: string; assetId: string }
+  ): Promise<{ quotaBlocked: boolean; providerFailureReason?: string }> {
     const evaluator = new VisualSemanticQAEvaluator(this.llm);
     const report = await evaluator.evaluateShotVideo({
       projectId,
@@ -720,6 +951,7 @@ export class ProductionOrchestrator {
     sm.recordQAEvidence({
       shotId,
       reportId: report.reportId,
+      // Bind to the exact SHA-256 from media evidence — never re-computed here
       mediaSha256: mediaEvidence.sha256,
       candidateAssetId: mediaEvidence.assetId,
       overallStatus: report.status,
@@ -741,37 +973,16 @@ export class ProductionOrchestrator {
     });
     await this.evidenceStore.saveQAEvidence(projectId, runId, sm.getRun().qaEvidence);
 
-    // Any previous approval and approval challenge for this shot is invalidated since media has changed
-    sm.invalidateApprovalForShot(shotId);
-    await this.evidenceStore.saveApprovalEvidence(projectId, runId, sm.getRun().approvalEvidence);
-    sm.invalidateApprovalChallengesForShot(shotId);
-    await this.evidenceStore.saveApprovalChallenges(projectId, runId, sm.getRun().approvalChallenges);
-
-    // Check for provider quota failure during visual QA
-    if (report.metadata?.providerFailure && (report.metadata.providerFailureReason === 'QUOTA_EXCEEDED' || report.metadata.providerFailureReason === 'RATE_LIMITED')) {
-      sm.transition('WAITING_FOR_PROVIDER', `Gemini quota exceeded during visual QA for shot "${shotId}"`);
-      sm.setResumeMetadata({
-        canResume: true,
-        targetShotId: shotId,
-        blockedReason: `Gemini visual QA quota exceeded (${report.metadata.providerFailureReason}).`,
-        nextAction: 'Wait for quota reset or update GEMINI_API_KEY, then resume.',
-        recommendedCommand: `studio production resume ${runId}`,
-      });
-      await this.repository.save(sm.getRun());
-      return sm.getRun();
+    // Check for provider quota failure
+    if (
+      report.metadata?.providerFailure &&
+      (report.metadata.providerFailureReason === 'QUOTA_EXCEEDED' ||
+        report.metadata.providerFailureReason === 'RATE_LIMITED')
+    ) {
+      return { quotaBlocked: true, providerFailureReason: report.metadata.providerFailureReason as string };
     }
 
-    // Move to APPROVAL_REQUIRED
-    sm.transition('APPROVAL_REQUIRED', `Imported shot "${shotId}" requires human approval`);
-    sm.setResumeMetadata({
-      canResume: true,
-      targetShotId: shotId,
-      nextAction: `Approve or reject candidate for shot "${shotId}".`,
-      recommendedCommand: `studio production approve ${runId} ${shotId}`,
-    });
-
-    await this.repository.save(sm.getRun());
-    return sm.getRun();
+    return { quotaBlocked: false };
   }
 
   /**

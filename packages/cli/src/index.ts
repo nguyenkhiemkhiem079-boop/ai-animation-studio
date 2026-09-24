@@ -1656,7 +1656,33 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const assetRegistry = new FileSystemAssetRegistry(storage);
         const orchestrator = new ProductionOrchestrator(storage, assetRegistry, liveProvider);
 
-        const result = await orchestrator.execute(runRecord.projectId, targetRunId);
+        // ── Visual QA resume dispatch ──────────────────────────────────────────────
+        // When WAITING_FOR_PROVIDER + resumeStage=VISUAL_QA + subCommand=resume:
+        //   With --live   → resumeVisualQAFromExistingMedia() (re-runs QA on same media)
+        //   Without --live → print guidance and exit (don't re-enter execute() pipeline)
+        // This prevents execute() from re-entering shot generation / rebuilding Flow handoff.
+        const isVisualQAResume =
+          runRecord.status === 'WAITING_FOR_PROVIDER' &&
+          runRecord.resumeMetadata?.resumeStage === 'VISUAL_QA';
+
+        if (isVisualQAResume && subCommand === 'resume' && !isLiveOptIn) {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('STATUS  : WAITING_FOR_PROVIDER');
+          console.log('Reason  : Gemini Visual QA rate limited');
+          console.log(`Shot    : ${runRecord.resumeMetadata?.targetShotId ?? runRecord.currentShotId}`);
+          console.log('Next    : Retry existing media QA (no re-import or Flow regeneration needed)');
+          console.log(`Command : npm.cmd run studio -- production resume ${targetRunId} --live`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          return 0;
+        }
+
+        let result: Awaited<ReturnType<typeof orchestrator.execute>>;
+        if (isVisualQAResume && subCommand === 'resume' && isLiveOptIn) {
+          console.log(`🔁 Resuming Visual QA on existing media for shot "${runRecord.resumeMetadata?.targetShotId}"...`);
+          result = await orchestrator.resumeVisualQAFromExistingMedia(runRecord.projectId, targetRunId);
+        } else {
+          result = await orchestrator.execute(runRecord.projectId, targetRunId);
+        }
 
         console.log(`\n📊 Production Run State:`);
         console.log(` - Status: ${result.status}`);
@@ -1669,9 +1695,15 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
           console.log('STATUS: WAITING_FOR_PROVIDER');
           console.log(`Provider: ${gemini.metadata.name}`);
           console.log(`Reason  : ${result.resumeMetadata.blockedReason}`);
-          console.log('Completed work preserved: YES');
-          console.log('Resume command:');
-          console.log(`studio production resume ${targetRunId}`);
+          if (result.resumeMetadata.resumeStage === 'VISUAL_QA') {
+            console.log('Context : Gemini Visual QA rate limited — media evidence is preserved');
+            console.log('Next    : Retry existing media QA (no re-import or Flow regeneration needed)');
+            console.log(`Command : npm.cmd run studio -- production resume ${targetRunId} --live`);
+          } else {
+            console.log('Completed work preserved: YES');
+            console.log('Resume command:');
+            console.log(`studio production resume ${targetRunId}`);
+          }
           console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         } else if (result.status === 'NEEDS_USER_ACTION') {
           console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

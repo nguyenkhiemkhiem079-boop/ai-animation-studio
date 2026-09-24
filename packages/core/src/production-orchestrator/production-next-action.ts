@@ -186,12 +186,20 @@ export class ProductionNextActionResolver {
     let providerRequired = false;
 
     if (run.status === 'WAITING_FOR_PROVIDER') {
-      state = 'WAITING_FOR_GEMINI_QUOTA';
       providerRequired = true;
       operatorRequired = false;
-      blockingReason = blockingReason || 'Gemini API quota exceeded or provider unavailable.';
-      nextAction = 'Wait for quota reset or update GEMINI_API_KEY, then resume.';
-      recommendedCommand = `studio production resume ${run.runId}`;
+      // Distinguish Visual QA quota block from general pipeline quota block
+      if (run.resumeMetadata.resumeStage === 'VISUAL_QA') {
+        state = 'WAITING_FOR_GEMINI_VISUAL_QA_QUOTA';
+        blockingReason = blockingReason || 'Gemini Visual QA rate limited.';
+        nextAction = `Retry existing media QA for shot "${targetShotId}" after quota resets. Existing media evidence is preserved — no re-import or Flow regeneration needed.`;
+        recommendedCommand = `studio production resume ${run.runId} --live`;
+      } else {
+        state = 'WAITING_FOR_GEMINI_QUOTA';
+        blockingReason = blockingReason || 'Gemini API quota exceeded or provider unavailable.';
+        nextAction = 'Wait for quota reset or update GEMINI_API_KEY, then resume.';
+        recommendedCommand = `studio production resume ${run.runId}`;
+      }
     } else if (run.status === 'NEEDS_USER_ACTION') {
       state = 'WAITING_FOR_FLOW_GENERATION';
       operatorRequired = true;
