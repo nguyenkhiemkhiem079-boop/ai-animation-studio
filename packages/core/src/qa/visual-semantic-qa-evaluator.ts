@@ -43,11 +43,28 @@ export interface EvaluateShotVideoOptions {
 }
 
 function categorizeProviderFailure(err: any): string {
+  const category = (err as any)?.category || (err as any)?.errorCategory;
+  if (category === 'QUOTA_EXCEEDED' || category === 'RATE_LIMITED') {
+    return category;
+  }
   const msg = String(err?.message || err || '').toLowerCase();
+  const status = err?.status || err?.statusCode || err?.code;
   if (msg.includes('401') || msg.includes('auth') || msg.includes('unauthorized') || msg.includes('api key') || msg.includes('permission')) {
     return 'AUTH_ERROR';
   }
-  if (msg.includes('429') || msg.includes('resourceexhausted') || msg.includes('rate') || msg.includes('quota')) {
+  if (
+    status === 'RESOURCE_EXHAUSTED' ||
+    msg.includes('429') ||
+    msg.includes('resourceexhausted') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('resource has been exhausted') ||
+    msg.includes('rate') ||
+    msg.includes('quota') ||
+    msg.includes('rpd') ||
+    msg.includes('per day') ||
+    msg.includes('perday') ||
+    msg.includes('daily')
+  ) {
     return 'QUOTA_EXCEEDED';
   }
   if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('etimedout')) {

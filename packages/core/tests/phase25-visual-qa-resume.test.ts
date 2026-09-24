@@ -22,7 +22,7 @@
  *        returns same state (no re-entry into shot generation)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
@@ -34,6 +34,7 @@ import {
   ProductionOrchestrator,
   ProductionSafetyError,
   ProductionRun,
+  GeminiProvider,
 } from '../src/index.js';
 
 // ─── Mock LLM Provider Factories ────────────────────────────────────────────
@@ -500,5 +501,102 @@ describe('Phase 25 — resumeVisualQAFromExistingMedia regression suite', () => 
     // Handoff must not have been created
     const handoffPath = path.join(TEST_DIR, '.studio', 'production', PROJECT_ID, blockedRun.runId, 'handoff');
     expect(fs.existsSync(handoffPath)).toBe(false);
+  });
+
+  // ─── T11 ───────────────────────────────────────────────────────────────
+  it('T11 — --live doctor actually performs live check without requiring RUN_LIVE_PROVIDER_TESTS', async () => {
+    delete process.env.RUN_LIVE_PROVIDER_TESTS;
+    const mockGenerate = vi.fn().mockResolvedValue({
+      text: 'ok',
+      usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 2, totalTokenCount: 7 },
+    });
+    const mockClient = { models: { generateContent: mockGenerate } };
+
+    // With allowLiveCalls: true (simulating --live flag in CLI)
+    const liveProvider = new GeminiProvider({
+      apiKey: 'mock_api_key_test_12345',
+      client: mockClient as any,
+      allowLiveCalls: true,
+    });
+    const liveHealth = await liveProvider.diagnoseHealth(true);
+    expect(liveHealth.status).toBe('AVAILABLE');
+    expect(liveHealth.details).toContain('Live connection verified');
+    expect(mockGenerate).toHaveBeenCalledTimes(1);
+
+    // Without allowLiveCalls (false) and without RUN_LIVE_PROVIDER_TESTS, live check is skipped
+    mockGenerate.mockClear();
+    const offlineProvider = new GeminiProvider({
+      apiKey: 'mock_api_key_test_12345',
+      client: mockClient as any,
+      allowLiveCalls: false,
+    });
+    const offlineHealth = await offlineProvider.diagnoseHealth(false);
+    expect(offlineHealth.status).toBe('AVAILABLE');
+    expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  // ─── T12 ───────────────────────────────────────────────────────────────
+  it('T12 — Daily quota / RPD 429 fails fast with zero retries (no retry storm)', async () => {
+    const dailyQuotaError = Object.assign(
+      new Error("Quota exceeded for quota metric 'Queries' and limit 'Queries per day' [429]"),
+      { status: 429 }
+    );
+    const mockGenerate = vi.fn().mockRejectedValue(dailyQuotaError);
+    const mockClient = { models: { generateContent: mockGenerate } };
+
+    const provider = new GeminiProvider({
+      apiKey: 'mock_key',
+      client: mockClient as any,
+      retryConfig: { maxRetries: 3, initialBackoffMs: 5, maxBackoffMs: 15 },
+      allowLiveCalls: true,
+    });
+
+    try {
+      await provider.generateText({ taskType: 'GENERAL_REASONING', prompt: 'test' });
+      expect.fail('Should have thrown');
+    } catch (err: any) {
+      expect(err.category).toBe('QUOTA_EXCEEDED');
+      // Must be called exactly ONCE: zero retries on daily quota, no retry storm!
+      expect(mockGenerate).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  // ─── T13 ───────────────────────────────────────────────────────────────
+  it('T13 — execute() on WAITING_FOR_PROVIDER with live LLM delegates directly to resumeVisualQAFromExistingMedia', async () => {
+    const blockedRun = await buildQABlockedRun(storage, mp4Path, realSha256);
+
+    const passingProvider = makePassingQAProvider();
+    const executeOrchestrator = new ProductionOrchestrator(storage, assetRegistry, passingProvider);
+
+    // execute() delegates directly to resumeVisualQAFromExistingMedia()
+    const result = await executeOrchestrator.execute(PROJECT_ID, blockedRun.runId);
+
+    expect(result.status).toBe('APPROVAL_REQUIRED');
+    expect(result.mediaEvidence[SHOT_ID].sha256).toBe(realSha256);
+    expect(result.mediaEvidence[SHOT_ID].generationSource).toBe('GOOGLE_FLOW_REAL');
+    expect(result.qaEvidence[SHOT_ID].mediaSha256).toBe(realSha256);
+    expect(result.qaEvidence[SHOT_ID].overallStatus).toBe('PASS');
+    expect(result.resumeMetadata.targetShotId).toBe(SHOT_ID);
+
+    // Handoff must not have been created
+    const handoffPath = path.join(TEST_DIR, '.studio', 'production', PROJECT_ID, blockedRun.runId, 'handoff');
+    expect(fs.existsSync(handoffPath)).toBe(false);
+  });
+
+  // ─── T14 ───────────────────────────────────────────────────────────────
+  it('T14 — Direct QA quota failure transitions to WAITING_FOR_PROVIDER with resumeStage=VISUAL_QA and preserves media', async () => {
+    const blockedRun = await buildQABlockedRun(storage, mp4Path, realSha256);
+
+    const rateLimitedProvider = makeRateLimitedQAProvider();
+    const resumeOrchestrator = new ProductionOrchestrator(storage, assetRegistry, rateLimitedProvider);
+
+    const result = await resumeOrchestrator.resumeVisualQAFromExistingMedia(PROJECT_ID, blockedRun.runId);
+
+    expect(result.status).toBe('WAITING_FOR_PROVIDER');
+    expect(result.resumeMetadata.resumeStage).toBe('VISUAL_QA');
+    expect(result.resumeMetadata.targetShotId).toBe(SHOT_ID);
+    expect(result.mediaEvidence[SHOT_ID].sha256).toBe(realSha256);
+    expect(result.mediaEvidence[SHOT_ID].generationSource).toBe('GOOGLE_FLOW_REAL');
+    expect(result.resumeMetadata.recommendedCommand).toContain('--live');
   });
 });

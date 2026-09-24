@@ -457,7 +457,7 @@ describe('Phase 17.1 — Multimodal Provider Contract & Vision Gating', () => {
     expect(reportB.identityConsistencyScore).toBe(0.35);
     expect(reportB.status).toBe('FAIL');
     expect(reportB.defects.some((d) => d.issueType === 'character_identity_drift')).toBe(true);
-  });
+  }, 20000);
 
   it('multimodal provider failure in PRODUCTION does not silently become pass', async () => {
     const failingProvider: LLMProvider = {

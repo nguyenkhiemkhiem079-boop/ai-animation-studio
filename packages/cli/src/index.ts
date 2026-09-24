@@ -296,9 +296,9 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
 
     case 'gemini': {
       const subCommand = args[1] || 'doctor';
-      const gemini = new GeminiProvider();
+      const isLive = args.includes('--live') || process.env.RUN_LIVE_PROVIDER_TESTS === 'true';
+      const gemini = new GeminiProvider({ allowLiveCalls: isLive });
       if (subCommand === 'doctor') {
-        const isLive = args.includes('--live');
         console.log(`🩺 Running Gemini Doctor (${isLive ? 'LIVE' : 'CONFIG ONLY'})...`);
         const health = await gemini.diagnoseHealth(isLive);
         console.log(`- Provider: ${gemini.metadata.name}`);
@@ -1660,18 +1660,23 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const orchestrator = new ProductionOrchestrator(storage, assetRegistry, liveProvider);
 
         // ── Visual QA resume dispatch ──────────────────────────────────────────────
-        // When WAITING_FOR_PROVIDER + resumeStage=VISUAL_QA + subCommand=resume:
+        // When WAITING_FOR_PROVIDER + resumeStage=VISUAL_QA (or existing media on disk) + subCommand=resume|run:
         //   With --live   → resumeVisualQAFromExistingMedia() (re-runs QA on same media)
         //   Without --live → print guidance and exit (don't re-enter execute() pipeline)
         // This prevents execute() from re-entering shot generation / rebuilding Flow handoff.
         const isVisualQAResume =
           runRecord.status === 'WAITING_FOR_PROVIDER' &&
-          runRecord.resumeMetadata?.resumeStage === 'VISUAL_QA';
+          (runRecord.resumeMetadata?.resumeStage === 'VISUAL_QA' ||
+            Boolean(
+              runRecord.mediaEvidence &&
+              runRecord.resumeMetadata?.targetShotId &&
+              runRecord.mediaEvidence[runRecord.resumeMetadata.targetShotId]
+            ));
 
-        if (isVisualQAResume && subCommand === 'resume' && !isLiveOptIn) {
+        if (isVisualQAResume && (subCommand === 'resume' || subCommand === 'run') && !isLiveOptIn) {
           console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
           console.log('STATUS  : WAITING_FOR_PROVIDER');
-          console.log('Reason  : Gemini Visual QA rate limited');
+          console.log('Reason  : Gemini Visual QA rate limited / quota exceeded');
           console.log(`Shot    : ${runRecord.resumeMetadata?.targetShotId ?? runRecord.currentShotId}`);
           console.log('Next    : Retry existing media QA (no re-import or Flow regeneration needed)');
           console.log(`Command : npm.cmd run studio -- production resume ${targetRunId} --live`);
@@ -1680,7 +1685,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         }
 
         let result: Awaited<ReturnType<typeof orchestrator.execute>>;
-        if (isVisualQAResume && subCommand === 'resume' && isLiveOptIn) {
+        if (isVisualQAResume && (subCommand === 'resume' || subCommand === 'run') && isLiveOptIn) {
           console.log(`🔁 Resuming Visual QA on existing media for shot "${runRecord.resumeMetadata?.targetShotId}"...`);
           result = await orchestrator.resumeVisualQAFromExistingMedia(runRecord.projectId, targetRunId);
         } else {
@@ -1757,11 +1762,11 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.log(`==================================================\n`);
 
         const assetRegistry = new FileSystemAssetRegistry(storage);
-        const gemini = new GeminiProvider();
+        const isLiveConfirmed = args.includes('--live') || process.env.RUN_LIVE_PROVIDER_TESTS === 'true';
+        const gemini = new GeminiProvider({ allowLiveCalls: isLiveConfirmed });
 
         // 1. PREFLIGHT & LIVE PROVIDER CHECK
         console.log('1️⃣ PREFLIGHT: Live Provider Verification...');
-        const isLiveConfirmed = args.includes('--live') || process.env.RUN_LIVE_PROVIDER_TESTS === 'true';
         const preflight = await LiveProviderPreflight.verify({
           provider: gemini,
           requireLiveOptIn: true,

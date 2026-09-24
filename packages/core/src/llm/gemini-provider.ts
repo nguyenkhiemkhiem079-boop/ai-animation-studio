@@ -215,7 +215,7 @@ export class GeminiProvider implements LLMProvider {
       this.lastFailureMessage = err?.message;
       this.lastErrorCategory = category;
 
-      const status = category === 'RATE_LIMITED' ? 'RATE_LIMITED' : 'UNAVAILABLE';
+      const status = (category === 'RATE_LIMITED' || category === 'QUOTA_EXCEEDED') ? 'RATE_LIMITED' : 'UNAVAILABLE';
       return {
         providerId: this.metadata.id,
         name: this.metadata.name,
@@ -231,10 +231,35 @@ export class GeminiProvider implements LLMProvider {
     }
   }
 
+  /**
+   * Detects whether an error represents unretryable daily quota exhaustion,
+   * RPD limit, or account-level resource exhaustion (fail fast).
+   */
+  public isDailyQuotaOrExhausted(err: any): boolean {
+    if (!err) return false;
+    const msg = String(err?.message || err || '').toLowerCase();
+    const status = err?.status || err?.statusCode || err?.code;
+    return (
+      msg.includes('daily') ||
+      msg.includes('per day') ||
+      msg.includes('perday') ||
+      msg.includes('rpd') ||
+      msg.includes('quota exceeded') ||
+      msg.includes('quota_exceeded') ||
+      (status === 'RESOURCE_EXHAUSTED' && !msg.includes('check quota')) ||
+      (status === 429 && (msg.includes('per day') || msg.includes('daily') || msg.includes('rpd') || msg.includes('quota exceeded')))
+    );
+  }
+
   public classifyError(err: any): LLMErrorCategory {
     if (!err) return 'UNKNOWN';
     const msg = (err?.message || '').toLowerCase();
     const status = err?.status || err?.statusCode || err?.code;
+
+    // Daily quota, RPD, or resource exhaustion must be classified as QUOTA_EXCEEDED (fail-fast)
+    if (this.isDailyQuotaOrExhausted(err)) {
+      return 'QUOTA_EXCEEDED';
+    }
 
     if (
       status === 429 ||
@@ -355,7 +380,18 @@ export class GeminiProvider implements LLMProvider {
         this.lastErrorCategory = category;
         this.lastFailureMessage = err?.message;
 
-        if (this.isRetryable(category) && attempt < this.maxRetries) {
+        // Daily quota / RPD 429 fails fast immediately with zero retries
+        if (category === 'QUOTA_EXCEEDED' || this.isDailyQuotaOrExhausted(err)) {
+          const providerError = new ProviderError(
+            `Gemini generateText failed (${category}): ${err?.message}`,
+            this.metadata.id,
+            { category: 'QUOTA_EXCEEDED' }
+          );
+          (providerError as any).category = 'QUOTA_EXCEEDED';
+          throw providerError;
+        }
+
+        if (this.isRetryable(category, err) && attempt < this.maxRetries) {
           const delay = this.computeBackoffMs(attempt);
           await new Promise((r) => setTimeout(r, delay));
           attempt++;
@@ -488,12 +524,23 @@ export class GeminiProvider implements LLMProvider {
         this.lastErrorCategory = category;
         this.lastFailureMessage = err?.message;
 
+        // Daily quota / RPD 429 fails fast immediately with zero retries
+        if (category === 'QUOTA_EXCEEDED' || this.isDailyQuotaOrExhausted(err)) {
+          const providerError = new ProviderError(
+            `Gemini generateStructured failed (${category}): ${err?.message}`,
+            this.metadata.id,
+            { category: 'QUOTA_EXCEEDED' }
+          );
+          (providerError as any).category = 'QUOTA_EXCEEDED';
+          throw providerError;
+        }
+
         // Never blindly retry schema validation or safety errors with same prompt
         if (category === 'SCHEMA_VALIDATION_FAILED' || category === 'SAFETY_BLOCK' || category === 'INVALID_REQUEST') {
           throw err;
         }
 
-        if (this.isRetryable(category) && attempt < this.maxRetries) {
+        if (this.isRetryable(category, err) && attempt < this.maxRetries) {
           const delay = this.computeBackoffMs(attempt);
           await new Promise((r) => setTimeout(r, delay));
           attempt++;
@@ -598,7 +645,10 @@ export class GeminiProvider implements LLMProvider {
     };
   }
 
-  private isRetryable(category: LLMErrorCategory): boolean {
+  private isRetryable(category: LLMErrorCategory, err?: any): boolean {
+    if (category === 'QUOTA_EXCEEDED' || this.isDailyQuotaOrExhausted(err)) {
+      return false; // Quota / RPD is strictly non-retryable: fail fast immediately
+    }
     return category === 'RATE_LIMITED' || category === 'SERVER_ERROR' || category === 'NETWORK_ERROR' || category === 'TIMEOUT';
   }
 

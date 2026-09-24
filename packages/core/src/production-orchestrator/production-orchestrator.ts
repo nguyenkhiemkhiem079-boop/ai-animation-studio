@@ -167,12 +167,22 @@ export class ProductionOrchestrator {
     // 2. RUNNING: Story analysis -> Shot planning -> Character/World resolution -> Routing
     //
     // If we are resuming from WAITING_FOR_PROVIDER that was caused by a Visual QA quota failure
-    // (resumeStage === 'VISUAL_QA'), the correct resume path is resumeVisualQAFromExistingMedia().
-    // Do NOT fall through into the main pipeline from that state — that would re-enter shot
-    // generation and attempt to rebuild the Flow handoff package.
-    if (sm.status === 'WAITING_FOR_PROVIDER' && sm.getRun().resumeMetadata.resumeStage === 'VISUAL_QA') {
-      // Caller should use resumeVisualQAFromExistingMedia() for this branch.
-      // Guard: if execute() is called directly, surface a clear message.
+    // (resumeStage === 'VISUAL_QA' or existing media on disk), the correct resume path is
+    // resumeVisualQAFromExistingMedia().
+    // If this.llm is provided, seamlessly delegate directly to resumeVisualQAFromExistingMedia().
+    // Otherwise, surface clear operator guidance without re-entering shot generation.
+    const isVisualQABlocked =
+      sm.status === 'WAITING_FOR_PROVIDER' &&
+      (sm.getRun().resumeMetadata.resumeStage === 'VISUAL_QA' ||
+        Boolean(
+          sm.getRun().resumeMetadata.targetShotId &&
+          sm.getRun().mediaEvidence[sm.getRun().resumeMetadata.targetShotId!]
+        ));
+
+    if (isVisualQABlocked) {
+      if (this.llm) {
+        return this.resumeVisualQAFromExistingMedia(projectId, runId);
+      }
       sm.setResumeMetadata({
         canResume: true,
         resumeStage: 'VISUAL_QA',
@@ -410,14 +420,19 @@ export class ProductionOrchestrator {
         await this.evidenceStore.saveQAEvidence(projectId, runId, sm.getRun().qaEvidence);
 
         // Check for provider quota failure during visual QA
-        if (report.metadata?.providerFailure && (report.metadata.providerFailureReason === 'QUOTA_EXCEEDED' || report.metadata.providerFailureReason === 'RATE_LIMITED')) {
+        if (
+          report.metadata?.providerFailure &&
+          (report.metadata.providerFailureReason === 'QUOTA_EXCEEDED' ||
+            report.metadata.providerFailureReason === 'RATE_LIMITED')
+        ) {
           sm.transition('WAITING_FOR_PROVIDER', `Gemini quota exceeded during visual QA for shot "${shotId}"`);
           sm.setResumeMetadata({
             canResume: true,
+            resumeStage: 'VISUAL_QA',
             targetShotId: shotId,
             blockedReason: `Gemini visual QA quota exceeded (${report.metadata.providerFailureReason}).`,
-            nextAction: 'Wait for quota reset or update GEMINI_API_KEY, then resume.',
-            recommendedCommand: `studio production resume ${runId}`,
+            nextAction: 'Retry existing media QA after quota resets.',
+            recommendedCommand: `studio production resume ${runId} --live`,
           });
           await this.repository.save(sm.getRun());
           return sm.getRun();
@@ -974,10 +989,14 @@ export class ProductionOrchestrator {
     await this.evidenceStore.saveQAEvidence(projectId, runId, sm.getRun().qaEvidence);
 
     // Check for provider quota failure
+    const failureReason = String(report.metadata?.providerFailureReason || '').toUpperCase();
     if (
       report.metadata?.providerFailure &&
-      (report.metadata.providerFailureReason === 'QUOTA_EXCEEDED' ||
-        report.metadata.providerFailureReason === 'RATE_LIMITED')
+      (failureReason === 'QUOTA_EXCEEDED' ||
+        failureReason === 'RATE_LIMITED' ||
+        failureReason.includes('QUOTA') ||
+        failureReason.includes('RATE') ||
+        failureReason.includes('RESOURCE_EXHAUSTED'))
     ) {
       return { quotaBlocked: true, providerFailureReason: report.metadata.providerFailureReason as string };
     }
