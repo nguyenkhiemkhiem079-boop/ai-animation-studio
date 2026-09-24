@@ -1025,22 +1025,38 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
     }
 
     case 'skills': {
-      const subCommand = args[1] || 'list';
+      const isJson = args.includes('--json');
+      const filteredArgs = args.filter((a) => a !== '--json');
+      const subCommand = filteredArgs[1] || 'list';
       const skillsDir = path.resolve(cwd, '.agents/skills');
       const registryPath = path.resolve(skillsDir, 'registry.json');
 
       if (!(await storage.exists(registryPath))) {
-        console.error(`Error: Skill registry not found at "${registryPath}".`);
+        if (isJson) {
+          console.log(JSON.stringify({ error: `Skill registry not found at "${registryPath}".` }, null, 2));
+        } else {
+          console.error(`Error: Skill registry not found at "${registryPath}".`);
+        }
         return 1;
       }
 
       const registry = await SkillRegistry.fromFile(registryPath);
 
       if (subCommand === 'check') {
-        console.log('🔍 Validating Antigravity Skill OS Registry...');
         const result = await registry.validate(skillsDir);
         const manifest = registry.getManifest();
 
+        if (isJson) {
+          console.log(JSON.stringify({
+            valid: result.valid,
+            customCount: manifest.skills.length,
+            externalCount: manifest.externalSkills.length,
+            errors: result.errors,
+          }, null, 2));
+          return result.valid ? 0 : 1;
+        }
+
+        console.log('🔍 Validating Antigravity Skill OS Registry...');
         console.log(` - Custom Skills: ${manifest.skills.length} registered`);
         console.log(` - External Skills: ${manifest.externalSkills.length} registered`);
 
@@ -1057,39 +1073,106 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       }
 
       if (subCommand === 'list') {
-        const categoryFilter = args[2] as AgentSkillCategory | undefined;
+        const categoryFilter = filteredArgs[2] as AgentSkillCategory | undefined;
         const skills = registry.listSkills(categoryFilter);
         const external = registry.listExternalSkills();
+
+        if (isJson) {
+          console.log(JSON.stringify({
+            total: skills.length + (categoryFilter ? 0 : external.length),
+            categoryFilter: categoryFilter ?? null,
+            skills,
+            externalSkills: categoryFilter ? [] : external,
+          }, null, 2));
+          return 0;
+        }
 
         console.log(`🧠 AI Animation Studio Skill OS (${skills.length + external.length} total skills):`);
         console.log('\n--- CUSTOM DOMAIN SKILLS ---');
         for (const s of skills) {
-          console.log(` • [${s.category.toUpperCase()}] ${s.id.padEnd(24)} v${s.version.padEnd(6)} | ${s.description}`);
+          console.log(` • [${s.category.toUpperCase()}] ${s.id.padEnd(26)} v${s.version.padEnd(6)} | ${s.description}`);
         }
 
         if (!categoryFilter) {
           console.log('\n--- EXTERNAL PRODUCTION SKILLS ---');
           for (const ext of external) {
-            console.log(` • [EXTERNAL] ${ext.id.padEnd(24)} (${ext.source}) | ${ext.description}`);
+            console.log(` • [EXTERNAL] ${ext.id.padEnd(26)} (${ext.source}) | ${ext.description}`);
           }
         }
         return 0;
       }
 
+      if (subCommand === 'inspect') {
+        const skillId = filteredArgs[2];
+        if (!skillId) {
+          console.error('Error: Skill ID required for inspection. Usage: studio skills inspect <id> [--json]');
+          return 1;
+        }
+
+        const skill = registry.getSkill(skillId);
+        if (!skill) {
+          if (isJson) {
+            console.log(JSON.stringify({ error: `Skill "${skillId}" not found in registry.` }, null, 2));
+          } else {
+            console.error(`Error: Skill "${skillId}" not found in registry.`);
+          }
+          return 1;
+        }
+
+        let dependencyChain: string[] = [];
+        try {
+          dependencyChain = registry.resolveDependencies(skillId, false);
+        } catch (e: any) {
+          dependencyChain = [`Error resolving dependencies: ${e.message}`];
+        }
+
+        if (isJson) {
+          console.log(JSON.stringify({
+            ...skill,
+            resolvedDependencyChain: dependencyChain,
+          }, null, 2));
+          return 0;
+        }
+
+        console.log(`🔎 Inspecting Skill: ${skill.name} (${skill.id})`);
+        console.log(` - Category: ${('category' in skill ? (skill as any).category : 'EXTERNAL')}`);
+        console.log(` - Entry Point: ${skill.entryPoint}`);
+        console.log(` - Description: ${skill.description}`);
+        if ('version' in skill) {
+          console.log(` - Version: ${(skill as any).version}`);
+          console.log(` - Status: ${(skill as any).status}`);
+          console.log(` - Direct Dependencies: ${(skill as any).dependencies.join(', ') || 'None'}`);
+          console.log(` - Resolved Dependency Chain: ${dependencyChain.join(' -> ') || 'None'}`);
+          console.log(` - Applicable Phases: ${(skill as any).applicablePhases.join(', ') || 'All'}`);
+        } else {
+          console.log(` - External Source: ${(skill as any).source}`);
+          console.log(` - Update Method: ${(skill as any).updateMethod}`);
+        }
+        return 0;
+      }
+
       if (subCommand === 'route') {
-        const query = args.slice(2).join(' ');
+        const query = filteredArgs.slice(2).join(' ');
         if (!query) {
-          console.error('Error: Query text required for skill routing. Usage: studio skills route <query>');
+          console.error('Error: Query text required for skill routing. Usage: studio skills route <query> [--json]');
           return 1;
         }
 
         const router = new SkillRouter(registry);
         const match = router.route(query);
 
+        if (isJson) {
+          console.log(JSON.stringify(match, null, 2));
+          return 0;
+        }
+
         console.log(`🎯 Skill Route for query: "${query}"`);
         console.log(` - Primary Category: ${match.primaryCategory ?? 'General'}`);
         console.log(` - Matched Keywords: ${match.matchedKeywords.join(', ') || 'None'}`);
         console.log(` - Recommended Skills: ${match.recommendedSkills.map((s) => s.id).join(', ') || 'None'}`);
+        if (match.dependencyChain && match.dependencyChain.length > 0) {
+          console.log(` - Dependency Chain: ${match.dependencyChain.join(' -> ')}`);
+        }
         if (match.externalSkills.length > 0) {
           console.log(` - External Skills: ${match.externalSkills.map((s) => s.id).join(', ')}`);
         }
@@ -1097,7 +1180,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return 0;
       }
 
-      console.error(`Unknown skills subcommand: "${subCommand}". Supported: check, list, route`);
+      console.error(`Unknown skills subcommand: "${subCommand}". Supported: check, list, inspect, route`);
       return 1;
     }
 
@@ -3665,9 +3748,10 @@ Commands:
   director plan <projectId>              Plan shots for all scenes in story analysis
   director qa <projectId>                Run DirectorQA quality analysis on planned shots
   director list <projectId>              List all planned shots with camera moves and renderer intent
-  skills check                           Validate Antigravity Skill OS registry and dependencies
-  skills list [category]                 List all custom and external skills in Skill OS
-  skills route <query>                   Test routing of a query to specialized skills
+  skills check [--json]                  Validate Antigravity Skill OS registry and dependencies
+  skills list [category] [--json]        List all custom and external skills in Skill OS
+  skills inspect <id> [--json]           Inspect a specific skill, dependencies, and phases
+  skills route <query> [--json]          Test routing of a query to specialized skills
   inspect <json-file> [schema]           Validate a JSON file against domain schemas
   help                                   Show this message
 `);

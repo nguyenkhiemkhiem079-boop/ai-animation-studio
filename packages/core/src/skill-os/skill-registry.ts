@@ -121,6 +121,49 @@ export class SkillRegistry {
     return [...this.listSkills(), ...this.listExternalSkills()];
   }
 
+  public resolveDependencies(skillId: string, includeSelf: boolean = false): string[] {
+    const result: string[] = [];
+    const visited = new Set<string>();
+    const recStack = new Set<string>();
+
+    const resolve = (id: string) => {
+      if (recStack.has(id)) {
+        throw new Error(`Circular dependency detected while resolving dependencies for '${skillId}': ${id}`);
+      }
+      if (visited.has(id)) return;
+
+      visited.add(id);
+      recStack.add(id);
+
+      const skill = this.skills.get(id);
+      if (skill && skill.dependencies) {
+        for (const dep of skill.dependencies) {
+          resolve(dep);
+        }
+      }
+
+      recStack.delete(id);
+      result.push(id);
+    };
+
+    const rootSkill = this.skills.get(skillId) ?? this.externalSkills.get(skillId);
+    if (!rootSkill) {
+      throw new Error(`Skill '${skillId}' not found in registry.`);
+    }
+
+    if ("dependencies" in rootSkill && rootSkill.dependencies) {
+      for (const dep of rootSkill.dependencies) {
+        resolve(dep);
+      }
+    }
+
+    if (includeSelf) {
+      result.push(skillId);
+    }
+
+    return result;
+  }
+
   public async validate(baseDir?: string): Promise<SkillValidationResult> {
     const errors: SkillValidationError[] = [];
     const seenIds = new Set<string>();
