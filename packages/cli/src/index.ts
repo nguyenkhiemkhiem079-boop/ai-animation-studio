@@ -240,7 +240,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
 
       if (result.masterVideoPath && syncFs.existsSync(result.masterVideoPath)) {
         const verifyRes = ArtifactVerifier.verify(result.masterVideoPath, { requireVideoStream: true });
-        if (verifyRes.exists && verifyRes.nonEmpty) {
+        if (verifyRes.exists && verifyRes.nonEmpty && verifyRes.hasVideoStream) {
           console.log('FINAL VIDEO:');
           console.log(result.masterVideoPath);
           console.log('\nMANUAL ACTIONS:');
