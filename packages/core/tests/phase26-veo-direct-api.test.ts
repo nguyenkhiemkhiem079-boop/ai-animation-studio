@@ -169,11 +169,20 @@ function makeRecord(overrides: Partial<VeoOperationRecord> = {}): VeoOperationRe
 // ─── Suite ────────────────────────────────────────────────────────────────────
 
 describe('Phase 26 — Direct Veo API provider tests', () => {
+  const origCostMode = process.env.VIDEO_COST_MODE;
+  const origAllowPaid = process.env.ALLOW_PAID_VIDEO_API;
+
   beforeEach(() => {
+    process.env.VIDEO_COST_MODE = 'PAID_ALLOWED';
+    process.env.ALLOW_PAID_VIDEO_API = 'true';
     fs.mkdirSync(TEST_DIR, { recursive: true });
   });
 
   afterEach(() => {
+    if (origCostMode !== undefined) process.env.VIDEO_COST_MODE = origCostMode;
+    else delete process.env.VIDEO_COST_MODE;
+    if (origAllowPaid !== undefined) process.env.ALLOW_PAID_VIDEO_API = origAllowPaid;
+    else delete process.env.ALLOW_PAID_VIDEO_API;
     fs.rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
