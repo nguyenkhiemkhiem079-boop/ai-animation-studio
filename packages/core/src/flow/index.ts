@@ -7,3 +7,8 @@ export * from './flow-qa-evaluator.js';
 export * from './flow-job-manager.js';
 export * from './flow-job-repository.js';
 export * from './flow-operator-handoff-builder.js';
+export * from './flow-page-adapter.js';
+export * from './flow-batch-compiler.js';
+export * from './credit-aware-planner.js';
+export * from './flow-browser-operator.js';
+export * from './zero-touch-orchestrator.js';

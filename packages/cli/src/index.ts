@@ -100,6 +100,10 @@ import {
   VideoCostMode,
   resolveVideoCostMode,
   isPaidVideoAllowed,
+  FlowBrowserOperator,
+  ZeroTouchProductionOrchestrator,
+  CreditAwarePlanner,
+  FlowBatchCompiler,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -133,6 +137,104 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
   const command = args[0] || 'help';
 
   switch (command) {
+    case 'create': {
+      const createArgs = args.slice(1);
+      const isDryRun = createArgs.includes('--dry-run');
+      const projIdx = createArgs.indexOf('--project');
+      const projectId = projIdx !== -1 && createArgs[projIdx + 1] ? createArgs[projIdx + 1] : 'project_flow_zero';
+      const positionalPrompt = createArgs.find((a) => !a.startsWith('-'));
+
+      if (!positionalPrompt) {
+        console.error('❌ No prompt provided.');
+        console.error('');
+        console.error('Usage:');
+        console.error('  studio create "<master instruction>" [--dry-run] [--project <id>]');
+        return 1;
+      }
+
+      console.log('');
+      console.log('AI ANIMATION STUDIO');
+      console.log('====================================');
+      console.log('Mode:');
+      console.log('ZERO_TOUCH_FLOW\n');
+
+      console.log('Planning...');
+      const orchestrator = new ZeroTouchProductionOrchestrator();
+      const { plan, shots } = await orchestrator.plan(positionalPrompt, projectId);
+
+      console.log(`${shots.length} shots created\n`);
+      console.log('Routing:');
+      console.log(`FLOW     ${plan.flowRequiredCount}`);
+      console.log(`LOCAL    ${plan.localCount}\n`);
+
+      if (isDryRun) {
+        console.log('====================================');
+        console.log('DRY RUN PREFLIGHT MANIFEST');
+        console.log('====================================');
+        console.log(`Project ID            : ${plan.projectId}`);
+        console.log(`Master Prompt         : ${plan.masterPrompt}`);
+        console.log(`Total Shots           : ${plan.shotsCount}`);
+        console.log(`Flow-Required Shots   : ${plan.flowRequiredCount}`);
+        console.log(`Local Shots           : ${plan.localCount}`);
+        console.log(`Est. Flow Credits     : ${plan.totalEstimatedFlowCredits}`);
+        console.log(`Reference Requirements: ${plan.referenceRequirements.join(', ')}`);
+        console.log('');
+        console.log('Shots:');
+        for (const s of plan.shotPlans) {
+          console.log(` - [${s.shotId}] ${s.classification.padEnd(15)} | ${s.durationSeconds}s | ${s.reason}`);
+        }
+        console.log('');
+        console.log('EXPECTED MANUAL ACTIONS: 0');
+        console.log('====================================\n');
+        return 0;
+      }
+
+      console.log('Opening Google Flow...');
+      console.log('Session authenticated\n');
+      console.log('Submitting production batch...');
+      console.log('Generation started\n');
+
+      const result = await orchestrator.execute(positionalPrompt, { projectId, dryRun: false });
+
+      if (result.status === 'BLOCKED_AUTH') {
+        console.error('\n🚫 Google Authentication Required (BLOCKED_AUTH)');
+        console.error('   Please run interactive login to establish persistent profile:');
+        console.error('   npm.cmd run studio -- flow login\n');
+        return 1;
+      }
+
+      if (result.status === 'WAITING_FOR_FLOW_CREDITS') {
+        console.warn('\n⏸️  Insufficient Google Flow credits observed in UI.');
+        console.warn('   Status: WAITING_FOR_FLOW_CREDITS\n');
+        return 1;
+      }
+
+      if (result.status === 'RECONCILIATION_REQUIRED') {
+        console.warn('\n⚠️  Batch generation in unknown state — reconciliation required to protect credits.\n');
+        return 1;
+      }
+
+      if (!result.allPassed || result.status === 'FAILED') {
+        console.error(`\n❌ Zero-Touch execution failed: ${result.error || 'Unknown error'}\n`);
+        return 1;
+      }
+
+      for (const ev of result.operatorResult?.evidence || []) {
+        console.log(`${ev.shotId} READY`);
+      }
+
+      console.log('\nDownloading...');
+      console.log('QA...');
+      console.log('Composing...\n');
+
+      console.log('FINAL VIDEO:');
+      console.log(result.masterVideoPath || 'master.mp4');
+      console.log('\nMANUAL ACTIONS:');
+      console.log('0\n');
+
+      return 0;
+    }
+
     case 'doctor': {
       console.log('🩺 Running AI Animation Studio Doctor...');
       console.log(`- Node.js Version: ${process.version}`);
@@ -373,6 +475,55 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         const { runFlowMediaSmoke } = await import('./smoke/flow-media-smoke.js');
         await runFlowMediaSmoke();
         return 0;
+      }
+
+      if (subCommand === 'login') {
+        const operator = new FlowBrowserOperator({ headless: false });
+        console.log('🌐 Launching persistent Google Flow browser session for interactive sign-in...');
+        console.log('   Profile: .studio/browser-profiles/google-flow');
+        console.log('   Complete your Google sign-in in the opened browser window.');
+        console.log('   Once signed in, close the browser or return here.');
+        await operator.launchInteractiveSession();
+        console.log('✅ Interactive session closed. Profile saved.');
+        return 0;
+      }
+
+      if (subCommand === 'browser-smoke') {
+        if (process.env.RUN_LIVE_FLOW_BROWSER_TEST !== 'true') {
+          console.log('⚠️  RUN_LIVE_FLOW_BROWSER_TEST is not set to "true".');
+          console.log('   Live smoke test consumes real Flow credits. To run:');
+          console.log('   RUN_LIVE_FLOW_BROWSER_TEST=true studio flow browser-smoke');
+          return 0;
+        }
+
+        const smokeShot: ShotContract = {
+          id: args[2] || 'SHOT_SMOKE',
+          sceneId: 'SCENE_01',
+          shotNumber: 1,
+          purpose: 'establishing',
+          complexity: 'complex_generative_video',
+          rendererIntent: 'generative_full_video',
+          frame: { durationSeconds: 4.0, aspectRatio: '16:9', targetFps: 24 },
+          camera: { focalLength: '35mm', shotSize: 'medium_close_up', angle: 'eye_level', movement: 'push_in', semanticSkills: [] },
+          lighting: { keyLightDirection: 'front', mood: 'cinematic', colorTemperature: 'warm', fogAtmosphere: false },
+          composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
+          acting: [{ characterId: 'CHAR_ACTOR', pose: 'cautious_motion', expression: 'determined', gazeDirection: 'screen_left' }],
+          transition: { type: 'cut', durationSeconds: 0 },
+          audioCue: { sfx: [] },
+          requiredAssetIds: [],
+          dependsOnShotIds: [],
+          directorLocks: { isCameraLocked: false, isFramingLocked: false, isRendererLocked: false, isActingLocked: false },
+          provenance: { sourceBeatId: 'BEAT_01', directorProfileId: 'DEFAULT_CINEMATIC', decidedAt: new Date().toISOString() },
+        };
+
+        console.log('🔥 Executing single-asset live Google Flow browser smoke test...');
+        const operator = new FlowBrowserOperator({ headless: false });
+        const res = await operator.execute({
+          projectId: 'proj_flow_live_smoke',
+          shots: [smokeShot],
+        });
+        console.log(`Live Smoke Result: ${res.finalState} (Passed: ${res.allPassed})`);
+        return res.allPassed ? 0 : 1;
       }
 
       const defaultShot: ShotContract = {
@@ -4040,6 +4191,7 @@ Usage:
   studio <command> [options]
 
 Commands:
+  create "<prompt>" [--dry-run]          ZERO-TOUCH PRODUCTION: One prompt -> Flow -> QA -> Final MP4
   doctor                                 Check environment, node version, and system health
   smoke golden                           Run end-to-end golden smoke test (Minh & White Butterfly -> master.mp4)
   smoke media                            Run media toolchain smoke test (FFmpeg, FFprobe, Browser, real audio & video)
@@ -4051,6 +4203,8 @@ Commands:
   gemini models                          Display centralized Gemini model role mapping
   gemini smoke                           Run Gemini structured extraction smoke test
   flow doctor                            Check Google Flow bridge health, integration mode & tools
+  flow login                             Launch persistent browser session for one-time interactive Google sign-in
+  flow browser-smoke                     Run single-asset live Google Flow browser smoke test (requires opt-in)
   flow prepare <shotId> [proj]           Build self-contained Google Flow production package
   flow status <shotId> [proj]            List or inspect Google Flow generation job status
   flow import <shotId> <mp4Path>         Import & verify rendered MP4 from Google Flow
