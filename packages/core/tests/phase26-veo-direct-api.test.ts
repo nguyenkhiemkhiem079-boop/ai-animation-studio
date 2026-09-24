@@ -750,11 +750,16 @@ describe('Phase 26 — Direct Veo API provider tests', () => {
 
   // ─── T24 ───────────────────────────────────────────────────────────────────
   it('T24 — personGeneration semantics: modality-aware configuration', () => {
-    expect(resolvePersonGeneration('text-to-video')).toBe('allow_adult');
+    // text-to-video -> allow_all
+    expect(resolvePersonGeneration('text-to-video')).toBe('allow_all');
     expect(resolvePersonGeneration('text-to-video', 'dont_allow')).toBe('dont_allow');
-    expect(resolvePersonGeneration('reference-image')).toBeUndefined();
-    expect(resolvePersonGeneration('interpolation')).toBeUndefined();
-    expect(resolvePersonGeneration('image-to-video')).toBeUndefined();
+    // image-to-video -> allow_adult
+    expect(resolvePersonGeneration('image-to-video')).toBe('allow_adult');
+    // interpolation -> allow_adult
+    expect(resolvePersonGeneration('interpolation')).toBe('allow_adult');
+    // reference-image -> allow_adult
+    expect(resolvePersonGeneration('reference-image')).toBe('allow_adult');
+    // invalid personGeneration rejected before API call
     expect(() => resolvePersonGeneration('text-to-video', 'invalid_setting')).toThrow(VeoValidationError);
   });
 
@@ -849,8 +854,10 @@ describe('Phase 26 — Direct Veo API provider tests', () => {
         projectId: FAKE_PROJECT,
       });
 
+      // REST fallback uses x-goog-api-key
       expect(receivedApiKeyHeader).toBe('SECRET_GEMINI_KEY_ABC');
-      expect(receivedAuthHeader).toBe('Bearer SECRET_GEMINI_KEY_ABC');
+      // REST fallback does NOT send API key as Bearer token
+      expect(receivedAuthHeader).toBeUndefined();
       expect(result.physicalPath).toBeTruthy();
     } finally {
       server.close();
@@ -890,6 +897,33 @@ describe('Phase 26 — Direct Veo API provider tests', () => {
         prompt: 'test reference image duration',
         referenceImages: [{ uri: 'ref1' }],
         durationSeconds: 4,
+        projectId: FAKE_PROJECT,
+      })
+    ).rejects.toThrow(VeoValidationError);
+
+    expect(apiCalled).toBe(false);
+  });
+
+  // ─── T29 ───────────────────────────────────────────────────────────────────
+  it('T29 — Invalid personGeneration rejected before API call', async () => {
+    let apiCalled = false;
+    const provider = new GeminiVeoVideoProvider({
+      operationStoreDir: STORE_DIR,
+      clientFactory: () => ({
+        models: {
+          generateVideos: async () => {
+            apiCalled = true;
+            return { name: 'op-t29' };
+          },
+        },
+        operations: { getVideosOperation: async () => ({}) },
+      }),
+    });
+
+    await expect(
+      provider.generateClip({
+        prompt: 'test invalid personGeneration',
+        personGeneration: 'unsupported_adult_mode',
         projectId: FAKE_PROJECT,
       })
     ).rejects.toThrow(VeoValidationError);

@@ -72,13 +72,16 @@ export function detectVeoModality(req: {
 
 /**
  * Resolve personGeneration semantics based on modality.
- * Text-to-video in Veo 3.1 supports 'allow_adult' (or 'dont_allow').
- * Reference images and other modalities must not blindly force 'allow_adult'.
+ * For current Veo 3.1 Gemini API contract:
+ *   - TEXT-TO-VIDEO: 'allow_all'
+ *   - IMAGE-TO-VIDEO: 'allow_adult'
+ *   - INTERPOLATION: 'allow_adult'
+ *   - REFERENCE IMAGES: 'allow_adult'
  */
 export function resolvePersonGeneration(
   modality: VeoModality,
   requested?: string
-): string | undefined {
+): string {
   const allowed = ['dont_allow', 'allow_adult', 'allow_all'];
   if (requested) {
     if (!allowed.includes(requested)) {
@@ -91,15 +94,15 @@ export function resolvePersonGeneration(
 
   switch (modality) {
     case 'text-to-video':
-      // Supported standard setting for Veo 3.1 text-to-video
-      return 'allow_adult';
+      return 'allow_all';
     case 'image-to-video':
+      return 'allow_adult';
     case 'reference-image':
+      return 'allow_adult';
     case 'interpolation':
-      // Do not blindly force allow_adult for image-conditioned or reference-conditioned generation
-      return undefined;
+      return 'allow_adult';
     default:
-      return undefined;
+      return 'allow_adult';
   }
 }
 
@@ -111,7 +114,7 @@ export function resolvePersonGeneration(
  */
 export function validateVeoRequest(req: VeoGenerateRequest): {
   durationSeconds: number;
-  personGeneration?: string;
+  personGeneration: string;
   modality: VeoModality;
 } {
   const modality = detectVeoModality(req);
@@ -434,10 +437,8 @@ export class GeminiVeoVideoProvider implements IProvider {
       aspectRatio: req.aspectRatio ?? '16:9',
       resolution: req.resolution ?? '720p',
       durationSeconds: validated.durationSeconds,
+      personGeneration: validated.personGeneration,
     };
-    if (validated.personGeneration) {
-      config.personGeneration = validated.personGeneration;
-    }
     if (req.negativePrompt) config.negativePrompt = req.negativePrompt;
     if (req.seed !== undefined) config.seed = req.seed;
     if (req.referenceImages) config.referenceImages = req.referenceImages;
@@ -708,7 +709,6 @@ export class GeminiVeoVideoProvider implements IProvider {
       };
       if (this.apiKey) {
         headers['x-goog-api-key'] = this.apiKey;
-        headers['Authorization'] = `Bearer ${this.apiKey}`;
       }
       const req = protocol.get(url, { headers }, (res) => {
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
