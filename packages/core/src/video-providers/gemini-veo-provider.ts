@@ -24,18 +24,144 @@ import { GoogleGenAI } from '@google/genai';
 import { IProvider, ProviderMetadata, ProviderTask, ProviderResult, ProviderHealthReport } from '../providers/index.js';
 import { VeoOperationStore, VeoOperationRecord } from './veo-operation-store.js';
 
-// ─── Generation Profile ───────────────────────────────────────────────────────
+// ─── Generation Profile & Models ──────────────────────────────────────────────
 
 export type VeoGenerationProfile = 'ECONOMY' | 'BALANCED' | 'QUALITY';
 
-/** Model identifiers, in preference order per profile. */
+/** Explicit legacy fallback model for backward compatibility (not default) */
+export const VEO_LEGACY_MODEL = 'veo-2.0-generate-001';
+
+/** Model identifiers, in preference order per profile. Configurable via environment variables. */
 export const VEO_MODEL_MAP: Record<VeoGenerationProfile, string> = {
-  // Use veo-2.0-generate-001 as the stable economy/default.
-  // veo-3 variants if available (user must opt in via --model or QUALITY profile).
-  ECONOMY: 'veo-2.0-generate-001',
-  BALANCED: 'veo-2.0-generate-001',
-  QUALITY: 'veo-3-fast-preview',   // falls back to 2.0 if not available
+  ECONOMY: process.env.VEO_MODEL_ECONOMY || 'veo-3.1-lite-generate-preview',
+  BALANCED: process.env.VEO_MODEL_BALANCED || 'veo-3.1-fast-generate-preview',
+  QUALITY: process.env.VEO_MODEL_QUALITY || 'veo-3.1-generate-preview',
 };
+
+/** Resolve active model identifier from profile and optional override. */
+export function resolveVeoModel(profile: VeoGenerationProfile = 'ECONOMY', modelOverride?: string): string {
+  if (modelOverride) return modelOverride;
+  return VEO_MODEL_MAP[profile] ?? VEO_MODEL_MAP.ECONOMY;
+}
+
+// ─── Modality & Validation ───────────────────────────────────────────────────
+
+export type VeoModality = 'text-to-video' | 'image-to-video' | 'reference-image' | 'interpolation';
+
+export class VeoValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'VeoValidationError';
+  }
+}
+
+/** Detect video generation modality from request inputs */
+export function detectVeoModality(req: {
+  modality?: VeoModality;
+  image?: unknown;
+  firstFrame?: unknown;
+  lastFrame?: unknown;
+  referenceImages?: unknown[];
+}): VeoModality {
+  if (req.modality) return req.modality;
+  if ((req.image || req.firstFrame) && req.lastFrame) return 'interpolation';
+  if (req.referenceImages && req.referenceImages.length > 0) return 'reference-image';
+  if (req.image || req.firstFrame) return 'image-to-video';
+  return 'text-to-video';
+}
+
+/**
+ * Resolve personGeneration semantics based on modality.
+ * Text-to-video in Veo 3.1 supports 'allow_adult' (or 'dont_allow').
+ * Reference images and other modalities must not blindly force 'allow_adult'.
+ */
+export function resolvePersonGeneration(
+  modality: VeoModality,
+  requested?: string
+): string | undefined {
+  const allowed = ['dont_allow', 'allow_adult', 'allow_all'];
+  if (requested) {
+    if (!allowed.includes(requested)) {
+      throw new VeoValidationError(
+        `Invalid personGeneration "${requested}". Supported values are: ${allowed.join(', ')}.`
+      );
+    }
+    return requested;
+  }
+
+  switch (modality) {
+    case 'text-to-video':
+      // Supported standard setting for Veo 3.1 text-to-video
+      return 'allow_adult';
+    case 'image-to-video':
+    case 'reference-image':
+    case 'interpolation':
+      // Do not blindly force allow_adult for image-conditioned or reference-conditioned generation
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Validates Veo generation request parameters locally before invoking the API.
+ * Allowed duration values: 4, 6, 8.
+ * 1080p and 4k require duration of 8 seconds.
+ * Reference image generations require duration of 8 seconds where required.
+ */
+export function validateVeoRequest(req: VeoGenerateRequest): {
+  durationSeconds: number;
+  personGeneration?: string;
+  modality: VeoModality;
+} {
+  const modality = detectVeoModality(req);
+
+  // Determine duration (default: 8s for 1080p/4k/ref-image, 4s for economy/standard preview)
+  let duration = req.durationSeconds;
+  if (duration === undefined) {
+    const res = req.resolution?.toLowerCase();
+    if (res === '1080p' || res === '4k' || modality === 'reference-image') {
+      duration = 8;
+    } else {
+      duration = 4; // Default preview: 4 seconds for ECONOMY where supported
+    }
+  }
+
+  // Allowed duration values: strictly 4, 6, or 8
+  const ALLOWED_DURATIONS = [4, 6, 8];
+  if (!ALLOWED_DURATIONS.includes(duration)) {
+    throw new VeoValidationError(
+      `Invalid duration ${duration}s. Veo only supports durations of 4, 6, or 8 seconds.`
+    );
+  }
+
+  const resLower = req.resolution?.toLowerCase();
+  if (resLower === '1080p' && duration !== 8) {
+    throw new VeoValidationError(
+      `1080p resolution requires duration of 8 seconds (received ${duration}s).`
+    );
+  }
+
+  if (resLower === '4k' && duration !== 8) {
+    throw new VeoValidationError(
+      `4k resolution requires duration of 8 seconds (received ${duration}s).`
+    );
+  }
+
+  if (modality === 'reference-image' && duration !== 8) {
+    throw new VeoValidationError(
+      `Reference image video generation requires duration of 8 seconds (received ${duration}s).`
+    );
+  }
+
+  const personGeneration = resolvePersonGeneration(modality, req.personGeneration);
+
+  return {
+    durationSeconds: duration,
+    personGeneration,
+    modality,
+  };
+}
 
 // ─── Input / Output types ─────────────────────────────────────────────────────
 
@@ -46,9 +172,9 @@ export interface VeoGenerateRequest {
   negativePrompt?: string;
   /** Aspect ratio: '16:9' | '9:16' | '1:1' */
   aspectRatio?: string;
-  /** Resolution: '720p' | '1080p' */
+  /** Resolution: '720p' | '1080p' | '4k' */
   resolution?: string;
-  /** Duration in seconds (Veo 2 supports up to 8s) */
+  /** Duration in seconds (allowed: 4, 6, 8) */
   durationSeconds?: number;
   /** Number of output videos (default: 1) */
   numberOfVideos?: number;
@@ -64,6 +190,18 @@ export interface VeoGenerateRequest {
   clipId?: string;
   /** Directory to download the clip into */
   outputDir?: string;
+  /** Modality: text-to-video, image-to-video, reference-image, interpolation */
+  modality?: VeoModality;
+  /** Person generation control */
+  personGeneration?: 'dont_allow' | 'allow_adult' | 'allow_all' | string;
+  /** Input image for image-to-video */
+  image?: unknown;
+  /** First frame for video generation */
+  firstFrame?: unknown;
+  /** Last frame for interpolation */
+  lastFrame?: unknown;
+  /** Reference images */
+  referenceImages?: unknown[];
 }
 
 export interface VeoGenerateResult {
@@ -128,9 +266,9 @@ export interface GeminiVeoVideoProviderOptions {
   /**
    * Injectable API client factory for testing.
    * When provided, bypasses GoogleGenAI instantiation entirely.
-   * The client must expose: .models.generateVideos() and .operations.getVideosOperation()
+   * The client may expose: .models.generateVideos(), .operations.getVideosOperation(), and .files.download()
    */
-  clientFactory?: () => { models: any; operations: any };
+  clientFactory?: () => { models: any; operations: any; files?: any };
 }
 
 export class GeminiVeoVideoProvider implements IProvider {
@@ -141,7 +279,7 @@ export class GeminiVeoVideoProvider implements IProvider {
   private readonly maxPollAttempts: number;
   private readonly defaultProfile: VeoGenerationProfile;
   private readonly allowLiveCalls: boolean;
-  private readonly clientFactory?: () => { models: any; operations: any };
+  private readonly clientFactory?: () => { models: any; operations: any; files?: any };
 
   constructor(options: GeminiVeoVideoProviderOptions = {}) {
     this.apiKey = options.apiKey ?? process.env.GEMINI_API_KEY;
@@ -161,14 +299,12 @@ export class GeminiVeoVideoProvider implements IProvider {
       version: '1.0.0',
       capabilities: ['video_gen'],
       isLocal: false,
-      // Veo 2 estimated cost per 8s clip at 720p; updated when we have authoritative pricing.
       costEstimateUsdPerInvocation: 0.35,
-      averageLatencyMs: 120_000, // ~2 min typical
+      averageLatencyMs: 120_000,
     };
   }
 
   public isConfigured(): boolean {
-    // When a clientFactory is provided (test injection), treat as configured
     return Boolean(this.clientFactory) || (Boolean(this.apiKey) && this.allowLiveCalls);
   }
 
@@ -213,7 +349,7 @@ export class GeminiVeoVideoProvider implements IProvider {
       status: 'AVAILABLE',
       isLocal: false,
       capabilities: this.metadata.capabilities,
-      details: `Configured. Default profile: ${this.defaultProfile}. Default model: ${VEO_MODEL_MAP[this.defaultProfile]}`,
+      details: `Configured. Default profile: ${this.defaultProfile}. Default model: ${resolveVeoModel(this.defaultProfile)}`,
     };
   }
 
@@ -224,18 +360,25 @@ export class GeminiVeoVideoProvider implements IProvider {
   ): Promise<ProviderResult<TOutput>> {
     const startTime = Date.now();
     const input = task.input as any;
+    const defaultDuration = (input?.resolution === '1080p' || input?.resolution === '4k') ? 8 : 4;
     const req: VeoGenerateRequest = {
       prompt: input?.promptPacket?.positivePrompt ?? input?.prompt ?? 'Cinematic shot',
       negativePrompt: input?.promptPacket?.negativePrompt ?? input?.negativePrompt,
       aspectRatio: input?.aspectRatio ?? '16:9',
       resolution: input?.resolution ?? '720p',
-      durationSeconds: input?.durationSeconds ?? 5,
+      durationSeconds: input?.durationSeconds ?? defaultDuration,
       numberOfVideos: 1,
       profile: input?.profile ?? this.defaultProfile,
       model: input?.model,
       projectId: task.projectId ?? input?.projectId ?? 'default',
       clipId: task.shotId ? `clip_${task.shotId}` : undefined,
       outputDir: input?.outputDir,
+      modality: input?.modality,
+      personGeneration: input?.personGeneration,
+      image: input?.image,
+      firstFrame: input?.firstFrame,
+      lastFrame: input?.lastFrame,
+      referenceImages: input?.referenceImages,
     };
 
     const result = await this.generateClip(req);
@@ -254,11 +397,16 @@ export class GeminiVeoVideoProvider implements IProvider {
    * Main entry point: submit a generation request to the Veo API,
    * poll until done, download the MP4, and return verified evidence.
    *
+   * Rejects invalid request parameter combinations locally before calling the API.
+   *
    * Crash recovery: if a SUBMITTED/POLLING operation with the same
    * projectId+promptHash already exists in the store, resumes polling
    * that operation instead of submitting a new one.
    */
   public async generateClip(req: VeoGenerateRequest): Promise<VeoGenerateResult> {
+    // ── Local parameter validation (rejects invalid combinations before API call) ──
+    const validated = validateVeoRequest(req);
+
     if (!this.isConfigured()) {
       throw new VeoGenerationError(
         'GeminiVeoVideoProvider is not configured. Set GEMINI_API_KEY and pass --live.'
@@ -268,7 +416,7 @@ export class GeminiVeoVideoProvider implements IProvider {
     const promptHash = VeoOperationStore.hashPrompt(req.prompt);
     const projectId = req.projectId ?? 'default';
     const clipId = req.clipId ?? `clip_${Date.now()}_${promptHash.slice(0, 8)}`;
-    const model = req.model ?? VEO_MODEL_MAP[req.profile ?? this.defaultProfile];
+    const model = req.model ?? resolveVeoModel(req.profile ?? this.defaultProfile);
     const outputDir = req.outputDir ?? path.join('.studio', 'clips', projectId, clipId);
 
     // ── Duplicate submission guard ─────────────────────────────────────────
@@ -285,11 +433,15 @@ export class GeminiVeoVideoProvider implements IProvider {
       numberOfVideos: req.numberOfVideos ?? 1,
       aspectRatio: req.aspectRatio ?? '16:9',
       resolution: req.resolution ?? '720p',
-      personGeneration: 'allow_adult',
+      durationSeconds: validated.durationSeconds,
     };
-    if (req.durationSeconds) config.durationSeconds = req.durationSeconds;
+    if (validated.personGeneration) {
+      config.personGeneration = validated.personGeneration;
+    }
     if (req.negativePrompt) config.negativePrompt = req.negativePrompt;
     if (req.seed !== undefined) config.seed = req.seed;
+    if (req.referenceImages) config.referenceImages = req.referenceImages;
+    if (req.lastFrame) config.lastFrame = req.lastFrame;
 
     let operation: any;
     try {
@@ -319,7 +471,7 @@ export class GeminiVeoVideoProvider implements IProvider {
       model,
       aspectRatio: req.aspectRatio ?? '16:9',
       resolution: req.resolution ?? '720p',
-      durationSeconds: req.durationSeconds,
+      durationSeconds: validated.durationSeconds,
       numberOfVideos: req.numberOfVideos ?? 1,
       status: 'SUBMITTED',
       submittedAt: new Date().toISOString(),
@@ -333,7 +485,7 @@ export class GeminiVeoVideoProvider implements IProvider {
 
   /**
    * Resume polling an existing operation (e.g. after crash recovery).
-   * This is safe to call multiple times — it always queries the API for current state.
+   * Safe to call multiple times — queries API for current state.
    */
   public async resumeOperation(projectId: string, clipId: string, outputDir?: string): Promise<VeoGenerateResult> {
     const record = this.operationStore.load(projectId, clipId);
@@ -360,11 +512,9 @@ export class GeminiVeoVideoProvider implements IProvider {
     let pollCount = record.pollCount ?? 0;
     let currentRecord = record;
 
-    // Update status to POLLING
     currentRecord = this.operationStore.update(record.projectId, record.clipId, { status: 'POLLING' });
 
     for (; pollCount < this.maxPollAttempts; pollCount++) {
-      // Wait before polling (except on first attempt if just submitted)
       if (pollCount > 0 || record.status !== 'SUBMITTED') {
         await this._sleep(this.pollIntervalMs);
       }
@@ -384,13 +534,11 @@ export class GeminiVeoVideoProvider implements IProvider {
           });
           throw new VeoQuotaError(`Veo polling quota exceeded at attempt ${pollCount}: ${err?.message}`);
         }
-        // Transient error — continue polling
         console.warn(`[VeoProvider] Transient poll error (attempt ${pollCount}): ${err?.message}`);
         this.operationStore.update(record.projectId, record.clipId, { pollCount });
         continue;
       }
 
-      // Update poll count
       currentRecord = this.operationStore.update(record.projectId, record.clipId, {
         pollCount: pollCount + 1,
         status: 'POLLING',
@@ -422,17 +570,36 @@ export class GeminiVeoVideoProvider implements IProvider {
         const videoBytes = firstVideo?.video?.videoBytes;
 
         fs.mkdirSync(outputDir, { recursive: true });
-        const outputPath = path.join(outputDir, 'clip.mp4');
+        const outputPath = path.resolve(outputDir, 'clip.mp4');
 
-        if (videoBytes) {
-          // Response includes base64-encoded bytes
-          fs.writeFileSync(outputPath, Buffer.from(videoBytes, 'base64'));
-        } else if (videoUri) {
-          // Response includes URI — download it
-          await this._downloadFile(videoUri, outputPath);
-        } else {
+        // Prefer official @google/genai SDK: ai.files.download(...)
+        let downloaded = false;
+        if (client.files && typeof client.files.download === 'function') {
+          try {
+            const targetFile = firstVideo?.video ?? firstVideo;
+            await client.files.download({
+              file: targetFile,
+              downloadPath: outputPath,
+            });
+            downloaded = fs.existsSync(outputPath);
+          } catch (sdkErr: any) {
+            console.warn(`[VeoProvider] SDK files.download encountered error, trying fallback: ${sdkErr?.message}`);
+          }
+        }
+
+        if (!downloaded) {
+          if (videoBytes) {
+            fs.writeFileSync(outputPath, Buffer.from(videoBytes, 'base64'));
+            downloaded = true;
+          } else if (videoUri) {
+            await this._downloadAuthenticatedFile(videoUri, outputPath);
+            downloaded = true;
+          }
+        }
+
+        if (!downloaded || !fs.existsSync(outputPath)) {
           throw new VeoGenerationError(
-            'Veo response has generatedVideos but no uri or videoBytes to download.'
+            'Veo response could not be downloaded via SDK files.download or authenticated fallback.'
           );
         }
 
@@ -464,13 +631,11 @@ export class GeminiVeoVideoProvider implements IProvider {
           downloadedAt,
         };
       }
-
-      // Not done yet — continue polling
     }
 
     // Timed out
     this.operationStore.update(record.projectId, record.clipId, {
-      status: 'POLLING', // keep as POLLING so resume is possible
+      status: 'POLLING',
       pollCount,
       errorMessage: `Timed out after ${pollCount} polls.`,
     });
@@ -498,7 +663,7 @@ export class GeminiVeoVideoProvider implements IProvider {
     };
   }
 
-  private _getClient(): { models: any; operations: any } {
+  private _getClient(): { models: any; operations: any; files?: any } {
     if (this.clientFactory) return this.clientFactory();
     return new GoogleGenAI({ apiKey: this.apiKey! }) as any;
   }
@@ -519,32 +684,52 @@ export class GeminiVeoVideoProvider implements IProvider {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  private _sanitizeUrl(rawUrl: string): string {
+    return rawUrl.replace(/([?&](?:key|api_key|apiKey)=)[^&]+/gi, '$1[REDACTED]');
+  }
+
   /**
-   * Downloads a file from a URL (http or https) to a local path.
-   * Handles redirects (up to 5).
+   * Downloads a file from a URL with proper authentication headers.
+   * Strips/redacts sensitive keys from error messages and logs.
    */
-  private _downloadFile(url: string, destPath: string, redirectsLeft = 5): Promise<void> {
+  private async _downloadAuthenticatedFile(
+    url: string,
+    destPath: string,
+    redirectsLeft = 5
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       if (redirectsLeft === 0) {
-        reject(new Error(`Too many redirects downloading ${url}`));
+        reject(new Error(`Too many redirects downloading ${this._sanitizeUrl(url)}`));
         return;
       }
       const protocol = url.startsWith('https') ? https : http;
-      const req = protocol.get(url, { headers: { 'User-Agent': 'ai-animation-studio/1.0' } }, (res) => {
+      const headers: Record<string, string> = {
+        'User-Agent': 'ai-animation-studio/1.0',
+      };
+      if (this.apiKey) {
+        headers['x-goog-api-key'] = this.apiKey;
+        headers['Authorization'] = `Bearer ${this.apiKey}`;
+      }
+      const req = protocol.get(url, { headers }, (res) => {
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          resolve(this._downloadFile(res.headers.location, destPath, redirectsLeft - 1));
+          resolve(this._downloadAuthenticatedFile(res.headers.location, destPath, redirectsLeft - 1));
           return;
         }
         if (res.statusCode && res.statusCode !== 200) {
-          reject(new Error(`Download failed: HTTP ${res.statusCode} for ${url}`));
+          reject(new Error(`Download failed: HTTP ${res.statusCode} for ${this._sanitizeUrl(url)}`));
           return;
         }
         const out = fs.createWriteStream(destPath);
         res.pipe(out);
         out.on('finish', () => out.close(() => resolve()));
-        out.on('error', reject);
+        out.on('error', (err) => {
+          reject(new Error(`Write stream error: ${err.message}`));
+        });
       });
-      req.on('error', reject);
+      req.on('error', (err) => {
+        reject(new Error(`Download network error for ${this._sanitizeUrl(url)}: ${err.message}`));
+      });
     });
   }
 }
+

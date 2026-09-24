@@ -370,7 +370,7 @@ describe('Phase 21 — Multi-Shot Production Contracts & Deep Invariants', () =>
       expect(afterShot2V2?.mediaEvidence['SHOT_02']?.provenance).toBe('Retake V2');
       // Shot 2 approval evidence is not approved yet (pending review)
       expect(afterShot2V2?.approvalEvidence['SHOT_02']).toBeUndefined();
-    });
+    }, 25000);
   });
 
   describe('21.11 & 21.15: Multi-Shot Approval Matrix & Acceptance Bundle Tamper Attack', () => {

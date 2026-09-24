@@ -3769,10 +3769,10 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.error('  studio quick-video "<prompt>"');
         console.error('');
         console.error('Options:');
-        console.error('  --model <name>         Override model (e.g. veo-2.0-generate-001)');
+        console.error('  --model <name>         Override model (e.g. veo-3.1-lite-generate-preview, veo-3.1-fast-generate-preview, or legacy veo-2.0-generate-001)');
         console.error('  --aspect <16:9|9:16>   Aspect ratio (default: 16:9)');
         console.error('  --resolution <720p|1080p> Resolution (default: 720p)');
-        console.error('  --duration <seconds>   Duration hint (default: 5)');
+        console.error('  --duration <seconds>   Duration in seconds: 4, 6, or 8 (default: 4; 1080p/4k requires 8)');
         console.error('  --profile ECONOMY|BALANCED|QUALITY  Generation profile (default: ECONOMY)');
         console.error('  --output <path>        Override output MP4 path');
         console.error('  --no-qa                Skip lightweight QA checks');
@@ -3789,7 +3789,9 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       const clipModel = getFlag('--model', '');
       const clipAspect = getFlag('--aspect', '16:9');
       const clipResolution = getFlag('--resolution', '720p');
-      const clipDuration = parseFloat(getFlag('--duration', '5'));
+      const durationFlag = getFlag('--duration', '');
+      const defaultDuration = (clipResolution === '1080p' || clipResolution === '4k') ? 8 : 4;
+      const clipDuration = durationFlag ? parseFloat(durationFlag) : defaultDuration;
       const clipProfile = getFlag('--profile', 'ECONOMY') as any;
       const clipOutput = getFlag('--output', '');
       const clipProject = getFlag('--project', 'default');
@@ -3821,7 +3823,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log(`Profile  : ${clipProfile}`);
       console.log(`Model    : ${clipModel || VEO_MODEL_MAP[clipProfile as keyof typeof VEO_MODEL_MAP] || VEO_MODEL_MAP.ECONOMY}`);
       console.log(`Aspect   : ${clipAspect}`);
-      console.log(`Duration : ${isNaN(clipDuration) ? 5 : clipDuration}s`);
+      console.log(`Duration : ${isNaN(clipDuration) ? defaultDuration : clipDuration}s`);
       console.log(`QA       : ${enableQA ? 'Enabled' : 'Disabled'}`);
       console.log(`Type     : PREVIEW_CLIP (no Canon approval required)`);
       console.log('');
@@ -3844,7 +3846,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
             model: clipModel || undefined,
             aspectRatio: clipAspect,
             resolution: clipResolution,
-            durationSeconds: isNaN(clipDuration) ? 5 : clipDuration,
+            durationSeconds: isNaN(clipDuration) ? defaultDuration : clipDuration,
             profile: clipProfile,
             outputPath: clipOutput || undefined,
             projectId: clipProject,

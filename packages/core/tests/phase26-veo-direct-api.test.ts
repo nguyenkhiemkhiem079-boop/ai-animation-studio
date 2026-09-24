@@ -43,7 +43,13 @@ import {
   GeminiVeoVideoProvider,
   VeoQuotaError,
   VeoTimeoutError,
+  VeoValidationError,
   VEO_MODEL_MAP,
+  VEO_LEGACY_MODEL,
+  resolveVeoModel,
+  detectVeoModality,
+  resolvePersonGeneration,
+  validateVeoRequest,
   ClipService,
 } from '../src/index.js';
 
@@ -75,12 +81,12 @@ function createRealMp4(filePath: string): Buffer {
 }
 
 /** Build a mock Veo client that returns a done operation with video bytes */
-function makeMockClient(videoBytes: Buffer, submitDone = false) {
+function makeMockClient(videoBytes: Buffer, submitDone = false, capture?: { lastDownloadParams?: any; lastGenerateParams?: any }) {
   const doneOp = {
     name: 'operations/mock-op',
     done: true,
     response: {
-      generatedVideos: [{ video: { videoBytes: videoBytes.toString('base64') } }],
+      generatedVideos: [{ video: { uri: 'https://generativelanguage.googleapis.com/v1beta/files/mock-veo-video', videoBytes: videoBytes.toString('base64') } }],
     },
   };
   const initialOp = { name: 'operations/mock-op', done: submitDone };
@@ -88,12 +94,22 @@ function makeMockClient(videoBytes: Buffer, submitDone = false) {
 
   return () => ({
     models: {
-      generateVideos: async (_req: any) => initialOp,
+      generateVideos: async (req: any) => {
+        if (capture) capture.lastGenerateParams = req;
+        return initialOp;
+      },
     },
     operations: {
       getVideosOperation: async (_req: any) => {
         if (firstPoll) { firstPoll = false; return initialOp; }
         return doneOp;
+      },
+    },
+    files: {
+      download: async (params: any) => {
+        if (capture) capture.lastDownloadParams = params;
+        fs.mkdirSync(path.dirname(params.downloadPath), { recursive: true });
+        fs.writeFileSync(params.downloadPath, videoBytes);
       },
     },
   });
@@ -138,7 +154,7 @@ function makeRecord(overrides: Partial<VeoOperationRecord> = {}): VeoOperationRe
     clipId: `clip_test_${Date.now()}`,
     projectId: FAKE_PROJECT,
     promptHash,
-    model: 'veo-2.0-generate-001',
+    model: 'veo-3.1-lite-generate-preview',
     aspectRatio: '16:9',
     resolution: '720p',
     numberOfVideos: 1,
@@ -546,10 +562,15 @@ describe('Phase 26 — Direct Veo API provider tests', () => {
   });
 
   // ─── T17 ───────────────────────────────────────────────────────────────────
-  it('T17 — VEO_MODEL_MAP: ECONOMY profile uses stable veo-2 model', () => {
-    const economyModel = VEO_MODEL_MAP['ECONOMY'];
-    expect(economyModel).toBeTruthy();
-    expect(economyModel).toContain('veo-2');
+  it('T17 — VEO_MODEL_MAP: Veo 3.1 official model IDs (ECONOMY, BALANCED, QUALITY)', () => {
+    expect(VEO_MODEL_MAP.ECONOMY).toBe('veo-3.1-lite-generate-preview');
+    expect(VEO_MODEL_MAP.BALANCED).toBe('veo-3.1-fast-generate-preview');
+    expect(VEO_MODEL_MAP.QUALITY).toBe('veo-3.1-generate-preview');
+    expect(VEO_LEGACY_MODEL).toBe('veo-2.0-generate-001');
+    expect(resolveVeoModel('ECONOMY')).toBe('veo-3.1-lite-generate-preview');
+    expect(resolveVeoModel('BALANCED')).toBe('veo-3.1-fast-generate-preview');
+    expect(resolveVeoModel('QUALITY')).toBe('veo-3.1-generate-preview');
+    expect(resolveVeoModel('ECONOMY', 'custom-model')).toBe('custom-model');
   });
 
   // ─── T18 ───────────────────────────────────────────────────────────────────
@@ -626,5 +647,253 @@ describe('Phase 26 — Direct Veo API provider tests', () => {
 
     // generateVideos must NOT have been called — existing record was found and resumed
     expect(submitCalled).toBe(false);
+  });
+
+  // ─── T21 ───────────────────────────────────────────────────────────────────
+  it('T21 — Duration validation: invalid duration 5 rejected before API call', async () => {
+    let apiCalled = false;
+    const provider = new GeminiVeoVideoProvider({
+      operationStoreDir: STORE_DIR,
+      clientFactory: () => ({
+        models: {
+          generateVideos: async () => {
+            apiCalled = true;
+            return { name: 'op-t21' };
+          },
+        },
+        operations: { getVideosOperation: async () => ({}) },
+      }),
+    });
+
+    await expect(
+      provider.generateClip({
+        prompt: 'test invalid duration 5',
+        durationSeconds: 5,
+        projectId: FAKE_PROJECT,
+      })
+    ).rejects.toThrow(VeoValidationError);
+
+    expect(apiCalled).toBe(false);
+  });
+
+  // ─── T22 ───────────────────────────────────────────────────────────────────
+  it('T22 — Duration validation: 1080p + 4s rejected before API call', async () => {
+    let apiCalled = false;
+    const provider = new GeminiVeoVideoProvider({
+      operationStoreDir: STORE_DIR,
+      clientFactory: () => ({
+        models: {
+          generateVideos: async () => {
+            apiCalled = true;
+            return { name: 'op-t22' };
+          },
+        },
+        operations: { getVideosOperation: async () => ({}) },
+      }),
+    });
+
+    await expect(
+      provider.generateClip({
+        prompt: 'test 1080p + 4s',
+        resolution: '1080p',
+        durationSeconds: 4,
+        projectId: FAKE_PROJECT,
+      })
+    ).rejects.toThrow(VeoValidationError);
+
+    expect(apiCalled).toBe(false);
+  });
+
+  // ─── T23 ───────────────────────────────────────────────────────────────────
+  it('T23 — Duration validation: 1080p + 8s accepted', async () => {
+    const fakeOutputPath = path.join(TEST_DIR, 't23_clip.mp4');
+    const videoBytes = createRealMp4(fakeOutputPath);
+    let capturedConfig: any;
+
+    const doneOp = {
+      name: 'operations/t23-op',
+      done: true,
+      response: { generatedVideos: [{ video: { videoBytes: videoBytes.toString('base64') } }] },
+    };
+
+    const provider = new GeminiVeoVideoProvider({
+      operationStoreDir: STORE_DIR,
+      pollIntervalMs: 0,
+      clientFactory: () => ({
+        models: {
+          generateVideos: async (req: any) => {
+            capturedConfig = req.config;
+            return doneOp;
+          },
+        },
+        operations: { getVideosOperation: async () => doneOp },
+        files: {
+          download: async (params: any) => {
+            fs.mkdirSync(path.dirname(params.downloadPath), { recursive: true });
+            fs.writeFileSync(params.downloadPath, videoBytes);
+          },
+        },
+      }),
+    });
+
+    const result = await provider.generateClip({
+      prompt: 'test 1080p + 8s accepted',
+      resolution: '1080p',
+      durationSeconds: 8,
+      projectId: FAKE_PROJECT,
+    });
+
+    expect(result.physicalPath).toBeTruthy();
+    expect(capturedConfig.resolution).toBe('1080p');
+    expect(capturedConfig.durationSeconds).toBe(8);
+  });
+
+  // ─── T24 ───────────────────────────────────────────────────────────────────
+  it('T24 — personGeneration semantics: modality-aware configuration', () => {
+    expect(resolvePersonGeneration('text-to-video')).toBe('allow_adult');
+    expect(resolvePersonGeneration('text-to-video', 'dont_allow')).toBe('dont_allow');
+    expect(resolvePersonGeneration('reference-image')).toBeUndefined();
+    expect(resolvePersonGeneration('interpolation')).toBeUndefined();
+    expect(resolvePersonGeneration('image-to-video')).toBeUndefined();
+    expect(() => resolvePersonGeneration('text-to-video', 'invalid_setting')).toThrow(VeoValidationError);
+  });
+
+  // ─── T25 ───────────────────────────────────────────────────────────────────
+  it('T25 — Official SDK files.download used with returned video object', async () => {
+    const fakeOutputPath = path.join(TEST_DIR, 't25_clip.mp4');
+    const videoBytes = createRealMp4(fakeOutputPath);
+    let capturedDownload: any;
+
+    const mockVideoObject = { uri: 'https://generativelanguage.googleapis.com/v1beta/files/mock-123' };
+    const doneOp = {
+      name: 'operations/t25-op',
+      done: true,
+      response: {
+        generatedVideos: [{ video: mockVideoObject }],
+      },
+    };
+
+    const provider = new GeminiVeoVideoProvider({
+      operationStoreDir: STORE_DIR,
+      pollIntervalMs: 0,
+      clientFactory: () => ({
+        models: {
+          generateVideos: async () => doneOp,
+        },
+        operations: { getVideosOperation: async () => doneOp },
+        files: {
+          download: async (params: any) => {
+            capturedDownload = params;
+            fs.mkdirSync(path.dirname(params.downloadPath), { recursive: true });
+            fs.writeFileSync(params.downloadPath, videoBytes);
+          },
+        },
+      }),
+    });
+
+    const result = await provider.generateClip({
+      prompt: 'test sdk files.download invocation',
+      projectId: FAKE_PROJECT,
+    });
+
+    expect(capturedDownload).toBeDefined();
+    expect(capturedDownload.file).toEqual(mockVideoObject);
+    expect(capturedDownload.downloadPath).toBe(result.physicalPath);
+    expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  // ─── T26 ───────────────────────────────────────────────────────────────────
+  it('T26 — No unauthenticated private download: attaches apiKey and redacts keys in logs', async () => {
+    const fakeOutputPath = path.join(TEST_DIR, 't26_clip.mp4');
+    const videoBytes = createRealMp4(fakeOutputPath);
+
+    const http = await import('node:http');
+    let receivedAuthHeader: string | undefined;
+    let receivedApiKeyHeader: string | undefined;
+
+    const server = http.createServer((req, res) => {
+      receivedAuthHeader = req.headers['authorization'];
+      receivedApiKeyHeader = req.headers['x-goog-api-key'] as string;
+      res.writeHead(200, { 'Content-Type': 'video/mp4' });
+      res.end(videoBytes);
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const port = (server.address() as any).port;
+    const downloadUri = `http://localhost:${port}/download?key=SECRET_GEMINI_KEY_ABC`;
+
+    const doneOp = {
+      name: 'operations/t26-op',
+      done: true,
+      response: {
+        generatedVideos: [{ video: { uri: downloadUri } }],
+      },
+    };
+
+    try {
+      const provider = new GeminiVeoVideoProvider({
+        apiKey: 'SECRET_GEMINI_KEY_ABC',
+        operationStoreDir: STORE_DIR,
+        pollIntervalMs: 0,
+        // No client.files.download provided, forcing the authenticated URI fallback
+        clientFactory: () => ({
+          models: {
+            generateVideos: async () => doneOp,
+          },
+          operations: { getVideosOperation: async () => doneOp },
+        }),
+      });
+
+      const result = await provider.generateClip({
+        prompt: 'test authenticated download fallback',
+        projectId: FAKE_PROJECT,
+      });
+
+      expect(receivedApiKeyHeader).toBe('SECRET_GEMINI_KEY_ABC');
+      expect(receivedAuthHeader).toBe('Bearer SECRET_GEMINI_KEY_ABC');
+      expect(result.physicalPath).toBeTruthy();
+    } finally {
+      server.close();
+    }
+  });
+
+  // ─── T27 ───────────────────────────────────────────────────────────────────
+  it('T27 — URL sanitization: never exposes GEMINI_API_KEY in errors', () => {
+    const provider = new GeminiVeoVideoProvider({
+      apiKey: 'MY_SECRET_KEY_123',
+      operationStoreDir: STORE_DIR,
+    });
+    const sanitized = (provider as any)._sanitizeUrl('https://example.com/video?key=MY_SECRET_KEY_123&other=val');
+    expect(sanitized).not.toContain('MY_SECRET_KEY_123');
+    expect(sanitized).toContain('[REDACTED]');
+  });
+
+  // ─── T28 ───────────────────────────────────────────────────────────────────
+  it('T28 — Reference images require duration of 8s', async () => {
+    let apiCalled = false;
+    const provider = new GeminiVeoVideoProvider({
+      operationStoreDir: STORE_DIR,
+      clientFactory: () => ({
+        models: {
+          generateVideos: async () => {
+            apiCalled = true;
+            return { name: 'op-t28' };
+          },
+        },
+        operations: { getVideosOperation: async () => ({}) },
+      }),
+    });
+
+    // 4s with reference images should be rejected
+    await expect(
+      provider.generateClip({
+        prompt: 'test reference image duration',
+        referenceImages: [{ uri: 'ref1' }],
+        durationSeconds: 4,
+        projectId: FAKE_PROJECT,
+      })
+    ).rejects.toThrow(VeoValidationError);
+
+    expect(apiCalled).toBe(false);
   });
 });

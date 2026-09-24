@@ -21,7 +21,7 @@
 
 import * as path from 'node:path';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
-import { GeminiVeoVideoProvider, VeoGenerateRequest, VeoGenerateResult, VeoQuotaError, VeoTimeoutError, VeoGenerationProfile, VEO_MODEL_MAP } from './gemini-veo-provider.js';
+import { GeminiVeoVideoProvider, VeoGenerateRequest, VeoGenerateResult, VeoQuotaError, VeoTimeoutError, VeoValidationError, VeoGenerationProfile, VEO_MODEL_MAP } from './gemini-veo-provider.js';
 import { VeoOperationStore } from './veo-operation-store.js';
 import { LLMProvider } from '../llm/llm-provider.js';
 import { VisualSemanticQAEvaluator } from '../qa/visual-semantic-qa-evaluator.js';
@@ -162,11 +162,12 @@ export class ClipService {
     }
 
     // ── Generate ───────────────────────────────────────────────────────────
+    const defaultDuration = (req.resolution === '1080p' || req.resolution === '4k') ? 8 : 4;
     const veoReq: VeoGenerateRequest = {
       prompt: req.prompt,
       aspectRatio: req.aspectRatio ?? '16:9',
       resolution: req.resolution ?? '720p',
-      durationSeconds: req.durationSeconds ?? 5,
+      durationSeconds: req.durationSeconds ?? defaultDuration,
       numberOfVideos: 1,
       profile: req.profile ?? 'ECONOMY',
       model: req.model,
@@ -183,6 +184,9 @@ export class ClipService {
         return this._buildFailedResult(req, clipId, promptHash, clipType, 'WAITING_FOR_PROVIDER', err.message);
       }
       if (err instanceof VeoTimeoutError) {
+        return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', err.message);
+      }
+      if (err instanceof VeoValidationError) {
         return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', err.message);
       }
       return this._buildFailedResult(req, clipId, promptHash, clipType, 'FAILED', `Generation error: ${err?.message}`);
