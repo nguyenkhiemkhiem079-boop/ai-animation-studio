@@ -925,6 +925,27 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         } else {
           manifest = manifestMgr.loadManifest();
         }
+
+        const phaseIdx = args.indexOf('--phase');
+        if (phaseIdx !== -1 && args[phaseIdx + 1]) {
+          manifest.currentPhase = args[phaseIdx + 1];
+        }
+
+        const taskDoneIdx = args.indexOf('--task-done');
+        if (taskDoneIdx !== -1 && args[taskDoneIdx + 1]) {
+          const doneTask = args[taskDoneIdx + 1];
+          if (!manifest.completedTasks.includes(doneTask)) {
+            manifest.completedTasks.push(doneTask);
+          }
+          manifest.remainingTasks = manifest.remainingTasks.filter((t) => t !== doneTask);
+        }
+
+        const nextActionIdx = args.indexOf('--next');
+        if (nextActionIdx !== -1 && args[nextActionIdx + 1]) {
+          manifest.nextExactAction = args[nextActionIdx + 1];
+          manifest.firstCommandToRun = args[nextActionIdx + 1];
+        }
+
         manifest.repositoryHead = head;
         manifest.lastGreenHead = head;
         manifest.updatedAt = new Date().toISOString();
