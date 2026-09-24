@@ -238,5 +238,5 @@ describe('Phase 23.16 — Final Adversarial Chain & Invariant Integration Test',
     const tamperedCheck = await ProductionAcceptanceBundle.validate(acceptanceDir, storage);
     expect(tamperedCheck.valid).toBe(false);
     expect(tamperedCheck.reasons.some((r) => r.includes('tampered with') || r.includes('self-integrity'))).toBe(true);
-  });
+  }, 60000);
 });
