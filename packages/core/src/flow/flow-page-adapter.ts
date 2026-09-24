@@ -4,17 +4,27 @@
  * Dedicated page-object / UI adapter layer for Google Flow browser automation.
  * Centralizes UI selectors and interaction logic.
  *
- * Principles:
- *   - Never scrape private undocumented APIs.
+ * Principles (Phase 27B Real Calibration):
+ *   - Strictly Puppeteer-compatible (NO Playwright-style text selectors).
  *   - Use visible browser-level controls, semantic roles, accessible text.
- *   - Fail closed on unexpected UI changes, auth challenges, or CAPTCHA.
+ *   - Fail closed on unexpected UI changes, auth challenges, CAPTCHA, or ambiguous controls.
  *   - Never log passwords, tokens, or private secrets.
+ *   - Zero credit loss: probe, parse, and verify before dispatching actions.
  */
 
 import * as path from 'node:path';
-import * as fs from 'node:fs';
 import * as syncFs from 'node:fs';
-import type { Page, Browser } from 'puppeteer-core';
+import type { Page } from 'puppeteer-core';
+import {
+  findEditablePromptSurface,
+  findGenerateControl,
+  findCreditIndicator,
+  findAgentControl,
+  findAssetContainers,
+  findDownloadAction,
+  parseCreditText,
+} from './flow-semantic-discovery.js';
+import { FlowContractProbe, FlowPageState } from './flow-contract-probe.js';
 
 export interface FlowGeneratedAssetDescriptor {
   id: string;
@@ -25,13 +35,38 @@ export interface FlowGeneratedAssetDescriptor {
   thumbnailUrl?: string;
   createdAt: string;
   matchedShotId?: string;
+  mappingStrategy?: FlowShotMappingStrategy;
 }
+
+export type FlowShotMappingStrategy =
+  | 'EXACT_OUTPUT_NAME'
+  | 'DETERMINISTIC_RENAME'
+  | 'SUBMISSION_ORDER_VERIFIED_METADATA'
+  | 'RECONCILIATION_REQUIRED';
 
 export interface FlowPageCreditStatus {
   creditsObserved: number | null;
+  rawText?: string;
   observationTime: string;
   isCertain: boolean;
+  confidence?: number;
   tier?: string;
+  details?: string;
+}
+
+export interface FlowAgentModeResult {
+  mode: 'AGENT' | 'DIRECT' | 'UNKNOWN';
+  isAgentActive: boolean;
+  status: 'FOUND' | 'NOT_FOUND' | 'AMBIGUOUS' | 'AGENT_MODE_UNAVAILABLE';
+  confidence: number;
+  details: string;
+}
+
+export interface FlowProjectNavigationResult {
+  projectId: string;
+  url: string;
+  pageState: FlowPageState;
+  browserProjectReference?: string;
 }
 
 export interface FlowAuthBlockStatus {
@@ -49,22 +84,34 @@ export interface FlowDiagnostics {
 
 export interface IFlowPage {
   /** Ensure Google Flow project exists or is open */
-  ensureProject(projectName: string, options?: { url?: string }): Promise<{ projectId: string; url: string }>;
+  ensureProject(
+    projectName: string,
+    options?: { url?: string; projectReference?: string }
+  ): Promise<FlowProjectNavigationResult>;
 
   /** Ensure Flow Agent mode is activated when available */
-  ensureAgentMode(): Promise<boolean>;
+  ensureAgentMode(): Promise<FlowAgentModeResult>;
 
   /** Submit structured master production batch instruction */
-  submitInstruction(instructionText: string, options?: { referencePaths?: string[] }): Promise<{ submissionId: string; submittedAt: string }>;
+  submitInstruction(
+    instructionText: string,
+    options?: { referencePaths?: string[] }
+  ): Promise<{ submissionId: string; submittedAt: string }>;
 
   /** Wait for generated assets matching requested shotIds */
-  waitForGeneration(shotIds: string[], options?: { timeoutMs?: number; pollIntervalMs?: number }): Promise<Map<string, FlowGeneratedAssetDescriptor>>;
+  waitForGeneration(
+    shotIds: string[],
+    options?: { timeoutMs?: number; pollIntervalMs?: number }
+  ): Promise<Map<string, FlowGeneratedAssetDescriptor>>;
 
   /** List all generated assets visible in the project */
   listGeneratedAssets(): Promise<FlowGeneratedAssetDescriptor[]>;
 
-  /** Download a completed video asset to physical disk */
-  downloadAsset(flowAssetId: string, destinationFilePath: string): Promise<{ physicalPath: string; sizeBytes: number }>;
+  /** Download a completed video asset to physical disk (scoped to container) */
+  downloadAsset(
+    flowAssetId: string,
+    destinationFilePath: string
+  ): Promise<{ physicalPath: string; sizeBytes: number }>;
 
   /** Detect observed credits from the UI */
   detectCredits(): Promise<FlowPageCreditStatus>;
@@ -98,11 +145,13 @@ export class PuppeteerFlowPage implements IFlowPage {
 
   public async ensureProject(
     projectName: string,
-    options: { url?: string } = {}
-  ): Promise<{ projectId: string; url: string }> {
-    const targetUrl = options.url || this.defaultFlowUrl;
-    const current = this.page.url();
+    options: { url?: string; projectReference?: string } = {}
+  ): Promise<FlowProjectNavigationResult> {
+    const targetUrl = options.projectReference
+      ? `${this.defaultFlowUrl}/projects/${options.projectReference}`
+      : options.url || this.defaultFlowUrl;
 
+    const current = this.page.url();
     if (!current.startsWith(targetUrl)) {
       await this.page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
     }
@@ -112,33 +161,113 @@ export class PuppeteerFlowPage implements IFlowPage {
       throw new Error(`[BLOCKED_AUTH] Authentication required: ${auth.details}`);
     }
 
+    const rawUrl = this.page.url();
+    const bodyText = await this.page.evaluate(() => (document.body ? document.body.innerText.slice(0, 2000) : '')).catch(() => '');
+    const domSnippet = await this.page.evaluate(() => (document.body ? document.body.innerHTML.slice(0, 2000) : '')).catch(() => '');
+    const pageState = FlowContractProbe.categorizePageState(rawUrl, bodyText, domSnippet);
+
     const sanitizedProject = projectName.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    // If on FLOW_HOME without active project canvas, verify if project creation/restoration is safe
+    if (pageState === 'FLOW_HOME' && !rawUrl.includes('/project/')) {
+      // In Flow home: if a specific project ID is requested and no project is currently open,
+      // report exact state rather than pretending project canvas is ready.
+      return {
+        projectId: sanitizedProject,
+        url: rawUrl,
+        pageState: 'FLOW_HOME',
+        browserProjectReference: undefined,
+      };
+    }
+
+    // Extract project reference from URL if present
+    const projectMatch = rawUrl.match(/\/projects?\/([a-zA-Z0-9_-]+)/);
+    const browserProjectReference = projectMatch ? projectMatch[1] : sanitizedProject;
+
     return {
       projectId: sanitizedProject,
-      url: this.page.url(),
+      url: rawUrl,
+      pageState,
+      browserProjectReference,
     };
   }
 
-  public async ensureAgentMode(): Promise<boolean> {
-    try {
-      // Look for Agent mode switch / toggle in Google Flow UI
-      const agentToggle = await this.page.$(
-        'button[aria-label*="Agent" i], [role="switch"][aria-label*="Agent" i], button:has-text("Agent")'
-      );
-      if (agentToggle) {
-        const isChecked = await agentToggle.evaluate((el: any) =>
-          el.getAttribute('aria-checked') === 'true' || el.classList.contains('active')
-        );
-        if (!isChecked) {
-          await agentToggle.click();
-          await new Promise((r) => setTimeout(r, 1000));
-        }
-        return true;
-      }
-      return false;
-    } catch {
-      return false;
+  public async ensureAgentMode(): Promise<FlowAgentModeResult> {
+    const discovery = await findAgentControl(this.page);
+
+    if (discovery.status === 'NOT_FOUND') {
+      return {
+        mode: 'UNKNOWN',
+        isAgentActive: false,
+        status: 'AGENT_MODE_UNAVAILABLE',
+        confidence: 0,
+        details: 'Agent mode toggle or button not found in current UI',
+      };
     }
+
+    if (discovery.status === 'AMBIGUOUS') {
+      return {
+        mode: 'UNKNOWN',
+        isAgentActive: false,
+        status: 'AMBIGUOUS',
+        confidence: discovery.confidence,
+        details: discovery.details || 'Multiple candidate agent controls discovered',
+      };
+    }
+
+    // Exactly 1 control discovered
+    const target = discovery.target;
+    if (target?.isActive) {
+      return {
+        mode: 'AGENT',
+        isAgentActive: true,
+        status: 'FOUND',
+        confidence: discovery.confidence,
+        details: 'Flow Agent mode is already active',
+      };
+    }
+
+    // Toggle / button exists but is not active: click to activate
+    try {
+      const clicked = await this.page.evaluate((locator: string) => {
+        const el = document.querySelector(locator) as HTMLElement | null;
+        if (el) {
+          el.click();
+          return true;
+        }
+        return false;
+      }, discovery.locatorStrategy);
+
+      if (clicked) {
+        await new Promise((r) => setTimeout(r, 1000));
+        // Verify active state after click
+        const recheck = await findAgentControl(this.page);
+        const isActive = Boolean(recheck.target?.isActive);
+        return {
+          mode: isActive ? 'AGENT' : 'DIRECT',
+          isAgentActive: isActive,
+          status: 'FOUND',
+          confidence: recheck.confidence,
+          details: isActive ? 'Agent mode successfully activated' : 'Clicked agent toggle but state remained inactive',
+        };
+      }
+    } catch (err: any) {
+      return {
+        mode: 'UNKNOWN',
+        isAgentActive: false,
+        status: 'AGENT_MODE_UNAVAILABLE',
+        confidence: 0.3,
+        details: `Failed to toggle agent mode: ${err?.message || String(err)}`,
+      };
+    }
+
+    return {
+      mode: 'UNKNOWN',
+      isAgentActive: false,
+      status: 'AGENT_MODE_UNAVAILABLE',
+      confidence: 0,
+      details: 'Could not interact with agent toggle',
+    };
   }
 
   public async submitInstruction(
@@ -150,17 +279,29 @@ export class PuppeteerFlowPage implements IFlowPage {
       throw new Error(`[BLOCKED_AUTH] Cannot submit instruction while auth blocked: ${auth.details}`);
     }
 
-    // Find main prompt input
-    const inputSelector =
-      'textarea[placeholder*="Prompt" i], textarea[aria-label*="Prompt" i], textarea, [contenteditable="true"]';
-    await this.page.waitForSelector(inputSelector, { timeout: 15000 });
-    const inputEl = await this.page.$(inputSelector);
-    if (!inputEl) throw new Error('Could not find Flow prompt input textarea.');
+    // 1. Discover editable prompt surface with confidence check
+    const promptDiscovery = await findEditablePromptSurface(this.page);
+    if (promptDiscovery.status === 'NOT_FOUND') {
+      throw new Error('[PROMPT_INPUT_NOT_FOUND] Could not locate Google Flow prompt input surface.');
+    }
+    if (promptDiscovery.status === 'AMBIGUOUS') {
+      throw new Error(
+        `[PROMPT_INPUT_AMBIGUOUS] Multiple candidate prompt surfaces found without decisive semantic winner: ${promptDiscovery.details}`
+      );
+    }
 
-    // Clear and enter prompt text
+    // Locate the element via discovered locator strategy
+    const inputSelector = promptDiscovery.locatorStrategy;
+    const inputEl = await this.page.$(inputSelector);
+    if (!inputEl) {
+      throw new Error(`[PROMPT_INPUT_UNAVAILABLE] Failed to bind discovered locator "${inputSelector}".`);
+    }
+
+    // Clear and enter prompt text safely
     await inputEl.evaluate((el: any) => {
       if ('value' in el) el.value = '';
       else el.textContent = '';
+      el.focus();
     });
     await inputEl.type(instructionText);
 
@@ -176,13 +317,23 @@ export class PuppeteerFlowPage implements IFlowPage {
       }
     }
 
-    // Submit via Generate button or Enter key
-    const generateBtn = await this.page.$(
-      'button[aria-label*="Generate" i], button:has-text("Generate"), button[type="submit"]'
-    );
-    if (generateBtn) {
-      await generateBtn.click();
+    // 2. Discover Generate / Submit control with confidence check (NO Playwright text selectors)
+    const generateDiscovery = await findGenerateControl(this.page);
+    if (generateDiscovery.status === 'AMBIGUOUS') {
+      throw new Error(
+        `[GENERATE_CONTROL_AMBIGUOUS] Multiple candidate generate buttons found without decisive winner: ${generateDiscovery.details}`
+      );
+    }
+
+    if (generateDiscovery.status === 'FOUND') {
+      const generateBtn = await this.page.$(generateDiscovery.locatorStrategy);
+      if (generateBtn) {
+        await generateBtn.click();
+      } else {
+        await this.page.keyboard.press('Enter');
+      }
     } else {
+      // Fallback: keyboard Enter on input
       await this.page.keyboard.press('Enter');
     }
 
@@ -205,10 +356,28 @@ export class PuppeteerFlowPage implements IFlowPage {
     while (Date.now() - startTime < timeoutMs) {
       const assets = await this.listGeneratedAssets();
 
+      // Apply Shot-ID Mapping Strategies:
       for (const shotId of shotIds) {
-        const match = assets.find((a) => a.name.includes(shotId) || a.matchedShotId === shotId);
-        if (match && match.status === 'READY') {
-          results.set(shotId, match);
+        if (results.has(shotId)) continue;
+
+        // Strategy A: Exact output name contains shotId
+        const exactMatch = assets.find(
+          (a) => a.name.includes(shotId) || a.matchedShotId === shotId || a.id.includes(shotId)
+        );
+        if (exactMatch && exactMatch.status === 'READY') {
+          exactMatch.matchedShotId = shotId;
+          exactMatch.mappingStrategy = 'EXACT_OUTPUT_NAME';
+          results.set(shotId, exactMatch);
+          continue;
+        }
+
+        // Strategy C: Single shot fallback (if only 1 shot requested and 1 ready asset exists)
+        if (shotIds.length === 1 && assets.length === 1 && assets[0].status === 'READY') {
+          const single = assets[0];
+          single.matchedShotId = shotId;
+          single.mappingStrategy = 'SUBMISSION_ORDER_VERIFIED_METADATA';
+          results.set(shotId, single);
+          continue;
         }
       }
 
@@ -224,21 +393,29 @@ export class PuppeteerFlowPage implements IFlowPage {
       await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
 
+    // If generation timed out or assets cannot be attributed confidently
+    if (results.size < shotIds.length) {
+      const allAssets = await this.listGeneratedAssets();
+      if (allAssets.length > 0 && results.size === 0) {
+        throw new Error(
+          `[RECONCILIATION_REQUIRED] Generated assets observed (${allAssets.length}) but could not be mapped to requested shots [${shotIds.join(', ')}] with high confidence.`
+        );
+      }
+    }
+
     return results;
   }
 
   public async listGeneratedAssets(): Promise<FlowGeneratedAssetDescriptor[]> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const raw: any[] = await (this.page as any).evaluate(new Function(`
-      const cards = Array.from(document.querySelectorAll('[data-asset-id], [class*="asset-card"], [class*="video-card"]'));
-      return cards.map((card, idx) => ({
-        id: card.getAttribute('data-asset-id') || 'asset_' + idx,
-        name: card.getAttribute('data-asset-name') || (card.querySelector('[class*="title"], h3, span') || {}).textContent || 'Asset ' + idx,
-        status: card.querySelector('[class*="failed"], [class*="error"]') ? 'FAILED' : card.querySelector('video, [class*="ready"]') ? 'READY' : 'GENERATING',
-        createdAt: new Date().toISOString(),
-      }));
-    `));
-    return (raw || []) as FlowGeneratedAssetDescriptor[];
+    const discovery = await findAssetContainers(this.page);
+    const containers = discovery.containers || [];
+
+    return containers.map((c) => ({
+      id: c.id,
+      name: c.name,
+      status: c.status === 'UNKNOWN' ? 'GENERATING' : c.status,
+      createdAt: new Date().toISOString(),
+    }));
   }
 
   public async downloadAsset(
@@ -257,14 +434,36 @@ export class PuppeteerFlowPage implements IFlowPage {
       downloadPath: destDir,
     });
 
-    // Locate and click download trigger
-    const downloadBtn = await this.page.$(
-      `[data-asset-id="${flowAssetId}"] button[aria-label*="Download" i], button[aria-label*="Download" i]`
-    );
-    if (!downloadBtn) {
-      throw new Error(`Download button not found for asset ${flowAssetId}`);
+    // Scoped download discovery: must find download button INSIDE target container
+    const downloadDiscovery = await findDownloadAction(this.page, flowAssetId);
+
+    if (downloadDiscovery.status === 'AMBIGUOUS') {
+      throw new Error(`[DOWNLOAD_AMBIGUOUS] Multiple download buttons found for asset ${flowAssetId}. Failing closed.`);
     }
-    await downloadBtn.click();
+
+    // Click scoped download trigger
+    const clicked = await this.page.evaluate((assetId: string) => {
+      let container = document.querySelector(`[data-asset-id="${assetId}"]`);
+      if (!container) {
+        const cards = Array.from(document.querySelectorAll('[class*="asset-card"], [class*="video-card"]'));
+        container = cards.find((c) => (c.textContent || '').includes(assetId)) || null;
+      }
+      if (!container) return false;
+
+      const btn = container.querySelector(
+        'button[aria-label*="Download" i], button[title*="Download" i], a[download]'
+      ) as HTMLElement | null;
+
+      if (btn) {
+        btn.click();
+        return true;
+      }
+      return false;
+    }, flowAssetId);
+
+    if (!clicked) {
+      throw new Error(`[DOWNLOAD_NOT_FOUND] Scoped download button not found for asset ${flowAssetId}`);
+    }
 
     // Wait for download to appear
     const maxWait = 45000;
@@ -272,7 +471,9 @@ export class PuppeteerFlowPage implements IFlowPage {
     let downloadedPath: string | undefined;
 
     while (Date.now() - start < maxWait) {
-      const files = syncFs.readdirSync(destDir).filter((f) => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.endsWith('.mp4'));
+      const files = syncFs
+        .readdirSync(destDir)
+        .filter((f) => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.endsWith('.mp4'));
       if (files.length > 0) {
         downloadedPath = path.join(destDir, files[0]);
         break;
@@ -296,20 +497,16 @@ export class PuppeteerFlowPage implements IFlowPage {
   }
 
   public async detectCredits(): Promise<FlowPageCreditStatus> {
-    try {
-      const creditText: string | null = await (this.page as any).evaluate(new Function(`
-        const el = document.querySelector('[aria-label*="Credit" i], [data-testid="credits"]');
-        return el ? el.textContent.trim() : null;
-      `));
-      if (!creditText) {
-        return { creditsObserved: null, observationTime: new Date().toISOString(), isCertain: false };
-      }
-      const match = creditText.match(/\d+/);
-      const credits = match ? parseInt(match[0], 10) : null;
-      return { creditsObserved: credits, observationTime: new Date().toISOString(), isCertain: credits !== null };
-    } catch {
-      return { creditsObserved: null, observationTime: new Date().toISOString(), isCertain: false };
-    }
+    const discovery = await findCreditIndicator(this.page);
+    return {
+      creditsObserved: discovery.parsedCredits ?? null,
+      rawText: discovery.rawText,
+      observationTime: new Date().toISOString(),
+      isCertain: Boolean(discovery.isCertain),
+      confidence: discovery.confidence,
+      tier: discovery.tier,
+      details: discovery.details,
+    };
   }
 
   public async detectAuthBlock(): Promise<FlowAuthBlockStatus> {
@@ -319,9 +516,10 @@ export class PuppeteerFlowPage implements IFlowPage {
         return { isBlocked: true, blockType: 'LOGIN', details: 'Google sign-in page detected.' };
       }
 
-      const pageText: string = await (this.page as any).evaluate(new Function(`
-        return document.body ? document.body.innerText.toLowerCase() : '';
-      `));
+      const pageText: string = await (this.page as any)
+        .evaluate(() => (document.body ? document.body.innerText.toLowerCase().slice(0, 3000) : ''))
+        .catch(() => '');
+
       if (pageText.includes('sign in with google') || pageText.includes('choose an account')) {
         return { isBlocked: true, blockType: 'LOGIN', details: 'Sign-in prompt detected in viewport.' };
       }
@@ -340,13 +538,14 @@ export class PuppeteerFlowPage implements IFlowPage {
 
   public async detectFailure(): Promise<{ hasFailed: boolean; errorReason?: string }> {
     try {
-      const errorMsg: string | null = await (this.page as any).evaluate(new Function(`
+      const errorMsg: any = await (this.page as any).evaluate(() => {
         const el = document.querySelector('[role="alert"], [class*="error-message"], [class*="toast-error"]');
-        return el ? el.textContent.trim() : null;
-      `));
+        return el ? el.textContent?.trim() || null : null;
+      });
+      const isStringError = typeof errorMsg === 'string' && errorMsg.trim().length > 0;
       return {
-        hasFailed: Boolean(errorMsg),
-        errorReason: errorMsg || undefined,
+        hasFailed: isStringError,
+        errorReason: isStringError ? errorMsg : undefined,
       };
     } catch {
       return { hasFailed: false };
@@ -366,11 +565,11 @@ export class PuppeteerFlowPage implements IFlowPage {
       screenshotPath = path.join(diagnosticsDir, `flow_diag_${tag}_${Date.now()}.png`);
       await this.page.screenshot({ path: screenshotPath as any, fullPage: false });
 
-      domSnippet = await (this.page as any).evaluate(new Function(`
-        return document.body ? document.body.innerHTML.slice(0, 2000) : '';
-      `));
+      domSnippet = await (this.page as any).evaluate(() =>
+        document.body ? document.body.innerHTML.slice(0, 2000) : ''
+      );
     } catch {
-      // ignore diagnostic capture failure
+      // Diagnostic capture failure ignored
     }
 
     return {
@@ -398,29 +597,53 @@ export class PuppeteerFlowPage implements IFlowPage {
 export class MockFlowPage implements IFlowPage {
   public closed = false;
   public simulatedCredits: number | null = 100;
+  public simulatedCreditCertainty = true;
   public simulatedAuthBlock: FlowAuthBlockStatus = { isBlocked: false };
   public simulatedFailure?: string;
   public agentModeEnabled = true;
+  public simulatedPageState: FlowPageState = 'FLOW_PROJECT';
   public generatedAssets = new Map<string, FlowGeneratedAssetDescriptor>();
   public submittedInstructions: Array<{ text: string; options?: any; submittedAt: string }> = [];
   public mockMp4Bytes?: Buffer;
+  public promptInputAmbiguous = false;
+  public generateControlAmbiguous = false;
 
   constructor(options: { mockMp4Bytes?: Buffer } = {}) {
     this.mockMp4Bytes = options.mockMp4Bytes;
   }
 
-  public async ensureProject(projectName: string): Promise<{ projectId: string; url: string }> {
+  public async ensureProject(
+    projectName: string,
+    options?: { url?: string; projectReference?: string }
+  ): Promise<FlowProjectNavigationResult> {
     if (this.simulatedAuthBlock.isBlocked) {
       throw new Error(`[BLOCKED_AUTH] Authentication required: ${this.simulatedAuthBlock.details}`);
     }
     return {
       projectId: projectName,
       url: `https://flow.google.com/projects/${projectName}`,
+      pageState: this.simulatedPageState,
+      browserProjectReference: projectName,
     };
   }
 
-  public async ensureAgentMode(): Promise<boolean> {
-    return this.agentModeEnabled;
+  public async ensureAgentMode(): Promise<FlowAgentModeResult> {
+    if (!this.agentModeEnabled) {
+      return {
+        mode: 'UNKNOWN',
+        isAgentActive: false,
+        status: 'AGENT_MODE_UNAVAILABLE',
+        confidence: 0,
+        details: 'Flow Agent mode is not available in mock page',
+      };
+    }
+    return {
+      mode: 'AGENT',
+      isAgentActive: true,
+      status: 'FOUND',
+      confidence: 1.0,
+      details: 'Mock agent mode enabled',
+    };
   }
 
   public async submitInstruction(
@@ -430,11 +653,19 @@ export class MockFlowPage implements IFlowPage {
     if (this.simulatedAuthBlock.isBlocked) {
       throw new Error(`[BLOCKED_AUTH] Cannot submit instruction while auth blocked: ${this.simulatedAuthBlock.details}`);
     }
+
+    if (this.promptInputAmbiguous) {
+      throw new Error('[PROMPT_INPUT_AMBIGUOUS] Multiple candidate prompt surfaces found.');
+    }
+
+    if (this.generateControlAmbiguous) {
+      throw new Error('[GENERATE_CONTROL_AMBIGUOUS] Multiple candidate generate buttons found.');
+    }
+
     const submissionId = `mock_sub_${Date.now()}`;
     const submittedAt = new Date().toISOString();
     this.submittedInstructions.push({ text: instructionText, options, submittedAt });
 
-    // Seed mock generated assets matching shots in instruction
     const shotMatches = instructionText.match(/SHOT_[A-Za-z0-9_]+/g) || ['SHOT_001'];
     for (const shotId of shotMatches) {
       this.generatedAssets.set(shotId, {
@@ -444,6 +675,7 @@ export class MockFlowPage implements IFlowPage {
         createdAt: submittedAt,
         matchedShotId: shotId,
         durationSeconds: 4,
+        mappingStrategy: 'EXACT_OUTPUT_NAME',
       });
     }
 
@@ -457,17 +689,39 @@ export class MockFlowPage implements IFlowPage {
       throw new Error(`Flow generation failed: ${this.simulatedFailure}`);
     }
     const results = new Map<string, FlowGeneratedAssetDescriptor>();
-    for (const shotId of shotIds) {
-      const existing = this.generatedAssets.get(shotId) || {
-        id: `mock_asset_${shotId}`,
-        name: `Asset for ${shotId}`,
-        status: 'READY',
-        createdAt: new Date().toISOString(),
-        matchedShotId: shotId,
-        durationSeconds: 4,
-      };
-      results.set(shotId, existing);
+
+    if (this.generatedAssets.size > 0) {
+      for (const shotId of shotIds) {
+        for (const [_, asset] of this.generatedAssets.entries()) {
+          if (
+            asset.matchedShotId === shotId ||
+            asset.name.includes(shotId) ||
+            asset.id.includes(shotId)
+          ) {
+            results.set(shotId, asset);
+            break;
+          }
+        }
+      }
+      if (results.size < shotIds.length && results.size === 0) {
+        throw new Error(
+          `[RECONCILIATION_REQUIRED] Generated assets observed (${this.generatedAssets.size}) but could not be mapped to requested shots [${shotIds.join(', ')}] with high confidence.`
+        );
+      }
+    } else {
+      for (const shotId of shotIds) {
+        results.set(shotId, {
+          id: `mock_asset_${shotId}`,
+          name: `Asset for ${shotId}`,
+          status: 'READY',
+          createdAt: new Date().toISOString(),
+          matchedShotId: shotId,
+          durationSeconds: 4,
+          mappingStrategy: 'EXACT_OUTPUT_NAME' as FlowShotMappingStrategy,
+        });
+      }
     }
+
     return results;
   }
 
@@ -496,8 +750,10 @@ export class MockFlowPage implements IFlowPage {
   public async detectCredits(): Promise<FlowPageCreditStatus> {
     return {
       creditsObserved: this.simulatedCredits,
+      rawText: this.simulatedCredits !== null ? `${this.simulatedCredits} credits` : undefined,
       observationTime: new Date().toISOString(),
-      isCertain: this.simulatedCredits !== null,
+      isCertain: this.simulatedCreditCertainty && this.simulatedCredits !== null,
+      confidence: this.simulatedCreditCertainty ? 0.95 : 0.4,
     };
   }
 

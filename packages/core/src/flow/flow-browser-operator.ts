@@ -10,6 +10,7 @@
  *   - Auto-download, ArtifactVerifier FFprobe analysis, SHA-256 calculation
  *   - Visual QA integration with strict 1-retake ceiling
  *   - Zero manual clicks, prompt pasting, downloading, or importing in normal operation
+ *   - Zero-Credit browser probe contract (Phase 27B)
  */
 
 import * as fs from 'node:fs';
@@ -27,10 +28,17 @@ import {
   FlowGeneratedAssetDescriptor,
   FlowPageCreditStatus,
   FlowAuthBlockStatus,
+  FlowProjectNavigationResult,
+  FlowAgentModeResult,
 } from './flow-page-adapter.js';
 import { FlowBatchCompiler, FlowBatchCompilerInput } from './flow-batch-compiler.js';
 import { CreditAwarePlanner, CreditAwarePlan } from './credit-aware-planner.js';
 import { FlowQAEvaluator, FlowQAResultStatus } from './flow-qa-evaluator.js';
+import {
+  FlowContractProbe,
+  FlowBrowserProbeReport,
+  FlowControlMap,
+} from './flow-contract-probe.js';
 
 export type FlowOperatorState =
   | 'INITIAL'
@@ -258,7 +266,11 @@ export class FlowBrowserOperator {
         };
       }
 
-      await page.ensureProject(projectId, { url: this.config.flowUrl });
+      const projRes = await page.ensureProject(projectId, {
+        url: this.config.flowUrl,
+        projectReference: checkpoint.browserProjectReference,
+      });
+      checkpoint.browserProjectReference = projRes.browserProjectReference;
       checkpoint.state = 'FLOW_PROJECT_READY';
       this.saveCheckpoint(checkpointPath, checkpoint);
 
@@ -267,6 +279,7 @@ export class FlowBrowserOperator {
       checkpoint.creditsObserved = creditStatus.creditsObserved;
       checkpoint.observationTime = creditStatus.observationTime;
 
+      // Only block on deficit if observation is CERTAIN
       if (
         creditStatus.isCertain &&
         creditStatus.creditsObserved !== null &&
@@ -287,8 +300,11 @@ export class FlowBrowserOperator {
         };
       }
 
-      // 7. Activate Flow Agent Mode
-      await page.ensureAgentMode();
+      // 7. Activate Flow Agent Mode (or detect unavailable)
+      const agentRes = await page.ensureAgentMode();
+      if (agentRes.status === 'AGENT_MODE_UNAVAILABLE') {
+        // Proceed with standard direct prompt submission
+      }
 
       // 8. Submit Structured Batch Instruction (Zero-Touch)
       const submission = await page.submitInstruction(batchCompilation.batchInstructionText, {
@@ -320,13 +336,13 @@ export class FlowBrowserOperator {
       for (const shot of shotsNeedingGeneration) {
         const assetDesc = generatedMap.get(shot.id);
         if (!assetDesc) {
-          throw new Error(`Asset not found for shot ${shot.id} after generation`);
+          throw new Error(`[RECONCILIATION_REQUIRED] Asset not found for shot ${shot.id} after generation`);
         }
 
         const shotDir = path.join(projectRunDir, shot.id);
         const destinationFile = path.join(shotDir, 'clip.mp4');
 
-        // Download via browser download event
+        // Download via scoped container button
         const downloadRes = await page.downloadAsset(assetDesc.id, destinationFile);
 
         // Verify physical file on disk
@@ -370,7 +386,6 @@ export class FlowBrowserOperator {
           currentRetake++;
           checkpoint.retakeCounts[shot.id] = currentRetake;
           // Attempt 1 retake if budget allows
-          // Submit single prompt retake
           const retakePrompt = `RETAKE SHOT ${shot.id}: Correct errors. ${(shot as any).prompt || 'Cinematic shot'}`;
           await page.submitInstruction(retakePrompt).catch(() => {});
         }
@@ -400,6 +415,7 @@ export class FlowBrowserOperator {
               submittedAt: submission.submittedAt,
               downloadedAt: new Date().toISOString(),
               assetName: assetDesc.name,
+              mappingStrategy: assetDesc.mappingStrategy || 'EXACT_OUTPUT_NAME',
               generationSource: 'GOOGLE_FLOW_REAL',
               providerTrust: 'LIVE_EXTERNAL',
             },
@@ -439,6 +455,22 @@ export class FlowBrowserOperator {
         manualActionsRequired: 0,
       };
     } catch (err: any) {
+      if (err?.message?.includes('RECONCILIATION_REQUIRED')) {
+        checkpoint.state = 'RECONCILIATION_REQUIRED';
+        checkpoint.details = err.message;
+        this.saveCheckpoint(checkpointPath, checkpoint);
+        return {
+          runId,
+          projectId,
+          finalState: 'RECONCILIATION_REQUIRED',
+          creditPlan,
+          evidence: evidenceList,
+          allPassed: false,
+          manualActionsRequired: 0,
+          error: err.message,
+        };
+      }
+
       // Diagnostic snapshot on failure
       const diag = await page.captureDiagnostics('operator_failure', path.join(projectRunDir, 'diagnostics'));
       checkpoint.details = `Operator failure: ${err?.message || String(err)}`;
@@ -456,6 +488,50 @@ export class FlowBrowserOperator {
       };
     } finally {
       await this.cleanup();
+    }
+  }
+
+  /**
+   * Executes a Zero-Credit Browser Probe against Google Flow.
+   * NEVER submits a prompt, clicks generate, or spends credits.
+   */
+  public async probe(options: { url?: string; persistEvidence?: boolean; headless?: boolean } = {}): Promise<{
+    report: FlowBrowserProbeReport;
+    controlMap: FlowControlMap;
+    formattedReport: string;
+  }> {
+    const targetUrl = options.url || this.config.flowUrl;
+    const browserPath = MediaToolchainDoctor.getBrowserExecutablePath();
+    if (!browserPath) {
+      throw new Error(
+        'Google Chrome, Microsoft Edge, or Chromium is required for Flow browser probe.'
+      );
+    }
+
+    if (!fs.existsSync(this.config.userDataDir)) {
+      fs.mkdirSync(this.config.userDataDir, { recursive: true });
+    }
+
+    const browser = await puppeteer.launch({
+      executablePath: browserPath,
+      userDataDir: this.config.userDataDir,
+      headless: options.headless ?? this.config.headless,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+
+    try {
+      const page = await browser.newPage();
+      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+
+      const result = await FlowContractProbe.probePage(page, {
+        persistEvidence: options.persistEvidence ?? true,
+        outputDir: path.resolve(process.cwd(), '.studio', 'flow-contract'),
+      });
+
+      await page.close().catch(() => {});
+      return result;
+    } finally {
+      await browser.close().catch(() => {});
     }
   }
 

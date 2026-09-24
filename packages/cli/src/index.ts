@@ -104,6 +104,7 @@ import {
   ZeroTouchProductionOrchestrator,
   CreditAwarePlanner,
   FlowBatchCompiler,
+  ArtifactVerifier,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -190,9 +191,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       }
 
       console.log('Opening Google Flow...');
-      console.log('Session authenticated\n');
-      console.log('Submitting production batch...');
-      console.log('Generation started\n');
+      console.log('Verifying session authentication...\n');
 
       const result = await orchestrator.execute(positionalPrompt, { projectId, dryRun: false });
 
@@ -203,6 +202,10 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return 1;
       }
 
+      console.log('Session authenticated ✅\n');
+      console.log('Submitting production batch...');
+      console.log('Generation started\n');
+
       if (result.status === 'WAITING_FOR_FLOW_CREDITS') {
         console.warn('\n⏸️  Insufficient Google Flow credits observed in UI.');
         console.warn('   Status: WAITING_FOR_FLOW_CREDITS\n');
@@ -211,6 +214,12 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
 
       if (result.status === 'RECONCILIATION_REQUIRED') {
         console.warn('\n⚠️  Batch generation in unknown state — reconciliation required to protect credits.\n');
+        return 1;
+      }
+
+      if (result.status === 'ASSEMBLY_NOT_READY' || !result.masterVideoPath) {
+        console.error(`\n⚠️  Master timeline assembly not ready: ${result.error || 'Physical master video file missing'}\n`);
+        console.log('ASSEMBLY_NOT_READY');
         return 1;
       }
 
@@ -227,12 +236,19 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log('QA...');
       console.log('Composing...\n');
 
-      console.log('FINAL VIDEO:');
-      console.log(result.masterVideoPath || 'master.mp4');
-      console.log('\nMANUAL ACTIONS:');
-      console.log('0\n');
+      if (result.masterVideoPath && syncFs.existsSync(result.masterVideoPath)) {
+        const verifyRes = ArtifactVerifier.verify(result.masterVideoPath, { requireVideoStream: true });
+        if (verifyRes.exists && verifyRes.nonEmpty) {
+          console.log('FINAL VIDEO:');
+          console.log(result.masterVideoPath);
+          console.log('\nMANUAL ACTIONS:');
+          console.log('0\n');
+          return 0;
+        }
+      }
 
-      return 0;
+      console.log('ASSEMBLY_NOT_READY: Output video artifact verification failed.');
+      return 1;
     }
 
     case 'doctor': {
@@ -486,6 +502,42 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         await operator.launchInteractiveSession();
         console.log('✅ Interactive session closed. Profile saved.');
         return 0;
+      }
+
+      if (subCommand === 'browser-probe' || subCommand === 'probe') {
+        const isJson = args.includes('--json');
+        const urlIdx = args.indexOf('--url');
+        const flowUrl = urlIdx !== -1 && args[urlIdx + 1] ? args[urlIdx + 1] : undefined;
+        const headless = !args.includes('--no-headless');
+
+        if (!isJson) {
+          console.log('\n🔍 Probing Google Flow Browser UI Contract (Zero-Credit Mode)...');
+          console.log('   Profile: .studio/browser-profiles/google-flow');
+          console.log('   Strict rule: ZERO PROMPTS SUBMITTED, ZERO CREDITS CONSUMED.\n');
+        }
+
+        const operator = new FlowBrowserOperator({ headless });
+        try {
+          const { report, controlMap, formattedReport } = await operator.probe({
+            url: flowUrl,
+            persistEvidence: true,
+          });
+
+          if (isJson) {
+            console.log(JSON.stringify({ report, controlMap }, null, 2));
+          } else {
+            console.log(formattedReport);
+            console.log('\n📁 Evidence persisted to .studio/flow-contract/ (probe-report.json, control-map.json)\n');
+          }
+          return 0;
+        } catch (err: any) {
+          if (isJson) {
+            console.log(JSON.stringify({ error: err?.message || String(err) }, null, 2));
+          } else {
+            console.error(`\n❌ Flow browser probe failed: ${err?.message || String(err)}\n`);
+          }
+          return 1;
+        }
       }
 
       if (subCommand === 'browser-smoke') {
@@ -4204,6 +4256,7 @@ Commands:
   gemini smoke                           Run Gemini structured extraction smoke test
   flow doctor                            Check Google Flow bridge health, integration mode & tools
   flow login                             Launch persistent browser session for one-time interactive Google sign-in
+  flow browser-probe                     Zero-credit inspection of Google Flow UI contract (no credits consumed)
   flow browser-smoke                     Run single-asset live Google Flow browser smoke test (requires opt-in)
   flow prepare <shotId> [proj]           Build self-contained Google Flow production package
   flow status <shotId> [proj]            List or inspect Google Flow generation job status

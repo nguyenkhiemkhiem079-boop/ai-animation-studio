@@ -1,11 +1,11 @@
 /**
  * ZeroTouchProductionOrchestrator
  *
- * Implements the Phase 27 Zero-Touch Google Flow production pipeline:
+ * Implements the Phase 27 / 27B Zero-Touch Google Flow production pipeline:
  *
  * ONE PROMPT
  *   ↓
- * STORY PLANNING
+ * STORY PLANNING (Deterministic Prompt-Sensitive or Screenplay Analysis)
  *   ↓
  * SHOT PLANNING
  *   ↓
@@ -21,14 +21,14 @@
  *   ↓
  * LOCAL TIMELINE ASSEMBLY & MASTER MP4 ENCODE
  *   ↓
- * FINAL MP4 (0 manual actions)
+ * PHYSICAL FINAL MP4 VERIFICATION (ArtifactVerifier, 0 manual actions)
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 
-import { ShotContract, ShotContractSchema } from '../domain/director.js';
+import { ShotContract } from '../domain/director.js';
 import { TimelineSequence } from '../domain/timeline.js';
 import { VideoRenderer } from '../export/video-renderer.js';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
@@ -36,14 +36,12 @@ import { MediaToolchainDoctor } from '../media/toolchain-doctor.js';
 import { RuleBasedStoryAnalyzer } from '../story/story-analyzer.js';
 import { ShotPlanner } from '../director/shot-planner.js';
 import { SourceDocument } from '../domain/story.js';
-import { IFlowPage } from './flow-page-adapter.js';
 import {
   FlowBrowserOperator,
   FlowOperatorConfig,
   FlowBatchExecutionResult,
-  FlowDownloadedShotEvidence,
 } from './flow-browser-operator.js';
-import { CreditAwarePlanner, CreditAwarePlan, ShotCreditPlan } from './credit-aware-planner.js';
+import { CreditAwarePlanner } from './credit-aware-planner.js';
 import { HtmlMotionEngineAdapter } from '../engines/html-motion-adapter.js';
 
 export interface ZeroTouchConfig extends FlowOperatorConfig {
@@ -54,6 +52,7 @@ export interface ZeroTouchConfig extends FlowOperatorConfig {
 export interface ZeroTouchPlanResult {
   projectId: string;
   masterPrompt: string;
+  planningMethod: 'SCREENPLAY_STORY_ANALYSIS' | 'DETERMINISTIC_PROMPT_SENSITIVE_SYNTHESIS';
   scenesCount: number;
   shotsCount: number;
   flowRequiredCount: number;
@@ -81,7 +80,13 @@ export interface ZeroTouchProductionResult {
   masterVerification?: any;
   allPassed: boolean;
   manualActionsTaken: number;
-  status: 'DONE' | 'BLOCKED_AUTH' | 'WAITING_FOR_FLOW_CREDITS' | 'RECONCILIATION_REQUIRED' | 'FAILED';
+  status:
+    | 'DONE'
+    | 'BLOCKED_AUTH'
+    | 'WAITING_FOR_FLOW_CREDITS'
+    | 'RECONCILIATION_REQUIRED'
+    | 'ASSEMBLY_NOT_READY'
+    | 'FAILED';
   error?: string;
 }
 
@@ -98,11 +103,14 @@ export class ZeroTouchProductionOrchestrator {
    * Plans the production run from a single master prompt.
    * Deterministic, zero credits, zero browser calls.
    */
-  public async plan(masterPrompt: string, projectId = 'project_flow_zero'): Promise<{
+  public async plan(
+    masterPrompt: string,
+    projectId = 'project_flow_zero'
+  ): Promise<{
     plan: ZeroTouchPlanResult;
     shots: ShotContract[];
   }> {
-    const shots = await this.synthesizeShotsFromPrompt(masterPrompt, projectId);
+    const { shots, method } = await this.synthesizeShotsFromPrompt(masterPrompt, projectId);
     const creditPlan = CreditAwarePlanner.plan(shots);
 
     const shotPlans = shots.map((s) => {
@@ -133,6 +141,7 @@ export class ZeroTouchProductionOrchestrator {
       plan: {
         projectId,
         masterPrompt,
+        planningMethod: method,
         scenesCount: Math.max(1, Math.ceil(shots.length / 3)),
         shotsCount: shots.length,
         flowRequiredCount,
@@ -208,7 +217,9 @@ export class ZeroTouchProductionOrchestrator {
       }
 
       const verify = ArtifactVerifier.verify(clipPath);
-      const sha256 = verify.checksumSha256 || crypto.createHash('sha256').update(fs.readFileSync(clipPath)).digest('hex');
+      const sha256 =
+        verify.checksumSha256 ||
+        crypto.createHash('sha256').update(fs.readFileSync(clipPath)).digest('hex');
       shotVideoMap.set(shot.id, clipPath);
       localRenderResults.push({ shotId: shot.id, physicalPath: clipPath, sha256 });
     }
@@ -287,11 +298,45 @@ export class ZeroTouchProductionOrchestrator {
         plan,
         operatorResult,
         localRenderResults,
-        masterVideoPath,
+        masterVideoPath: undefined,
         allPassed: false,
         manualActionsTaken: 0,
-        status: 'FAILED',
+        status: 'ASSEMBLY_NOT_READY',
         error: `Master timeline assembly failed: ${err?.message || String(err)}`,
+      };
+    }
+
+    // Physical media verification check: NEVER report final video if missing/empty
+    if (!fs.existsSync(masterVideoPath)) {
+      return {
+        projectId,
+        runId,
+        dryRun: false,
+        plan,
+        operatorResult,
+        localRenderResults,
+        masterVideoPath: undefined,
+        allPassed: false,
+        manualActionsTaken: 0,
+        status: 'ASSEMBLY_NOT_READY',
+        error: 'Physical master video file does not exist on disk',
+      };
+    }
+
+    const physicalVerify = ArtifactVerifier.verify(masterVideoPath, { requireVideoStream: true });
+    if (!physicalVerify.exists || !physicalVerify.nonEmpty) {
+      return {
+        projectId,
+        runId,
+        dryRun: false,
+        plan,
+        operatorResult,
+        localRenderResults,
+        masterVideoPath: undefined,
+        allPassed: false,
+        manualActionsTaken: 0,
+        status: 'ASSEMBLY_NOT_READY',
+        error: 'Physical master video file is corrupt or zero-byte',
       };
     }
 
@@ -303,18 +348,25 @@ export class ZeroTouchProductionOrchestrator {
       operatorResult,
       localRenderResults,
       masterVideoPath,
-      masterVerification,
+      masterVerification: physicalVerify,
       allPassed: true,
-      manualActionsTaken: 0, // ZERO MANUAL ACTIONS!
+      manualActionsTaken: 0, // ZERO MANUAL ACTIONS
       status: 'DONE',
     };
   }
 
   /**
    * Synthesize ShotContracts from a prompt.
-   * If structured screenplay exists, parse with StoryAnalyzer; otherwise generate standard 4-shot storyboard.
+   * If structured screenplay exists, parse with StoryAnalyzer;
+   * otherwise, dynamically synthesize a prompt-sensitive storyboard.
    */
-  private async synthesizeShotsFromPrompt(prompt: string, projectId: string): Promise<ShotContract[]> {
+  private async synthesizeShotsFromPrompt(
+    prompt: string,
+    projectId: string
+  ): Promise<{
+    shots: ShotContract[];
+    method: 'SCREENPLAY_STORY_ANALYSIS' | 'DETERMINISTIC_PROMPT_SENSITIVE_SYNTHESIS';
+  }> {
     const hasScreenplayFormat = /INT\.|EXT\.|SCENE\s+\d+/i.test(prompt);
 
     if (hasScreenplayFormat) {
@@ -341,46 +393,83 @@ export class ZeroTouchProductionOrchestrator {
         allShots.push(...productionScene.shots);
       }
 
-      if (allShots.length > 0) return allShots;
+      if (allShots.length > 0) {
+        return { shots: allShots, method: 'SCREENPLAY_STORY_ANALYSIS' };
+      }
     }
 
-    // Standard storyboard synthesis for freeform prompt
+    // Dynamic prompt-sensitive storyboard synthesis for freeform prompts
     const cleanPrompt = prompt.trim();
-    const hasTitle = cleanPrompt.toLowerCase().includes('title') || cleanPrompt.toLowerCase().includes('chapter');
+    const lower = cleanPrompt.toLowerCase();
+
+    // 1. Detect Mood & Atmosphere
+    let mood = 'cinematic';
+    let colorTemp = 'neutral';
+    let lightingDirection = 'front';
+    let fog = false;
+
+    if (lower.includes('noir') || lower.includes('shadow') || lower.includes('dark') || lower.includes('suspense')) {
+      mood = 'noir_suspense';
+      colorTemp = 'cool';
+      lightingDirection = 'left';
+      fog = true;
+    } else if (lower.includes('cyberpunk') || lower.includes('neon') || lower.includes('sci-fi') || lower.includes('future')) {
+      mood = 'cyberpunk_stylized';
+      colorTemp = 'stylized';
+      lightingDirection = 'rim';
+      fog = true;
+    } else if (lower.includes('sunny') || lower.includes('warm') || lower.includes('bright') || lower.includes('morning')) {
+      mood = 'uplifting';
+      colorTemp = 'warm';
+      lightingDirection = 'top';
+    } else if (lower.includes('dramatic') || lower.includes('action') || lower.includes('fight') || lower.includes('battle')) {
+      mood = 'intense_dramatic';
+      colorTemp = 'stylized';
+      lightingDirection = 'right';
+    }
+
+    // 2. Detect Subject / Key Actor
+    let subjectName = 'HERO';
+    const characterKeywords = ['astronaut', 'samurai', 'detective', 'robot', 'pilot', 'warrior', 'scientist', 'girl', 'boy', 'minh'];
+    for (const kw of characterKeywords) {
+      if (lower.includes(kw)) {
+        subjectName = kw.toUpperCase();
+        break;
+      }
+    }
+
+    // 3. Detect Title or Chapter intent
+    const hasExplicitTitle = lower.includes('title') || lower.includes('chapter');
 
     const shots: ShotContract[] = [];
 
-    // Shot 1: Title card or establishing shot
+    // Shot 1: Establishing Shot or Title Card (reacting directly to prompt)
     shots.push({
       id: `SHOT_SC01_SH01`,
       sceneId: 'SCENE_01',
       shotNumber: 1,
-      purpose: hasTitle ? 'transition' : 'establishing',
-      complexity: hasTitle ? 'simple_transform' : 'complex_generative_video',
-      rendererIntent: hasTitle ? 'deterministic_hyperframes' : 'generative_full_video',
+      purpose: hasExplicitTitle ? 'transition' : 'establishing',
+      complexity: hasExplicitTitle ? 'simple_transform' : 'complex_generative_video',
+      rendererIntent: hasExplicitTitle ? 'deterministic_hyperframes' : 'generative_full_video',
       frame: { durationSeconds: 3, aspectRatio: '16:9', targetFps: 24 },
-      camera: { shotSize: 'wide', angle: 'eye_level', movement: 'static', focalLength: '35mm', semanticSkills: [] },
-      lighting: { keyLightDirection: 'front', mood: 'cinematic', colorTemperature: 'neutral', fogAtmosphere: false },
-      composition: { rule: 'symmetrical', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
+      camera: { shotSize: 'wide', angle: 'eye_level', movement: 'push_in', focalLength: '24mm', semanticSkills: ['pushin'] },
+      lighting: { keyLightDirection: lightingDirection as any, mood, colorTemperature: colorTemp, fogAtmosphere: fog },
+      composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
       acting: [],
       transition: { type: 'dissolve', durationSeconds: 0.5 },
       requiredAssetIds: [],
       dependsOnShotIds: [],
-      directorLocks: {
-        lockCamera: false,
-        lockLighting: false,
-        lockComposition: false,
-        lockActing: false,
-        lockDuration: false,
-      },
+      directorLocks: { lockCamera: false, lockLighting: false, lockComposition: false, lockActing: false, lockDuration: false },
       promptPacket: {
-        positivePrompt: hasTitle ? `Title Card: ${cleanPrompt.slice(0, 60)}` : `Wide establishing shot: ${cleanPrompt}`,
-        negativePrompt: 'blurry, low quality, glitch',
+        positivePrompt: hasExplicitTitle
+          ? `Title Card: ${cleanPrompt.slice(0, 60)}`
+          : `Wide establishing atmospheric shot setting the scene: ${cleanPrompt}`,
+        negativePrompt: 'blurry, low quality, glitch, modern artifacts',
         systemDirectives: [],
       },
     } as any);
 
-    // Shot 2: Main character / action
+    // Shot 2: Character / Subject Action (materially reacting to prompt)
     shots.push({
       id: `SHOT_SC01_SH02`,
       sceneId: 'SCENE_01',
@@ -389,34 +478,30 @@ export class ZeroTouchProductionOrchestrator {
       complexity: 'complex_generative_video',
       rendererIntent: 'generative_full_video',
       frame: { durationSeconds: 4, aspectRatio: '16:9', targetFps: 24 },
-      camera: { shotSize: 'medium', angle: 'eye_level', movement: 'push_in', focalLength: '50mm', semanticSkills: [] },
-      lighting: { keyLightDirection: 'left', mood: 'dramatic', colorTemperature: 'stylized', fogAtmosphere: true },
+      camera: { shotSize: 'medium', angle: 'eye_level', movement: 'pan_left', focalLength: '50mm', semanticSkills: [] },
+      lighting: { keyLightDirection: lightingDirection as any, mood, colorTemperature: colorTemp, fogAtmosphere: fog },
       composition: { rule: 'rule_of_thirds', subjectPlacement: 'left_third', depthLayers: { foreground: [], midground: [], background: [] } },
-      acting: [{
-        characterId: 'HERO',
-        pose: 'action',
-        expression: 'focused',
-        gazeDirection: 'screen_left',
-        actionPrompt: cleanPrompt,
-      }],
+      acting: [
+        {
+          characterId: subjectName,
+          pose: 'active_movement',
+          expression: 'determined',
+          gazeDirection: 'screen_right',
+          actionPrompt: `${subjectName} reacting to environment: ${cleanPrompt}`,
+        },
+      ],
       transition: { type: 'cut', durationSeconds: 0 },
       requiredAssetIds: [],
       dependsOnShotIds: ['SHOT_SC01_SH01'],
-      directorLocks: {
-        lockCamera: false,
-        lockLighting: false,
-        lockComposition: false,
-        lockActing: false,
-        lockDuration: false,
-      },
+      directorLocks: { lockCamera: false, lockLighting: false, lockComposition: false, lockActing: false, lockDuration: false },
       promptPacket: {
-        positivePrompt: `Medium dynamic shot: ${cleanPrompt}`,
-        negativePrompt: 'blurry, deformities, bad hands',
+        positivePrompt: `Medium cinematic shot focusing on ${subjectName}: ${cleanPrompt}`,
+        negativePrompt: 'blurry, distorted anatomy, morphing hands',
         systemDirectives: [],
       },
     } as any);
 
-    // Shot 3: Detail / reaction / climax
+    // Shot 3: Climax / Dramatic Close-Up
     shots.push({
       id: `SHOT_SC01_SH03`,
       sceneId: 'SCENE_01',
@@ -425,64 +510,57 @@ export class ZeroTouchProductionOrchestrator {
       complexity: 'complex_generative_video',
       rendererIntent: 'generative_full_video',
       frame: { durationSeconds: 4, aspectRatio: '16:9', targetFps: 24 },
-      camera: { shotSize: 'close_up', angle: 'low_angle', movement: 'orbit_clockwise', focalLength: '85mm', semanticSkills: [] },
-      lighting: { keyLightDirection: 'right', mood: 'intense', colorTemperature: 'cool', fogAtmosphere: false },
+      camera: { shotSize: 'close_up', angle: 'low_angle', movement: 'push_in', focalLength: '85mm', semanticSkills: [] },
+      lighting: { keyLightDirection: 'left', mood, colorTemperature: colorTemp, fogAtmosphere: false },
       composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
-      acting: [{
-        characterId: 'HERO',
-        pose: 'climax',
-        expression: 'intense',
-        gazeDirection: 'direct_to_camera',
-        actionPrompt: `Intense close-up moment: ${cleanPrompt}`,
-      }],
+      acting: [
+        {
+          characterId: subjectName,
+          pose: 'high_tension',
+          expression: 'intense',
+          gazeDirection: 'direct_to_camera',
+          actionPrompt: `Dramatic high point: ${cleanPrompt}`,
+        },
+      ],
       transition: { type: 'cut', durationSeconds: 0 },
       requiredAssetIds: [],
       dependsOnShotIds: ['SHOT_SC01_SH02'],
-      directorLocks: {
-        lockCamera: false,
-        lockLighting: false,
-        lockComposition: false,
-        lockActing: false,
-        lockDuration: false,
-      },
+      directorLocks: { lockCamera: false, lockLighting: false, lockComposition: false, lockActing: false, lockDuration: false },
       promptPacket: {
-        positivePrompt: `Close-up dramatic angle: ${cleanPrompt}`,
-        negativePrompt: 'blurry, poor anatomy',
+        positivePrompt: `Intense close-up dramatic peak: ${cleanPrompt}`,
+        negativePrompt: 'blurry, bad eyes, deformation',
         systemDirectives: [],
       },
     } as any);
 
-    // Shot 4: Outro / End Credits card
+    // Shot 4: Narrative Resolution or Concluding Impression
     shots.push({
       id: `SHOT_SC01_SH04`,
       sceneId: 'SCENE_01',
       shotNumber: 4,
-      purpose: 'transition',
-      complexity: 'simple_transform',
-      rendererIntent: 'deterministic_hyperframes',
-      frame: { durationSeconds: 3, aspectRatio: '16:9', targetFps: 24 },
-      camera: { shotSize: 'wide', angle: 'eye_level', movement: 'static', focalLength: '35mm', semanticSkills: [] },
-      lighting: { keyLightDirection: 'front', mood: 'somber', colorTemperature: 'neutral', fogAtmosphere: false },
+      purpose: 'resolution',
+      complexity: 'complex_generative_video',
+      rendererIntent: 'generative_full_video',
+      frame: { durationSeconds: 3.5, aspectRatio: '16:9', targetFps: 24 },
+      camera: { shotSize: 'wide', angle: 'high_angle', movement: 'pull_out', focalLength: '35mm', semanticSkills: [] },
+      lighting: { keyLightDirection: 'back', mood, colorTemperature: colorTemp, fogAtmosphere: fog },
       composition: { rule: 'symmetrical', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
       acting: [],
       transition: { type: 'fade_to_black', durationSeconds: 1 },
       requiredAssetIds: [],
       dependsOnShotIds: ['SHOT_SC01_SH03'],
-      directorLocks: {
-        lockCamera: false,
-        lockLighting: false,
-        lockComposition: false,
-        lockActing: false,
-        lockDuration: false,
-      },
+      directorLocks: { lockCamera: false, lockLighting: false, lockComposition: false, lockActing: false, lockDuration: false },
       promptPacket: {
-        positivePrompt: 'End Credits: Directed by Antigravity Studio',
-        negativePrompt: '',
+        positivePrompt: `Wide resolution shot capturing final aftermath: ${cleanPrompt}`,
+        negativePrompt: 'blurry, poor composition',
         systemDirectives: [],
       },
     } as any);
 
-    return shots;
+    return {
+      shots,
+      method: 'DETERMINISTIC_PROMPT_SENSITIVE_SYNTHESIS',
+    };
   }
 
   /**
@@ -493,7 +571,6 @@ export class ZeroTouchProductionOrchestrator {
     const duration = shot.frame.durationSeconds || 3;
 
     try {
-      // Try local HtmlMotionEngineAdapter if tools available
       const adapter = new HtmlMotionEngineAdapter();
       await adapter.render({
         projectId: shot.sceneId,
@@ -503,7 +580,7 @@ export class ZeroTouchProductionOrchestrator {
         outputPath,
       });
     } catch {
-      // Fallback: create mock video MP4 file for local testing
+      // Fallback for mock environments
       fs.writeFileSync(outputPath, Buffer.from(`mock_local_mp4_content_${shot.id}`));
     }
   }
@@ -572,7 +649,6 @@ export class ZeroTouchProductionOrchestrator {
         });
         return renderRes.verification;
       } catch {
-        // Fallback for mock environments
         this.writeFallbackMaster(shotVideoMap, masterOutputPath);
         return ArtifactVerifier.verify(masterOutputPath);
       }

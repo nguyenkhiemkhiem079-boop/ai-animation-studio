@@ -12,3 +12,5 @@ export * from './flow-batch-compiler.js';
 export * from './credit-aware-planner.js';
 export * from './flow-browser-operator.js';
 export * from './zero-touch-orchestrator.js';
+export * from './flow-semantic-discovery.js';
+export * from './flow-contract-probe.js';

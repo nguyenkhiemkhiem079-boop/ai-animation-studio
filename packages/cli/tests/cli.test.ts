@@ -478,6 +478,19 @@ Then you know it was necessary.`;
     const uiCode = await runCli(['ui', '--port', '3000'], { cwd: tempDir, storage });
     expect(uiCode).toBe(0);
   });
+
+  it('runs studio create with --dry-run producing zero-credit preflight manifest', async () => {
+    const code = await runCli(
+      ['create', 'A solitary cyberpunk detective walks through rain-slick neon streets', '--dry-run', '--project', 'proj_dryrun_test'],
+      { cwd: tempDir, storage }
+    );
+    expect(code).toBe(0);
+  });
+
+  it('runs studio flow doctor successfully', async () => {
+    const code = await runCli(['flow', 'doctor'], { cwd: tempDir, storage });
+    expect(code).toBe(0);
+  });
 });
 
 
