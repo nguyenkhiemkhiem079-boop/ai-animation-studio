@@ -954,7 +954,12 @@ export async function findAssetContainers(page: Page): Promise<
         }
       });
 
-      candidateCards.forEach((card, idx) => {
+      // Filter out candidate cards that are descendants of another candidate card
+      const dedupedCards = candidateCards.filter(
+        (c) => !candidateCards.some((parent) => parent !== c && parent.contains(c))
+      );
+
+      dedupedCards.forEach((card, idx) => {
         // Skip static marketing / promotion banners — never user-generated content
         const cardCls = (card.className || '').toLowerCase();
         const cardElId = (card.getAttribute('id') || '').toLowerCase();
@@ -1011,11 +1016,43 @@ export async function findAssetContainers(page: Page): Promise<
           );
         });
 
-        const hasError = card.querySelector('[class*="error"], [class*="fail"], [role="alert"]') !== null;
-        const isGenerating =
-          card.querySelector(
-            'mat-progress-spinner, mat-spinner, [role="progressbar"], [class*="progress"], [class*="spinner"], [class*="loading"]'
-          ) !== null;
+        // Visible error check
+        const errEl = card.querySelector('[class*="error"], [class*="fail"], [role="alert"]');
+        let hasError = false;
+        if (errEl) {
+          try {
+            const rect = errEl.getBoundingClientRect();
+            const style = window.getComputedStyle(errEl);
+            hasError =
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              style.opacity !== '0' &&
+              rect.width > 0 &&
+              rect.height > 0;
+          } catch {
+            hasError = false;
+          }
+        }
+
+        // Visible spinner / progress check
+        const spinEl = card.querySelector(
+          'mat-progress-spinner, mat-spinner, [role="progressbar"], [class*="spinner"]'
+        );
+        let isGenerating = false;
+        if (spinEl) {
+          try {
+            const rect = spinEl.getBoundingClientRect();
+            const style = window.getComputedStyle(spinEl);
+            isGenerating =
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              style.opacity !== '0' &&
+              rect.width > 0 &&
+              rect.height > 0;
+          } catch {
+            isGenerating = false;
+          }
+        }
 
         const hasPlayIcon =
           (card.textContent || '').includes('play_circle') ||
@@ -1028,10 +1065,9 @@ export async function findAssetContainers(page: Page): Promise<
 
         const isReady =
           !hasError &&
-          !isGenerating &&
           (hasVideo ||
             hasDownload ||
-            (isFlowVideoTile && (hasPlayIcon || hasThumbnail)) ||
+            (isFlowVideoTile && (hasPlayIcon || hasThumbnail) && !isGenerating) ||
             card.querySelector('[class*="ready"], [class*="complete"]') !== null);
 
         const status: FlowDiscoveredAssetContainer['status'] = hasError
@@ -1126,7 +1162,7 @@ export async function findDownloadAction(
         if (idxMatch) {
           const allCards = Array.from(
             document.querySelectorAll(
-              '[data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
+              'flow-grid-tile-container, flow-video-tile, [data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
               'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"], ' +
               '[role="listitem"], [role="article"]'
             )
@@ -1196,7 +1232,7 @@ export async function findDownloadAction(
 
       // Check if more/kebab menu exists that might contain download
       const kebab = container.querySelector(
-        'button[aria-label*="More" i], button[aria-label*="Menu" i], [aria-haspopup="menu"]'
+        'button.mat-mdc-menu-trigger, button[aria-label*="More" i], button[aria-label*="Menu" i], button[aria-label*="Tuỳ chọn" i], [aria-haspopup="menu"]'
       );
       if (kebab) {
         return {
