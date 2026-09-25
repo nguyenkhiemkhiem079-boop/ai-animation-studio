@@ -145,11 +145,11 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       const createArgs = args.slice(1);
       const isDryRun = createArgs.includes('--dry-run');
       const isSingleShot = createArgs.includes('--single-shot') || createArgs.includes('-1');
-      const shotsIdx = createArgs.indexOf('--shots');
+      const shotsIdx = createArgs.indexOf('--shots') !== -1 ? createArgs.indexOf('--shots') : createArgs.indexOf('--max-shots');
       const maxShots = isSingleShot ? 1 : (shotsIdx !== -1 && createArgs[shotsIdx + 1] ? parseInt(createArgs[shotsIdx + 1], 10) : undefined);
       const projIdx = createArgs.indexOf('--project');
       const projectId = projIdx !== -1 && createArgs[projIdx + 1] ? createArgs[projIdx + 1] : 'project_flow_zero';
-      const flagsWithValues = new Set(['--project', '--shots']);
+      const flagsWithValues = new Set(['--project', '--shots', '--max-shots']);
       const nonFlagArgs: string[] = [];
       for (let i = 0; i < createArgs.length; i++) {
         const arg = createArgs[i];
