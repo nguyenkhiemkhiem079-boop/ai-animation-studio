@@ -907,6 +907,7 @@ export async function findAssetContainers(page: Page): Promise<
       // 1. Semantic card / container selectors
       const selectorCards = Array.from(
         document.querySelectorAll(
+          'flow-grid-tile-container, flow-video-tile, flow-tile-container, ' +
           '[data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
           'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"], ' +
           '[role="listitem"], [role="article"]'
@@ -978,7 +979,11 @@ export async function findAssetContainers(page: Page): Promise<
           }
         }
         const nameEl = card.querySelector('[class*="title"], [class*="name"], h3, h4, span');
-        const name = card.getAttribute('data-asset-name') || (nameEl ? nameEl.textContent?.trim() : '') || `Asset ${idx + 1}`;
+        const name =
+          card.getAttribute('aria-label') ||
+          card.getAttribute('data-asset-name') ||
+          (nameEl ? nameEl.textContent?.trim() : '') ||
+          `Asset ${idx + 1}`;
         const videoEl = card.tagName.toLowerCase() === 'video' ? (card as HTMLVideoElement) : card.querySelector('video');
         const hasVideo =
           videoEl !== null &&
@@ -1011,10 +1016,23 @@ export async function findAssetContainers(page: Page): Promise<
           card.querySelector(
             'mat-progress-spinner, mat-spinner, [role="progressbar"], [class*="progress"], [class*="spinner"], [class*="loading"]'
           ) !== null;
+
+        const hasPlayIcon =
+          (card.textContent || '').includes('play_circle') ||
+          card.querySelector('mat-icon, [class*="play"]') !== null;
+        const hasThumbnail = card.querySelector('img') !== null;
+        const isFlowVideoTile =
+          card.tagName.toLowerCase() === 'flow-video-tile' ||
+          card.tagName.toLowerCase() === 'flow-grid-tile-container' ||
+          card.querySelector('flow-video-tile') !== null;
+
         const isReady =
           !hasError &&
           !isGenerating &&
-          (hasVideo || hasDownload || card.querySelector('[class*="ready"], [class*="complete"]') !== null);
+          (hasVideo ||
+            hasDownload ||
+            (isFlowVideoTile && (hasPlayIcon || hasThumbnail)) ||
+            card.querySelector('[class*="ready"], [class*="complete"]') !== null);
 
         const status: FlowDiscoveredAssetContainer['status'] = hasError
           ? 'FAILED'
@@ -1025,8 +1043,8 @@ export async function findAssetContainers(page: Page): Promise<
           : 'UNKNOWN';
 
         const hasText = (card.textContent || '').trim().length > 0;
-        const hasMedia = hasVideo || card.querySelector('img') !== null;
-        const hasAction = hasDownload || card.querySelector('button, [role="button"]') !== null;
+        const hasMedia = hasVideo || hasThumbnail;
+        const hasAction = hasDownload || isFlowVideoTile || card.querySelector('button, [role="button"]') !== null;
 
         // Skip blank layout containers / canvas background tiles that have no media, action, spinner, error, or text
         if (!hasMedia && !hasAction && !isGenerating && !hasError && !hasText) {
@@ -1038,7 +1056,7 @@ export async function findAssetContainers(page: Page): Promise<
           name,
           status,
           hasVideo: Boolean(hasVideo),
-          hasDownloadAction: hasDownload || Boolean(hasVideo),
+          hasDownloadAction: hasDownload || isFlowVideoTile || Boolean(hasVideo),
           rawText: (card.textContent || '').slice(0, 100),
         });
       });

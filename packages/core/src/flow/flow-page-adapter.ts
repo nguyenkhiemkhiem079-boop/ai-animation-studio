@@ -919,6 +919,114 @@ export class PuppeteerFlowPage implements IFlowPage {
       }
     }
 
+    // Strategy 1b: Google Flow Tile Kebab Menu Download (flow-grid-tile-container / flow-video-tile)
+    if (!downloadSucceeded) {
+      const tileMenuTriggered = await this.page.evaluate((assetId: string) => {
+        // Find container
+        let container = document.querySelector(`[data-asset-id="${assetId}"]`);
+        if (!container) container = document.querySelector(`[data-studio-asset-id="${assetId}"]`);
+        if (!container) container = document.getElementById(assetId);
+        if (!container) {
+          const idxMatch = assetId.match(/asset_card_(\d+)/);
+          if (idxMatch) {
+            const allCards = Array.from(
+              document.querySelectorAll(
+                'flow-grid-tile-container, flow-video-tile, [data-asset-id], [class*="asset-card"], [class*="video-card"], mat-card, .tile'
+              )
+            );
+            container = allCards[parseInt(idxMatch[1], 10)] || null;
+          }
+        }
+        if (!container) {
+          container = document.querySelector('flow-grid-tile-container, flow-video-tile');
+        }
+        if (!container) return false;
+
+        // Close any lingering open overlays first
+        const backdrop = document.querySelector('.cdk-overlay-backdrop') as HTMLElement | null;
+        if (backdrop) backdrop.click();
+
+        // Find more_vert button
+        const moreCandidates = Array.from(
+          container.querySelectorAll('button.mat-mdc-menu-trigger, button[aria-label*="Tuỳ chọn" i], button[aria-label*="more" i], button')
+        ) as HTMLElement[];
+        const moreBtn =
+          moreCandidates.find((b) => {
+            const a = (b.getAttribute('aria-label') || '').toLowerCase();
+            const t = (b.textContent || '').trim().toLowerCase();
+            return b.classList.contains('mat-mdc-menu-trigger') || a.includes('tuỳ chọn') || a.includes('more') || t.includes('more_vert');
+          }) || null;
+        if (!moreBtn) return false;
+
+        moreBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+        moreBtn.click();
+        return true;
+      }, flowAssetId);
+
+      if (tileMenuTriggered) {
+        await new Promise((r) => setTimeout(r, 1200));
+
+        // Click "downloadTải xuống" menuitem
+        const dlItemClicked = await this.page.evaluate(() => {
+          const items = Array.from(
+            document.querySelectorAll('.mat-mdc-menu-panel [role="menuitem"], .mat-mdc-menu-panel button')
+          );
+          const dlBtn = items.find((i) => {
+            const t = (i.textContent || '').toLowerCase();
+            return t.includes('tải xuống') || t.includes('download');
+          }) as HTMLElement | undefined;
+          if (!dlBtn) return false;
+          dlBtn.click();
+          return true;
+        });
+
+        if (dlItemClicked) {
+          await new Promise((r) => setTimeout(r, 1200));
+
+          // Click resolution item (720p / Original / 1080p)
+          await this.page.evaluate(() => {
+            const allButtons = Array.from(
+              document.querySelectorAll('.mat-mdc-menu-panel [role="menuitem"], .mat-mdc-menu-panel button')
+            );
+            const origBtn = allButtons.find((b) => {
+              const t = (b.textContent || '').toLowerCase();
+              return t.includes('720p') || t.includes('gốc') || t.includes('original') || t.includes('1080p');
+            }) as HTMLElement | undefined;
+            if (origBtn) origBtn.click();
+          });
+
+          // Wait for file to download
+          const maxWait = 45000;
+          const start = Date.now();
+          let downloadedPath: string | undefined;
+
+          while (Date.now() - start < maxWait) {
+            const files = syncFs
+              .readdirSync(destDir)
+              .filter((f) => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.endsWith('.mp4'));
+            if (files.length > 0) {
+              const sorted = files.sort((a, b) => {
+                return (
+                  syncFs.statSync(path.join(destDir, b)).mtimeMs -
+                  syncFs.statSync(path.join(destDir, a)).mtimeMs
+                );
+              });
+              downloadedPath = path.join(destDir, sorted[0]);
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+
+          if (downloadedPath && syncFs.existsSync(downloadedPath)) {
+            if (downloadedPath !== destinationFilePath) {
+              syncFs.copyFileSync(downloadedPath, destinationFilePath);
+            }
+            downloadSucceeded = true;
+          }
+        }
+      }
+    }
+
     // Strategy 2: Authenticated in-page extraction of <video> source if Strategy 1 did not produce a file
     if (!downloadSucceeded) {
       const base64Data = await this.page.evaluate(async (assetId: string) => {
