@@ -568,6 +568,7 @@ export class PuppeteerFlowPage implements IFlowPage {
       );
     }
 
+    let clickDispatched = false;
     if (generateDiscovery.status === 'FOUND') {
       const generateBtn = await this.page.$(generateDiscovery.locatorStrategy);
       if (generateBtn) {
@@ -584,19 +585,22 @@ export class PuppeteerFlowPage implements IFlowPage {
           .catch(() => {});
 
         await generateBtn.click().catch(() => {});
+        clickDispatched = true;
       }
     }
 
-    // Verify if submission cleared prompt or if Enter key needs to be pressed
-    await new Promise((r) => setTimeout(r, 600));
-    const stillHasInput = await inputEl.evaluate((el: any) => {
-      const val = ('value' in el ? el.value : el.innerText || el.textContent || '').trim();
-      return val.length > 0;
-    }).catch(() => false);
+    // If generate button was not dispatched, fallback to pressing Enter
+    if (!clickDispatched) {
+      await new Promise((r) => setTimeout(r, 600));
+      const stillHasInput = await inputEl.evaluate((el: any) => {
+        const val = ('value' in el ? el.value : el.innerText || el.textContent || '').trim();
+        return val.length > 0;
+      }).catch(() => false);
 
-    if (stillHasInput) {
-      await inputEl.focus();
-      await this.page.keyboard.press('Enter');
+      if (stillHasInput) {
+        await inputEl.focus();
+        await this.page.keyboard.press('Enter');
+      }
     }
 
     // Confirm generation initiated
@@ -609,6 +613,73 @@ export class PuppeteerFlowPage implements IFlowPage {
     };
   }
 
+  /**
+   * Detects and clicks the Flow Agent in-panel confirmation gate.
+   * When Flow Agent asks "Bạn có muốn tôi bắt đầu tạo... với chi phí là X tín dụng không?"
+   * this method finds and clicks the "Phê duyệt" / "Approve" button.
+   * Returns true if an approval was dispatched.
+   */
+  private async handleAgentConfirmationGate(): Promise<boolean> {
+    try {
+      const approved = await this.page.evaluate(() => {
+        // Scan all visible leaf text nodes for approval keywords
+        const APPROVE_KEYWORDS = [
+          'phê duyệt',
+          'luôn phê duyệt',
+          'approve',
+          'always approve',
+        ];
+
+        const clickables = Array.from(
+          document.querySelectorAll('button, [role="button"], [role="option"], div[tabindex], span[tabindex]')
+        );
+
+        for (const el of clickables) {
+          const text = (el.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
+          if (APPROVE_KEYWORDS.some((kw) => text === kw || text.startsWith(kw))) {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            const isVisible =
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              rect.width > 0 &&
+              rect.height > 0;
+            if (isVisible) {
+              (el as HTMLElement).click();
+              return true;
+            }
+          }
+        }
+        return false;
+      });
+      return Boolean(approved);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Detects whether the Flow Agent is waiting for confirmation (cost approval gate).
+   */
+  private async detectAgentConfirmationPending(): Promise<boolean> {
+    try {
+      return await this.page.evaluate(() => {
+        const PENDING_SIGNALS = [
+          'phê duyệt',
+          'luôn phê duyệt',
+          'tín dụng',
+          'approve',
+          'always approve',
+          'credits',
+        ];
+        const body = document.body?.innerText?.toLowerCase() || '';
+        return PENDING_SIGNALS.some((s) => body.includes(s));
+      });
+    } catch {
+      return false;
+    }
+  }
+
   public async waitForGeneration(
     shotIds: string[],
     options: { timeoutMs?: number; pollIntervalMs?: number } = {}
@@ -617,8 +688,25 @@ export class PuppeteerFlowPage implements IFlowPage {
     const pollIntervalMs = options.pollIntervalMs ?? 5000;
     const startTime = Date.now();
     const results = new Map<string, FlowGeneratedAssetDescriptor>();
+    let confirmationGateHandled = false;
 
     while (Date.now() - startTime < timeoutMs) {
+      // ── Phase 1: Handle Flow Agent confirmation gate (cost approval) ──────────
+      // The agent may ask "Do you want me to create this video for 20 credits?"
+      // with buttons: Phê duyệt (Approve) / Luôn phê duyệt (Always approve) / Từ chối (Decline)
+      if (!confirmationGateHandled) {
+        const gatePending = await this.detectAgentConfirmationPending();
+        if (gatePending) {
+          const clicked = await this.handleAgentConfirmationGate();
+          if (clicked) {
+            confirmationGateHandled = true;
+            // Wait for agent to process approval and start generation
+            await new Promise((r) => setTimeout(r, 3000));
+            continue;
+          }
+        }
+      }
+
       const assets = await this.listGeneratedAssets();
 
       // Apply Shot-ID Mapping Strategies:
@@ -673,6 +761,7 @@ export class PuppeteerFlowPage implements IFlowPage {
 
     return results;
   }
+
 
   public async listGeneratedAssets(): Promise<FlowGeneratedAssetDescriptor[]> {
     const discovery = await findAssetContainers(this.page);

@@ -273,10 +273,24 @@ export class ChromeFlowSessionBridge {
   public async findOrOpenFlowPage(browser: Browser, targetUrl = this.config.flowUrl): Promise<Page> {
     const pages = await browser.pages();
 
-    // 1. Look for existing Google Flow tab
+    // 1a. Priority: look for an active /project/<uuid> workspace tab first.
+    //     This prevents returning the Flow Home page when both tabs are open.
     for (const p of pages) {
       const url = p.url();
-      if (url.includes('flow.google.com') || (targetUrl && url.startsWith(targetUrl))) {
+      if (url.includes('flow.google.com/project/')) {
+        await p.bringToFront().catch(() => {});
+        return p;
+      }
+    }
+
+    // 1b. Fallback: any other flow.google.com tab
+    for (const p of pages) {
+      const url = p.url();
+      if (
+        url.includes('flow.google.com') &&
+        url !== 'about:blank' &&
+        url !== 'chrome://newtab/'
+      ) {
         await p.bringToFront().catch(() => {});
         return p;
       }

@@ -954,6 +954,19 @@ export async function findAssetContainers(page: Page): Promise<
       });
 
       candidateCards.forEach((card, idx) => {
+        // Skip static marketing / promotion banners — never user-generated content
+        const cardCls = (card.className || '').toLowerCase();
+        const cardElId = (card.getAttribute('id') || '').toLowerCase();
+        const bannerInner = card.querySelector('[class*="promotion-banner"]');
+        if (bannerInner || cardCls.includes('promotion-banner') || cardElId.includes('promotion-banner')) return;
+
+        // Skip videos sourced from Google's static marketing CDN
+        const videoEl2 = card.tagName.toLowerCase() === 'video' ? (card as HTMLVideoElement) : card.querySelector('video');
+        if (videoEl2) {
+          const src2 = videoEl2.src || videoEl2.currentSrc || videoEl2.querySelector('source')?.src || '';
+          if (src2.includes('gstatic.com/aitestkitchen/website/flow/banners/')) return;
+        }
+
         let id = card.getAttribute('data-asset-id') || (card as HTMLElement).id;
         if (!id) {
           id = `asset_card_${idx}`;
