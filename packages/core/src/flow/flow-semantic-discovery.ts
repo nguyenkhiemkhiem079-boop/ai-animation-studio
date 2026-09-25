@@ -196,7 +196,7 @@ export function parseCreditText(rawText?: string | null): {
     };
   }
 
-  const clean = rawText.trim();
+  const clean = rawText.trim().replace(/[\w\.-]+@[\w\.-]+\.\w+/g, '[MASKED_ACCOUNT]');
   const lower = clean.toLowerCase();
 
   // Explicit label + number: e.g. "credits: 45", "45 credits", "45/50 credits"
@@ -769,11 +769,16 @@ export async function findCreditIndicator(page: Page): Promise<
 
     const parsed = parseCreditText(rawCreditInfo.rawText);
 
+    const cleanAria = (rawCreditInfo.ariaLabel || '').replace(/[\w\.-]+@[\w\.-]+\.\w+/g, '[MASKED_ACCOUNT]');
+    const safeLocator = rawCreditInfo.ariaLabel
+      ? (rawCreditInfo.ariaLabel.includes('Gói thành viên') ? '[aria-label*="Gói thành viên"]' : `[aria-label="${cleanAria}"]`)
+      : rawCreditInfo.tagName;
+
     return {
       status: parsed.isCertain ? 'FOUND' : parsed.parsedCredits !== null ? 'FOUND' : 'AMBIGUOUS',
       confidence: parsed.confidence,
       candidateCount: 1,
-      locatorStrategy: rawCreditInfo.ariaLabel ? `[aria-label="${rawCreditInfo.ariaLabel}"]` : rawCreditInfo.tagName,
+      locatorStrategy: safeLocator,
       evidence: `Observed text: "${parsed.rawText}" (${parsed.details})`,
       rawText: parsed.rawText,
       parsedCredits: parsed.parsedCredits,
@@ -888,22 +893,107 @@ export async function findAssetContainers(page: Page): Promise<
   try {
     const rawAssets: FlowDiscoveredAssetContainer[] = await page.evaluate(() => {
       const results: FlowDiscoveredAssetContainer[] = [];
-      const cards = Array.from(
+      const seenElements = new Set<Element>();
+      const candidateCards: Element[] = [];
+
+      // 1. Semantic card / container selectors
+      const selectorCards = Array.from(
         document.querySelectorAll(
-          '[data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], [role="listitem"]'
+          '[data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
+          'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"], ' +
+          '[role="listitem"], [role="article"]'
         )
       );
+      selectorCards.forEach((c) => {
+        if (!seenElements.has(c)) {
+          seenElements.add(c);
+          candidateCards.push(c);
+        }
+      });
 
-      cards.forEach((card, idx) => {
-        const id = card.getAttribute('data-asset-id') || `asset_card_${idx}`;
+      // 2. Direct discovery of any container wrapping a <video> element
+      const videos = Array.from(document.querySelectorAll('video'));
+      videos.forEach((video) => {
+        const container =
+          video.closest(
+            '[data-asset-id], mat-card, [class*="card"], [class*="tile"], [class*="item"], [role="listitem"]'
+          ) ||
+          video.parentElement ||
+          video;
+        if (!seenElements.has(container)) {
+          seenElements.add(container);
+          candidateCards.push(container);
+        }
+      });
+
+      // 3. Direct discovery of active generation spinners / progress indicators
+      const spinners = Array.from(
+        document.querySelectorAll(
+          'mat-progress-spinner, mat-spinner, [role="progressbar"], [class*="spinner"], [class*="progress"]'
+        )
+      );
+      spinners.forEach((spinner) => {
+        const container =
+          spinner.closest(
+            '[data-asset-id], mat-card, [class*="card"], [class*="tile"], [class*="item"], div'
+          ) ||
+          spinner.parentElement ||
+          spinner;
+        if (!seenElements.has(container)) {
+          seenElements.add(container);
+          candidateCards.push(container);
+        }
+      });
+
+      candidateCards.forEach((card, idx) => {
+        let id = card.getAttribute('data-asset-id') || (card as HTMLElement).id;
+        if (!id) {
+          id = `asset_card_${idx}`;
+          try {
+            card.setAttribute('data-asset-id', id);
+            card.setAttribute('data-studio-asset-id', id);
+          } catch {
+            // non-fatal if DOM mutation fails
+          }
+        }
         const nameEl = card.querySelector('[class*="title"], [class*="name"], h3, h4, span');
         const name = card.getAttribute('data-asset-name') || (nameEl ? nameEl.textContent?.trim() : '') || `Asset ${idx + 1}`;
-        const hasVideo = card.querySelector('video') !== null;
-        const hasDownload = card.querySelector('button[aria-label*="Download" i], [aria-label*="download" i]') !== null;
+        const videoEl = card.tagName.toLowerCase() === 'video' ? (card as HTMLVideoElement) : card.querySelector('video');
+        const hasVideo =
+          videoEl !== null &&
+          (Boolean(videoEl.src || videoEl.currentSrc || videoEl.querySelector('source')?.src) ||
+            videoEl.readyState > 0 ||
+            (videoEl.duration || 0) > 0 ||
+            (videoEl.videoWidth || 0) > 0);
+        const allCardButtons = Array.from(card.querySelectorAll('button, [role="button"], a[download]'));
+        const hasDownload = allCardButtons.some((btn) => {
+          const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+          const title = (btn.getAttribute('title') || '').toLowerCase();
+          const text = (btn.textContent || '').trim().toLowerCase();
+          const cls = (btn.className || '').toLowerCase();
+          return (
+            aria.includes('download') ||
+            aria.includes('tải xuống') ||
+            aria.includes('tải video') ||
+            title.includes('download') ||
+            title.includes('tải xuống') ||
+            text.includes('download') ||
+            text.includes('tải xuống') ||
+            text === 'file_download' ||
+            cls.includes('download') ||
+            btn.hasAttribute('download')
+          );
+        });
 
         const hasError = card.querySelector('[class*="error"], [class*="fail"], [role="alert"]') !== null;
-        const isReady = hasVideo || card.querySelector('[class*="ready"], [class*="complete"]') !== null;
-        const isGenerating = card.querySelector('[class*="progress"], [class*="spinner"], [class*="loading"]') !== null;
+        const isGenerating =
+          card.querySelector(
+            'mat-progress-spinner, mat-spinner, [role="progressbar"], [class*="progress"], [class*="spinner"], [class*="loading"]'
+          ) !== null;
+        const isReady =
+          !hasError &&
+          !isGenerating &&
+          (hasVideo || hasDownload || card.querySelector('[class*="ready"], [class*="complete"]') !== null);
 
         const status: FlowDiscoveredAssetContainer['status'] = hasError
           ? 'FAILED'
@@ -913,12 +1003,21 @@ export async function findAssetContainers(page: Page): Promise<
           ? 'GENERATING'
           : 'UNKNOWN';
 
+        const hasText = (card.textContent || '').trim().length > 0;
+        const hasMedia = hasVideo || card.querySelector('img') !== null;
+        const hasAction = hasDownload || card.querySelector('button, [role="button"]') !== null;
+
+        // Skip blank layout containers / canvas background tiles that have no media, action, spinner, error, or text
+        if (!hasMedia && !hasAction && !isGenerating && !hasError && !hasText) {
+          return;
+        }
+
         results.push({
           id,
           name,
           status,
-          hasVideo,
-          hasDownloadAction: hasDownload,
+          hasVideo: Boolean(hasVideo),
+          hasDownloadAction: hasDownload || Boolean(hasVideo),
           rawText: (card.textContent || '').slice(0, 100),
         });
       });
@@ -970,24 +1069,67 @@ export async function findDownloadAction(
       // Find matching container
       let container = document.querySelector(`[data-asset-id="${targetSelector}"]`);
       if (!container) {
-        container = document.querySelector(targetSelector);
+        container = document.querySelector(`[data-studio-asset-id="${targetSelector}"]`);
+      }
+      if (!container) {
+        container = document.getElementById(targetSelector);
+      }
+      if (!container) {
+        try {
+          container = document.querySelector(targetSelector);
+        } catch {
+          // ignore invalid selector syntax
+        }
+      }
+      if (!container) {
+        // Fallback positional match for asset_card_N
+        const idxMatch = targetSelector.match(/asset_card_(\d+)/);
+        if (idxMatch) {
+          const allCards = Array.from(
+            document.querySelectorAll(
+              '[data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
+              'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"], ' +
+              '[role="listitem"], [role="article"]'
+            )
+          );
+          container = allCards[parseInt(idxMatch[1], 10)] || null;
+        }
       }
       if (!container) {
         return { error: 'Target container not found' };
       }
 
       // Search download action WITHIN container only
-      const downloadButtons = Array.from(
+      const candidateElements = Array.from(
         container.querySelectorAll(
-          'button[aria-label*="Download" i], button[title*="Download" i], [role="button"][aria-label*="Download" i], a[download]'
+          'button, [role="button"], a[download], [data-action*="download" i]'
         )
       );
+
+      const downloadButtons = candidateElements.filter((btn) => {
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        const title = (btn.getAttribute('title') || '').toLowerCase();
+        const text = (btn.textContent || '').trim().toLowerCase();
+        const cls = (btn.className || '').toLowerCase();
+        return (
+          aria.includes('download') ||
+          aria.includes('tải xuống') ||
+          aria.includes('tải video') ||
+          title.includes('download') ||
+          title.includes('tải xuống') ||
+          text.includes('download') ||
+          text.includes('tải xuống') ||
+          text === 'file_download' ||
+          cls.includes('download') ||
+          btn.hasAttribute('download')
+        );
+      });
 
       if (downloadButtons.length === 1) {
         const btn = downloadButtons[0];
         return {
           status: 'FOUND',
-          ariaLabel: btn.getAttribute('aria-label') || btn.getAttribute('title') || 'Download',
+          ariaLabel: btn.getAttribute('aria-label') || btn.getAttribute('title') || (btn.textContent || '').trim() || 'Download',
           tagName: btn.tagName.toLowerCase(),
           count: 1,
         };
@@ -998,6 +1140,18 @@ export async function findDownloadAction(
           status: 'AMBIGUOUS',
           count: downloadButtons.length,
           details: 'Multiple download buttons inside asset container',
+        };
+      }
+
+      // Direct media detection: check if container contains a video element with playable source
+      const videoEl = container.tagName.toLowerCase() === 'video' ? (container as HTMLVideoElement) : container.querySelector('video');
+      if (videoEl && (videoEl.src || videoEl.currentSrc || videoEl.querySelector('source')?.src || videoEl.readyState > 0)) {
+        return {
+          status: 'FOUND',
+          ariaLabel: 'Direct Video Element',
+          tagName: 'video',
+          count: 1,
+          hasDirectVideo: true,
         };
       }
 
@@ -1088,7 +1242,17 @@ export async function findStartCreatingControl(page: Page): Promise<
       );
 
       // Safe navigation keywords
-      const primaryKeywords = ['start creating', 'start creation', 'create project', 'new project', 'start a project'];
+      const primaryKeywords = [
+        'start creating',
+        'start creation',
+        'create project',
+        'new project',
+        'start a project',
+        'dự án mới',
+        '+ dự án mới',
+        'tạo dự án',
+        'bắt đầu tạo',
+      ];
       const secondaryKeywords = [
         'get started',
         'blank canvas',
@@ -1100,8 +1264,6 @@ export async function findStartCreatingControl(page: Page): Promise<
         'nuevo proyecto',
         'jetzt erstellen',
         'neues projekt',
-        'bắt đầu tạo',
-        'tạo dự án',
         '作成を開始',
         '新規プロジェクト',
       ];
@@ -1128,6 +1290,7 @@ export async function findStartCreatingControl(page: Page): Promise<
         const lowerAria = ariaLabel.toLowerCase();
         const lowerTitle = title.toLowerCase();
         const combined = `${lowerText} ${lowerAria} ${lowerTitle}`.trim();
+        const stripped = combined.replace(/^[+\s]+/, '').trim();
 
         // 1. Check for credit-consuming disqualifiers
         let isCreditConsuming = false;
@@ -1146,6 +1309,15 @@ export async function findStartCreatingControl(page: Page): Promise<
         if (lowerText === 'start creating' || lowerAria === 'start creating') {
           score += 0.95;
           matches.push('exact live "Start Creating" match');
+        } else if (stripped === 'dự án mới' || stripped.startsWith('dự án mới')) {
+          score += 0.95;
+          matches.push('exact live Vietnamese "Dự án mới" match');
+        } else if (stripped.includes('dự án mới')) {
+          score += 0.9;
+          matches.push('contains Vietnamese "dự án mới"');
+        } else if (stripped.includes('google flow agent') || stripped.includes('flow agent')) {
+          score += 0.65;
+          matches.push('promotional "google flow agent"');
         } else if (lowerText.startsWith('start creating') || lowerAria.startsWith('start creating')) {
           score += 0.9;
           matches.push('starts with "start creating"');
@@ -1253,8 +1425,8 @@ export async function findStartCreatingControl(page: Page): Promise<
       selector = '[data-studio-nav="start-creating"]';
     }
 
-    // Check for ambiguity
-    if (runnerUp && Math.abs(best.score - runnerUp.score) < 0.2) {
+    // Check for ambiguity: if candidate scores are tied (< 0.01 difference), it is ambiguous and fails closed
+    if (runnerUp && Math.abs(best.score - runnerUp.score) < 0.01) {
       return {
         status: 'AMBIGUOUS',
         confidence: 0.45,
@@ -1262,7 +1434,7 @@ export async function findStartCreatingControl(page: Page): Promise<
         locatorStrategy: 'AMBIGUOUS_START_CREATING_CONTROL',
         isSafeNavigation: false,
         classification: 'UNKNOWN',
-        details: `Multiple candidate navigation controls discovered (${candidates.length} candidates)`,
+        details: `Multiple candidate navigation controls discovered with equal confidence (${candidates.length} candidates)`,
         evidence: candidates.slice(0, 3).map((c) => `"${c.text || c.ariaLabel}" (score=${c.score})`).join(' | '),
       };
     }
@@ -1274,7 +1446,7 @@ export async function findStartCreatingControl(page: Page): Promise<
       locatorStrategy: selector,
       isSafeNavigation: true,
       classification: 'SAFE_NAVIGATION',
-      evidence: `Selected safe control: "${best.text || best.ariaLabel}" [${best.matches.join(', ')}]`,
+      evidence: `Selected safe control: "${best.text || best.ariaLabel}" [${(best.matches || []).join(', ')}]`,
       target: best,
     };
   } catch (err: any) {

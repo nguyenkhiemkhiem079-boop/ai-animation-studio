@@ -12,6 +12,18 @@ export interface VerificationOptions {
   requireValidMedia?: boolean;
 }
 
+export interface VideoVerificationResult {
+  exists: boolean;
+  nonEmpty: boolean;
+  hasVideoStream: boolean;
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
+  codec?: string;
+  fileSizeBytes?: number;
+  error?: string;
+}
+
 export class ArtifactVerifier {
   /**
    * Verifies a physical file on disk, checking existence, non-zero size,
@@ -58,49 +70,86 @@ export class ArtifactVerifier {
       // Probe audio/video formats with FFprobe if available
       const isMedia = /\.(mp4|webm|mkv|mov|wav|mp3|aac|flac|ogg)$/i.test(filePath);
       if (isMedia) {
+        // Fast-path guard: detect fake text / HTML / mock payload masquerading as media
+        const headerText = buffer.subarray(0, Math.min(buffer.length, 512)).toString('utf8');
+        const isFakeOrHtml =
+          headerText.startsWith('mock_') ||
+          headerText.startsWith('<!DOCTYPE html') ||
+          headerText.toLowerCase().includes('<html') ||
+          headerText.toLowerCase().includes('{"error"');
+
+        if (isFakeOrHtml) {
+          result.hasVideoStream = false;
+          result.hasAudioStream = false;
+          if (options.requireVideoStream || options.requireValidMedia) {
+            result.error = `Media file "${filePath}" contains mock, HTML, or text payload masquerading as video.`;
+            return result;
+          }
+        }
+
         const ffprobePath = MediaToolchainDoctor.getFfprobePath();
-        try {
-          const rawOut = execFileSync(
-            ffprobePath,
-            ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath],
-            { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }
-          );
-          const probeData = JSON.parse(rawOut);
+        if (!ffprobePath) {
+          result.hasVideoStream = false;
+          result.hasAudioStream = false;
+          if (options.requireVideoStream || options.requireValidMedia) {
+            result.error = `FFprobe toolchain unavailable to verify media stream in "${filePath}".`;
+          }
+        } else {
+          try {
+            const rawOut = execFileSync(
+              ffprobePath,
+              ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath],
+              { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }
+            );
+            const probeData = JSON.parse(rawOut);
 
-          const videoStream = probeData.streams?.find((s: any) => s.codec_type === 'video');
-          const audioStream = probeData.streams?.find((s: any) => s.codec_type === 'audio');
+            const videoStream = probeData.streams?.find((s: any) => s.codec_type === 'video');
+            const audioStream = probeData.streams?.find((s: any) => s.codec_type === 'audio');
 
-          result.durationSeconds = parseFloat(probeData.format?.duration ?? '0');
-          result.hasVideoStream = Boolean(videoStream);
-          result.hasAudioStream = Boolean(audioStream);
-          result.streams = {
-            videoCount: videoStream ? 1 : 0,
-            audioCount: audioStream ? 1 : 0,
-          };
+            result.durationSeconds = parseFloat(probeData.format?.duration ?? videoStream?.duration ?? '0');
+            result.hasVideoStream = Boolean(videoStream);
+            result.hasAudioStream = Boolean(audioStream);
+            result.streams = {
+              videoCount: videoStream ? 1 : 0,
+              audioCount: audioStream ? 1 : 0,
+            };
 
-          if (videoStream) {
-            result.width = videoStream.width;
-            result.height = videoStream.height;
-            result.videoCodec = videoStream.codec_name;
-            if (videoStream.r_frame_rate) {
-              const [num, den] = videoStream.r_frame_rate.split('/').map(Number);
-              if (den) result.fps = Math.round(num / den);
+            if (videoStream) {
+              result.width = videoStream.width;
+              result.height = videoStream.height;
+              result.videoCodec = videoStream.codec_name;
+              if (videoStream.r_frame_rate) {
+                const [num, den] = videoStream.r_frame_rate.split('/').map(Number);
+                if (den) result.fps = Math.round(num / den);
+              }
+            }
+
+            if (audioStream) {
+              result.audioCodec = audioStream.codec_name;
+            }
+          } catch (err: any) {
+            result.hasVideoStream = false;
+            result.hasAudioStream = false;
+            if (options.requireVideoStream || options.requireValidMedia) {
+              result.error = `Media file "${filePath}" failed FFprobe inspection: invalid container or unreadable stream (${err?.message || 'probe failed'}).`;
             }
           }
+        }
 
-          if (audioStream) {
-            result.audioCodec = audioStream.codec_name;
-          }
+        if (options.requireVideoStream && !result.hasVideoStream && !result.error) {
+          result.error = `Media file "${filePath}" does not contain a valid video stream.`;
+        }
 
-          if (options.requireVideoStream && !result.hasVideoStream) {
-            result.error = `Media file "${filePath}" does not contain a valid video stream.`;
-          }
+        if (options.requireAudioStream && !result.hasAudioStream && !result.error) {
+          result.error = `Media file "${filePath}" does not contain a valid audio stream.`;
+        }
 
-          if (options.requireAudioStream && !result.hasAudioStream) {
-            result.error = `Media file "${filePath}" does not contain a valid audio stream.`;
-          }
-        } catch {
-          // If ffprobe probe fails, still return basic stats
+        if (
+          options.minDurationSeconds &&
+          (result.durationSeconds ?? 0) < options.minDurationSeconds &&
+          !result.error
+        ) {
+          result.error = `Media file duration (${result.durationSeconds}s) is shorter than minimum expected (${options.minDurationSeconds}s).`;
         }
       }
 
@@ -115,4 +164,30 @@ export class ArtifactVerifier {
       };
     }
   }
+
+  /**
+   * Canonical Video Stream Verifier: returns VideoVerificationResult contract.
+   * Enforces physical existence, non-zero size, real video stream, and duration > 0.
+   */
+  public static verifyVideo(filePath: string): VideoVerificationResult {
+    const raw = this.verify(filePath, { requireVideoStream: true, requireValidMedia: true });
+    const hasValidDuration = typeof raw.durationSeconds === 'number' && raw.durationSeconds > 0;
+    const hasVideoStream = Boolean(raw.hasVideoStream);
+    const passes = raw.exists && raw.nonEmpty && hasVideoStream && hasValidDuration;
+
+    return {
+      exists: raw.exists,
+      nonEmpty: raw.nonEmpty,
+      hasVideoStream,
+      durationSeconds: raw.durationSeconds,
+      width: raw.width,
+      height: raw.height,
+      codec: raw.videoCodec,
+      fileSizeBytes: raw.sizeBytes,
+      error: passes
+        ? undefined
+        : raw.error || (!hasVideoStream ? 'No video stream present' : !hasValidDuration ? 'Video duration is 0 or negative' : 'Video verification failed'),
+    };
+  }
 }
+

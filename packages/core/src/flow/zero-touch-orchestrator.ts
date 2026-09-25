@@ -102,16 +102,21 @@ export class ZeroTouchProductionOrchestrator {
 
   /**
    * Plans the production run from a single master prompt.
+   * Plans the production run from a single master prompt.
    * Deterministic, zero credits, zero browser calls.
    */
   public async plan(
     masterPrompt: string,
-    projectId = 'project_flow_zero'
+    projectId = 'project_flow_zero',
+    options: { maxShots?: number } = {}
   ): Promise<{
     plan: ZeroTouchPlanResult;
     shots: ShotContract[];
   }> {
-    const { shots, method } = await this.synthesizeShotsFromPrompt(masterPrompt, projectId);
+    let { shots, method } = await this.synthesizeShotsFromPrompt(masterPrompt, projectId);
+    if (options.maxShots && options.maxShots > 0) {
+      shots = shots.slice(0, options.maxShots);
+    }
     const creditPlan = CreditAwarePlanner.plan(shots);
 
     const shotPlans = shots.map((s) => {
@@ -165,6 +170,7 @@ export class ZeroTouchProductionOrchestrator {
       projectId?: string;
       runId?: string;
       dryRun?: boolean;
+      maxShots?: number;
     } = {}
   ): Promise<ZeroTouchProductionResult> {
     const projectId = options.projectId || 'project_flow_zero';
@@ -172,7 +178,7 @@ export class ZeroTouchProductionOrchestrator {
     const dryRun = options.dryRun ?? false;
 
     // 1. Planning Stage
-    const { plan, shots } = await this.plan(masterPrompt, projectId);
+    const { plan, shots } = await this.plan(masterPrompt, projectId, { maxShots: options.maxShots });
 
     // If Dry Run requested: return planning manifest with 0 browser generation & 0 credits
     if (dryRun) {
@@ -217,9 +223,11 @@ export class ZeroTouchProductionOrchestrator {
         await this.renderLocalShot(shot, clipPath);
       }
 
-      const verify = ArtifactVerifier.verify(clipPath);
+      const verify = ArtifactVerifier.verifyVideo(clipPath);
+      if (!verify.exists || !verify.nonEmpty || !verify.hasVideoStream) {
+        throw new Error(`[LOCAL_RENDER_FAILED] Local shot "${shot.id}" failed physical video verification: ${verify.error}`);
+      }
       const sha256 =
-        verify.checksumSha256 ||
         crypto.createHash('sha256').update(fs.readFileSync(clipPath)).digest('hex');
       shotVideoMap.set(shot.id, clipPath);
       localRenderResults.push({ shotId: shot.id, physicalPath: clipPath, sha256 });
@@ -281,6 +289,10 @@ export class ZeroTouchProductionOrchestrator {
       }
 
       for (const ev of operatorResult.evidence) {
+        const evVerify = ArtifactVerifier.verifyVideo(ev.physicalPath);
+        if (!evVerify.exists || !evVerify.nonEmpty || !evVerify.hasVideoStream) {
+          throw new Error(`[FLOW_MEDIA_INVALID] Flow shot "${ev.shotId}" failed physical video verification: ${evVerify.error}`);
+        }
         shotVideoMap.set(ev.shotId, ev.physicalPath);
       }
     }
@@ -324,8 +336,8 @@ export class ZeroTouchProductionOrchestrator {
       };
     }
 
-    const physicalVerify = ArtifactVerifier.verify(masterVideoPath, { requireVideoStream: true });
-    if (!physicalVerify.exists || !physicalVerify.nonEmpty || !physicalVerify.hasVideoStream) {
+    const physicalVerify = ArtifactVerifier.verifyVideo(masterVideoPath);
+    if (!physicalVerify.exists || !physicalVerify.nonEmpty || !physicalVerify.hasVideoStream || (physicalVerify.durationSeconds ?? 0) <= 0) {
       return {
         projectId,
         runId,
@@ -610,14 +622,18 @@ export class ZeroTouchProductionOrchestrator {
           ],
           { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 }
         );
-        return;
-      } catch {
-        // Fallback for environments where FFmpeg is unavailable
+        const verify = ArtifactVerifier.verifyVideo(outputPath);
+        if (verify.exists && verify.hasVideoStream) {
+          return;
+        }
+      } catch (err: any) {
+        throw new Error(`[LOCAL_RENDER_FAILED] FFmpeg deterministic generation failed for shot "${shot.id}": ${err?.message}`);
       }
     }
 
-    // Offline test double fallback only when toolchain is completely absent
-    fs.writeFileSync(outputPath, Buffer.from(`mock_local_mp4_content_${shot.id}`));
+    throw new Error(
+      `[LOCAL_RENDER_UNAVAILABLE] Real local video rendering failed for shot "${shot.id}". Both HyperFrames bridge and FFmpeg deterministic generation are unavailable.`
+    );
   }
 
   /**
@@ -673,34 +689,17 @@ export class ZeroTouchProductionOrchestrator {
     };
 
     const hasFfmpeg = Boolean(MediaToolchainDoctor.getFfmpegPath());
-
-    if (hasFfmpeg) {
-      try {
-        const renderRes = await VideoRenderer.render({
-          sequence,
-          outputPath: masterOutputPath,
-          shotVideoMap,
-          includeAudio: false,
-        });
-        return renderRes.verification;
-      } catch {
-        this.writeFallbackMaster(shotVideoMap, masterOutputPath);
-        return ArtifactVerifier.verify(masterOutputPath);
-      }
-    } else {
-      this.writeFallbackMaster(shotVideoMap, masterOutputPath);
-      return ArtifactVerifier.verify(masterOutputPath);
+    if (!hasFfmpeg) {
+      throw new Error('[LOCAL_RENDER_UNAVAILABLE] FFmpeg toolchain is required for real master timeline assembly.');
     }
-  }
 
-  private writeFallbackMaster(shotVideoMap: Map<string, string>, outputPath: string): void {
-    const chunks: Buffer[] = [];
-    for (const [_, clipPath] of shotVideoMap.entries()) {
-      if (fs.existsSync(clipPath)) {
-        chunks.push(fs.readFileSync(clipPath));
-      }
-    }
-    const combined = chunks.length > 0 ? Buffer.concat(chunks) : Buffer.from('mock_master_video_content');
-    fs.writeFileSync(outputPath, combined);
+    const renderRes = await VideoRenderer.render({
+      sequence,
+      outputPath: masterOutputPath,
+      shotVideoMap,
+      includeAudio: false,
+    });
+    return renderRes.verification;
   }
 }
+

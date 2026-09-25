@@ -27,6 +27,7 @@ import {
   findIntermediateWorkspaceAction,
 } from './flow-semantic-discovery.js';
 import { FlowContractProbe, FlowPageState } from './flow-contract-probe.js';
+import { ArtifactVerifier } from '../media/artifact-verifier.js';
 
 export interface FlowGeneratedAssetDescriptor {
   id: string;
@@ -195,7 +196,7 @@ export class PuppeteerFlowPage implements IFlowPage {
 
     if (navControl.status === 'AMBIGUOUS') {
       throw new Error(
-        `[FLOW_NAVIGATION_AMBIGUOUS] Multiple candidate Start Creating controls discovered (${navControl.candidateCount} candidates). Failing closed to prevent accidental click.`
+        `[FLOW_NAVIGATION_AMBIGUOUS] Multiple candidate Start Creating controls discovered (${navControl.candidateCount} candidates): ${navControl.evidence || navControl.details}. Failing closed to prevent accidental click.`
       );
     }
 
@@ -334,7 +335,7 @@ export class PuppeteerFlowPage implements IFlowPage {
     options: { url?: string; projectReference?: string } = {}
   ): Promise<FlowProjectNavigationResult> {
     const targetUrl = options.projectReference
-      ? `${this.defaultFlowUrl}/projects/${options.projectReference}`
+      ? `${this.defaultFlowUrl}/project/${options.projectReference}`
       : options.url || this.defaultFlowUrl;
 
     const current = this.page.url();
@@ -346,6 +347,22 @@ export class PuppeteerFlowPage implements IFlowPage {
     if (auth.isBlocked) {
       throw new Error(`[BLOCKED_AUTH] Authentication required: ${auth.details}`);
     }
+
+    // Wait for SPA loading spinner ("Đang tải...", "Loading...") to settle and prompt surface to appear
+    await this.page
+      .waitForFunction(
+        () => {
+          const text = document.body ? document.body.innerText : '';
+          const isLoading = text.includes('Đang tải...') || text.includes('Loading...');
+          const hasPrompt =
+            document.querySelector(
+              '.ProseMirror, [contenteditable="true"], textarea, button.generate-icon-button, button[aria-label*="tạo" i], button[aria-label*="generate" i]'
+            ) !== null;
+          return !isLoading && hasPrompt;
+        },
+        { timeout: 25000 }
+      )
+      .catch(() => {});
 
     const rawUrl = this.page.url();
     const bodyText = await this.page.evaluate(() => (document.body ? document.body.innerText.slice(0, 2000) : '')).catch(() => '');
@@ -462,8 +479,14 @@ export class PuppeteerFlowPage implements IFlowPage {
       throw new Error(`[BLOCKED_AUTH] Cannot submit instruction while auth blocked: ${auth.details}`);
     }
 
-    // 1. Discover editable prompt surface with confidence check
-    const promptDiscovery = await findEditablePromptSurface(this.page);
+    // 1. Discover editable prompt surface with confidence check (with bounded retry for page settling)
+    let promptDiscovery = await findEditablePromptSurface(this.page);
+    const startWait = Date.now();
+    while (promptDiscovery.status !== 'FOUND' && Date.now() - startWait < 20000) {
+      await new Promise((r) => setTimeout(r, 1000));
+      promptDiscovery = await findEditablePromptSurface(this.page);
+    }
+
     if (promptDiscovery.status === 'NOT_FOUND') {
       throw new Error('[PROMPT_INPUT_NOT_FOUND] Could not locate Google Flow prompt input surface.');
     }
@@ -481,12 +504,49 @@ export class PuppeteerFlowPage implements IFlowPage {
     }
 
     // Clear and enter prompt text safely
-    await inputEl.evaluate((el: any) => {
-      if ('value' in el) el.value = '';
-      else el.textContent = '';
-      el.focus();
+    await inputEl.click().catch(() => {});
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Clear existing text in contenteditable / textarea
+    await this.page.keyboard.down('Control').catch(() => {});
+    await this.page.keyboard.press('KeyA').catch(() => {});
+    await this.page.keyboard.up('Control').catch(() => {});
+    await this.page.keyboard.press('Backspace').catch(() => {});
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Type text via real keyboard events to trigger ProseMirror transactions and Angular form bindings
+    if (typeof this.page.keyboard?.type === 'function') {
+      await this.page.keyboard.type(instructionText);
+    } else {
+      await inputEl.type(instructionText);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+
+    // 2. Verify prompt value in composer (Phase E Step 3 requirement)
+    let currentVal: string = await inputEl.evaluate((el: any) => {
+      return ('value' in el ? el.value : el.innerText || el.textContent || '').trim();
     });
-    await inputEl.type(instructionText);
+
+    if (!currentVal || currentVal.length === 0) {
+      // Fallback insertion for rich contenteditable / ProseMirror editors
+      await inputEl.evaluate((el: any, text: string) => {
+        el.focus();
+        try {
+          document.execCommand('insertText', false, text);
+        } catch {
+          el.innerText = text;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }, instructionText);
+
+      currentVal = await inputEl.evaluate((el: any) => {
+        return ('value' in el ? el.value : el.innerText || el.textContent || '').trim();
+      });
+    }
+
+    if (!currentVal || currentVal.length === 0) {
+      throw new Error('[PROMPT_VALUE_VERIFICATION_FAILED] Prompt input value could not be confirmed in composer.');
+    }
 
     // Attach reference assets if provided
     if (options.referencePaths && options.referencePaths.length > 0) {
@@ -500,7 +560,7 @@ export class PuppeteerFlowPage implements IFlowPage {
       }
     }
 
-    // 2. Discover Generate / Submit control with confidence check (NO Playwright text selectors)
+    // 3. Discover Generate / Submit control with confidence check
     const generateDiscovery = await findGenerateControl(this.page);
     if (generateDiscovery.status === 'AMBIGUOUS') {
       throw new Error(
@@ -511,14 +571,36 @@ export class PuppeteerFlowPage implements IFlowPage {
     if (generateDiscovery.status === 'FOUND') {
       const generateBtn = await this.page.$(generateDiscovery.locatorStrategy);
       if (generateBtn) {
-        await generateBtn.click();
-      } else {
-        await this.page.keyboard.press('Enter');
+        // Allow brief moment for reactive framework to update disabled state after input
+        await this.page
+          .waitForFunction(
+            (sel) => {
+              const b = document.querySelector(sel) as HTMLButtonElement | null;
+              return b && !b.disabled && !b.classList.contains('mat-mdc-button-disabled');
+            },
+            { timeout: 3000 },
+            generateDiscovery.locatorStrategy
+          )
+          .catch(() => {});
+
+        await generateBtn.click().catch(() => {});
       }
-    } else {
-      // Fallback: keyboard Enter on input
+    }
+
+    // Verify if submission cleared prompt or if Enter key needs to be pressed
+    await new Promise((r) => setTimeout(r, 600));
+    const stillHasInput = await inputEl.evaluate((el: any) => {
+      const val = ('value' in el ? el.value : el.innerText || el.textContent || '').trim();
+      return val.length > 0;
+    }).catch(() => false);
+
+    if (stillHasInput) {
+      await inputEl.focus();
       await this.page.keyboard.press('Enter');
     }
+
+    // Confirm generation initiated
+    await new Promise((r) => setTimeout(r, 1500));
 
     const submissionId = `flow_sub_${Date.now()}`;
     return {
@@ -545,22 +627,25 @@ export class PuppeteerFlowPage implements IFlowPage {
 
         // Strategy A: Exact output name contains shotId
         const exactMatch = assets.find(
-          (a) => a.name.includes(shotId) || a.matchedShotId === shotId || a.id.includes(shotId)
+          (a) => (a.name.includes(shotId) || a.matchedShotId === shotId || a.id.includes(shotId)) && a.status === 'READY'
         );
-        if (exactMatch && exactMatch.status === 'READY') {
+        if (exactMatch) {
           exactMatch.matchedShotId = shotId;
           exactMatch.mappingStrategy = 'EXACT_OUTPUT_NAME';
           results.set(shotId, exactMatch);
           continue;
         }
 
-        // Strategy C: Single shot fallback (if only 1 shot requested and 1 ready asset exists)
-        if (shotIds.length === 1 && assets.length === 1 && assets[0].status === 'READY') {
-          const single = assets[0];
-          single.matchedShotId = shotId;
-          single.mappingStrategy = 'SUBMISSION_ORDER_VERIFIED_METADATA';
-          results.set(shotId, single);
-          continue;
+        // Strategy B: If only 1 shot requested, map to the newest READY asset
+        if (shotIds.length === 1) {
+          const readyAssets = assets.filter((a) => a.status === 'READY');
+          if (readyAssets.length > 0) {
+            const single = readyAssets[readyAssets.length - 1];
+            single.matchedShotId = shotId;
+            single.mappingStrategy = 'SUBMISSION_ORDER_VERIFIED_METADATA';
+            results.set(shotId, single);
+            continue;
+          }
         }
       }
 
@@ -611,11 +696,15 @@ export class PuppeteerFlowPage implements IFlowPage {
     }
 
     // Configure Chrome download behavior
-    const client = await (this.page as any).target().createCDPSession();
-    await client.send('Page.setDownloadBehavior', {
-      behavior: 'allow',
-      downloadPath: destDir,
-    });
+    try {
+      const client = await (this.page as any).target().createCDPSession();
+      await client.send('Page.setDownloadBehavior', {
+        behavior: 'allow',
+        downloadPath: destDir,
+      });
+    } catch {
+      // Non-fatal if CDP session creation fails in some runtimes; fallback retrieval will still work
+    }
 
     // Scoped download discovery: must find download button INSIDE target container
     const downloadDiscovery = await findDownloadAction(this.page, flowAssetId);
@@ -624,18 +713,58 @@ export class PuppeteerFlowPage implements IFlowPage {
       throw new Error(`[DOWNLOAD_AMBIGUOUS] Multiple download buttons found for asset ${flowAssetId}. Failing closed.`);
     }
 
-    // Click scoped download trigger
+    let downloadSucceeded = false;
+
+    // Strategy 1: Click scoped download trigger if button exists
     const clicked = await this.page.evaluate((assetId: string) => {
       let container = document.querySelector(`[data-asset-id="${assetId}"]`);
       if (!container) {
-        const cards = Array.from(document.querySelectorAll('[class*="asset-card"], [class*="video-card"]'));
+        container = document.querySelector(`[data-studio-asset-id="${assetId}"]`);
+      }
+      if (!container) {
+        container = document.getElementById(assetId);
+      }
+      if (!container) {
+        const idxMatch = assetId.match(/asset_card_(\d+)/);
+        if (idxMatch) {
+          const allCards = Array.from(
+            document.querySelectorAll(
+              '[data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
+              'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"], ' +
+              '[role="listitem"], [role="article"]'
+            )
+          );
+          container = allCards[parseInt(idxMatch[1], 10)] || null;
+        }
+      }
+      if (!container) {
+        const cards = Array.from(document.querySelectorAll('[class*="asset-card"], [class*="video-card"], [role="listitem"]'));
         container = cards.find((c) => (c.textContent || '').includes(assetId)) || null;
       }
       if (!container) return false;
 
-      const btn = container.querySelector(
-        'button[aria-label*="Download" i], button[title*="Download" i], a[download]'
-      ) as HTMLElement | null;
+      const candidates = Array.from(
+        container.querySelectorAll('button, [role="button"], a[download], [data-action*="download" i]')
+      );
+
+      const btn = candidates.find((el) => {
+        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+        const title = (el.getAttribute('title') || '').toLowerCase();
+        const text = (el.textContent || '').trim().toLowerCase();
+        const cls = (el.className || '').toLowerCase();
+        return (
+          aria.includes('download') ||
+          aria.includes('tải xuống') ||
+          aria.includes('tải video') ||
+          title.includes('download') ||
+          title.includes('tải xuống') ||
+          text.includes('download') ||
+          text.includes('tải xuống') ||
+          text === 'file_download' ||
+          cls.includes('download') ||
+          el.hasAttribute('download')
+        );
+      }) as HTMLElement | undefined;
 
       if (btn) {
         btn.click();
@@ -644,32 +773,106 @@ export class PuppeteerFlowPage implements IFlowPage {
       return false;
     }, flowAssetId);
 
-    if (!clicked) {
-      throw new Error(`[DOWNLOAD_NOT_FOUND] Scoped download button not found for asset ${flowAssetId}`);
-    }
+    if (clicked) {
+      // Wait for download to appear
+      const maxWait = 45000;
+      const start = Date.now();
+      let downloadedPath: string | undefined;
 
-    // Wait for download to appear
-    const maxWait = 45000;
-    const start = Date.now();
-    let downloadedPath: string | undefined;
-
-    while (Date.now() - start < maxWait) {
-      const files = syncFs
-        .readdirSync(destDir)
-        .filter((f) => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.endsWith('.mp4'));
-      if (files.length > 0) {
-        downloadedPath = path.join(destDir, files[0]);
-        break;
+      while (Date.now() - start < maxWait) {
+        const files = syncFs
+          .readdirSync(destDir)
+          .filter((f) => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.endsWith('.mp4'));
+        if (files.length > 0) {
+          downloadedPath = path.join(destDir, files[0]);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
       }
-      await new Promise((r) => setTimeout(r, 1000));
+
+      if (downloadedPath && syncFs.existsSync(downloadedPath)) {
+        if (downloadedPath !== destinationFilePath) {
+          syncFs.renameSync(downloadedPath, destinationFilePath);
+        }
+        downloadSucceeded = true;
+      }
     }
 
-    if (!downloadedPath || !syncFs.existsSync(downloadedPath)) {
-      throw new Error(`Download timed out for asset ${flowAssetId}`);
+    // Strategy 2: Authenticated in-page extraction of <video> source if Strategy 1 did not produce a file
+    if (!downloadSucceeded) {
+      const base64Data = await this.page.evaluate(async (assetId: string) => {
+        let container = document.querySelector(`[data-asset-id="${assetId}"]`);
+        if (!container) {
+          container = document.querySelector(`[data-studio-asset-id="${assetId}"]`);
+        }
+        if (!container) {
+          container = document.getElementById(assetId);
+        }
+        if (!container) {
+          const idxMatch = assetId.match(/asset_card_(\d+)/);
+          if (idxMatch) {
+            const allCards = Array.from(
+              document.querySelectorAll(
+                '[data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
+                'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"], ' +
+                '[role="listitem"], [role="article"]'
+              )
+            );
+            container = allCards[parseInt(idxMatch[1], 10)] || null;
+          }
+        }
+        if (!container) {
+          const cards = Array.from(document.querySelectorAll('[class*="asset-card"], [class*="video-card"], [role="listitem"]'));
+          container = cards.find((c) => (c.textContent || '').includes(assetId)) || null;
+        }
+        const video = container
+          ? (container.tagName.toLowerCase() === 'video' ? (container as HTMLVideoElement) : container.querySelector('video'))
+          : document.querySelector('video');
+        if (!video) return null;
+        const src = video.currentSrc || video.src || video.querySelector('source')?.src;
+        if (!src) return null;
+
+        try {
+          const resp = await fetch(src, { credentials: 'include' });
+          if (!resp.ok) return null;
+          const blob = await resp.blob();
+          return new Promise<string | null>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const res = reader.result as string;
+              resolve(res ? res.split(',')[1] : null);
+            };
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          });
+        } catch {
+          return null;
+        }
+      }, flowAssetId);
+
+      if (base64Data) {
+        syncFs.writeFileSync(destinationFilePath, Buffer.from(base64Data, 'base64'));
+        downloadSucceeded = true;
+      }
     }
 
-    if (downloadedPath !== destinationFilePath) {
-      syncFs.renameSync(downloadedPath, destinationFilePath);
+    if (!downloadSucceeded || !syncFs.existsSync(destinationFilePath)) {
+      throw new Error(`[DOWNLOAD_FAILED] Unable to download or extract media for asset ${flowAssetId}`);
+    }
+
+    // Physical verification of the media file
+    const physicalVerify = await ArtifactVerifier.verifyVideo(destinationFilePath);
+    if (!physicalVerify.exists || !physicalVerify.nonEmpty || !physicalVerify.hasVideoStream || (physicalVerify.durationSeconds || 0) <= 0) {
+      if (syncFs.existsSync(destinationFilePath)) {
+        try {
+          syncFs.unlinkSync(destinationFilePath);
+        } catch {
+          // ignore cleanup error
+        }
+      }
+      throw new Error(
+        `[DOWNLOAD_CORRUPT] Retrieved file for asset ${flowAssetId} failed physical verification: ${physicalVerify.error || 'No valid video stream'}`
+      );
     }
 
     const stats = syncFs.statSync(destinationFilePath);

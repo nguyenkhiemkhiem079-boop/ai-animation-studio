@@ -185,7 +185,13 @@ export class FlowBrowserOperator {
 
       if (fs.existsSync(clipPath)) {
         const verifyRes = ArtifactVerifier.verify(clipPath, { requireVideoStream: true });
-        if (verifyRes.exists && verifyRes.nonEmpty && verifyRes.checksumSha256) {
+        if (
+          verifyRes.exists &&
+          verifyRes.nonEmpty &&
+          verifyRes.hasVideoStream &&
+          (verifyRes.durationSeconds ?? 0) > 0 &&
+          verifyRes.checksumSha256
+        ) {
           const qaReport = new FlowQAEvaluator().evaluate({
             shot,
             provenance: {
@@ -405,16 +411,17 @@ export class FlowBrowserOperator {
         const downloadRes = await page.downloadAsset(assetDesc.id, destinationFile);
 
         // Verify physical file on disk
+        const videoVerif = ArtifactVerifier.verifyVideo(downloadRes.physicalPath);
+        if (!videoVerif.exists || !videoVerif.nonEmpty || !videoVerif.hasVideoStream || (videoVerif.durationSeconds ?? 0) <= 0) {
+          throw new Error(`[DOWNLOAD_VERIFICATION_FAILED] Downloaded clip failed physical video stream validation: ${videoVerif.error || 'Missing video stream or invalid duration'}`);
+        }
+
         const verifyRes = ArtifactVerifier.verify(downloadRes.physicalPath, {
           requireVideoStream: true,
         });
 
-        if (!verifyRes.exists || !verifyRes.nonEmpty) {
-          throw new Error(`Downloaded clip is corrupt or missing: ${downloadRes.physicalPath}`);
-        }
-
         const sha256 = verifyRes.checksumSha256 || 'unknown_sha';
-        const durationSec = verifyRes.durationSeconds || shot.frame.durationSeconds || 4;
+        const durationSec = videoVerif.durationSeconds || verifyRes.durationSeconds || shot.frame.durationSeconds || 4;
 
         // Visual QA
         const qaReport = qaEvaluator.evaluate({
@@ -788,6 +795,17 @@ export class FlowBrowserOperator {
       }
     }
 
+    let browserProjectReference: string | undefined;
+    const projRefPath = path.resolve(process.cwd(), '.studio', 'flow-contract', 'project-reference.json');
+    if (fs.existsSync(projRefPath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(projRefPath, 'utf8'));
+        if (parsed.browserProjectReference) {
+          browserProjectReference = parsed.browserProjectReference;
+        }
+      } catch {}
+    }
+
     return {
       runId,
       projectId,
@@ -795,6 +813,7 @@ export class FlowBrowserOperator {
       expectedShotIds,
       completedShotIds: [],
       retakeCounts: {},
+      browserProjectReference,
       updatedAt: new Date().toISOString(),
     };
   }

@@ -114,11 +114,20 @@ export function redactSecrets(input: unknown): string {
     str = String(input);
   }
 
-  return str
+  let sanitized = str
     .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_GEMINI_KEY]')
     .replace(/AIzaSy[A-Za-z0-9_-]{33}/g, '[REDACTED_GEMINI_KEY]')
     .replace(/sk-[0-9A-Za-z-_]{32,}/g, '[REDACTED_API_KEY]')
     .replace(/Bearer\s+[A-Za-z0-9_.\-~+/]+=*/gi, 'Bearer [REDACTED_TOKEN]')
     .replace(/"(key|apiKey|password|secret|token|GEMINI_API_KEY)":\s*"[^"]*"/gi, '"$1": "[REDACTED]"')
     .replace(/[?&](key|api_key|token|access_token)=[^&\s"]+/gi, '$1=[REDACTED]');
+
+  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.length > 5) {
+    sanitized = sanitized.split(process.env.GEMINI_API_KEY).join('[REDACTED_GEMINI_KEY]');
+  }
+  if (process.env.GOOGLE_API_KEY && process.env.GOOGLE_API_KEY.length > 5) {
+    sanitized = sanitized.split(process.env.GOOGLE_API_KEY).join('[REDACTED_GEMINI_KEY]');
+  }
+
+  return sanitized;
 }

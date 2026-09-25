@@ -107,6 +107,7 @@ import {
   ArtifactVerifier,
   LongRunManifestManager,
   GeminiEngineeringWorker,
+  ChromeFlowSessionBridge,
 } from '@ai-studio/core';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -143,15 +144,29 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
     case 'create': {
       const createArgs = args.slice(1);
       const isDryRun = createArgs.includes('--dry-run');
+      const isSingleShot = createArgs.includes('--single-shot') || createArgs.includes('-1');
+      const shotsIdx = createArgs.indexOf('--shots');
+      const maxShots = isSingleShot ? 1 : (shotsIdx !== -1 && createArgs[shotsIdx + 1] ? parseInt(createArgs[shotsIdx + 1], 10) : undefined);
       const projIdx = createArgs.indexOf('--project');
       const projectId = projIdx !== -1 && createArgs[projIdx + 1] ? createArgs[projIdx + 1] : 'project_flow_zero';
-      const positionalPrompt = createArgs.find((a) => !a.startsWith('-'));
+      const flagsWithValues = new Set(['--project', '--shots']);
+      const nonFlagArgs: string[] = [];
+      for (let i = 0; i < createArgs.length; i++) {
+        const arg = createArgs[i];
+        if (flagsWithValues.has(arg)) {
+          i++; // skip flag value
+          continue;
+        }
+        if (arg.startsWith('-')) continue;
+        nonFlagArgs.push(arg);
+      }
+      const positionalPrompt = nonFlagArgs.join(' ').replace(/^["']|["']$/g, '').trim();
 
       if (!positionalPrompt) {
         console.error('❌ No prompt provided.');
         console.error('');
         console.error('Usage:');
-        console.error('  studio create "<master instruction>" [--dry-run] [--project <id>]');
+        console.error('  studio create "<master instruction>" [--dry-run] [--single-shot] [--project <id>]');
         return 1;
       }
 
@@ -163,7 +178,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
 
       console.log('Planning...');
       const orchestrator = new ZeroTouchProductionOrchestrator();
-      const { plan, shots } = await orchestrator.plan(positionalPrompt, projectId);
+      const { plan, shots } = await orchestrator.plan(positionalPrompt, projectId, { maxShots });
 
       console.log(`${shots.length} shots created\n`);
       console.log('Routing:');
@@ -195,7 +210,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log('Opening Google Flow...');
       console.log('Verifying session authentication...\n');
 
-      const result = await orchestrator.execute(positionalPrompt, { projectId, dryRun: false });
+      const result = await orchestrator.execute(positionalPrompt, { projectId, dryRun: false, maxShots });
 
       if (result.status === 'BLOCKED_AUTH') {
         console.error('\n🚫 Google Authentication Required (BLOCKED_AUTH)');
@@ -239,17 +254,16 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log('Composing...\n');
 
       if (result.masterVideoPath && syncFs.existsSync(result.masterVideoPath)) {
-        const verifyRes = ArtifactVerifier.verify(result.masterVideoPath, { requireVideoStream: true });
-        if (verifyRes.exists && verifyRes.nonEmpty && verifyRes.hasVideoStream) {
-          console.log('FINAL VIDEO:');
-          console.log(result.masterVideoPath);
-          console.log('\nMANUAL ACTIONS:');
-          console.log('0\n');
+        const verifyRes = ArtifactVerifier.verifyVideo(result.masterVideoPath);
+        if (verifyRes.exists && verifyRes.nonEmpty && verifyRes.hasVideoStream && (verifyRes.durationSeconds ?? 0) > 0) {
+          console.log(`FINAL VIDEO: ${path.resolve(result.masterVideoPath)}`);
+          console.log('\nMANUAL ACTIONS: 0\n');
           return 0;
         }
       }
 
-      console.log('ASSEMBLY_NOT_READY: Output video artifact verification failed.');
+      console.log('FINAL VIDEO NOT READY');
+      console.log(`REASON: ${result.error || 'Physical video stream validation failed or file missing.'}`);
       return 1;
     }
 
@@ -266,6 +280,33 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       const gemini = new GeminiProvider({ allowLiveCalls: isLive });
       const geminiConfigured = gemini.isConfigured();
 
+      // Test output directory write permissions
+      let outputWritable = false;
+      const testOutPath = path.resolve(cwd, '.studio', '.doctor_perm_test');
+      try {
+        if (!syncFs.existsSync(path.dirname(testOutPath))) {
+          syncFs.mkdirSync(path.dirname(testOutPath), { recursive: true });
+        }
+        syncFs.writeFileSync(testOutPath, 'perm_ok');
+        syncFs.unlinkSync(testOutPath);
+        outputWritable = true;
+      } catch {
+        outputWritable = false;
+      }
+
+      // Check CDP and Flow workspace access
+      const cdpActive = await ChromeFlowSessionBridge.isCdpActive().catch(() => false);
+      const profilePath = path.resolve(cwd, '.studio', 'browser-profiles', 'google-flow');
+      const profileExists = syncFs.existsSync(profilePath);
+      const projectRefPath = path.resolve(cwd, '.studio', 'flow-contract', 'project-reference.json');
+      let savedProjectRef: string | undefined;
+      if (syncFs.existsSync(projectRefPath)) {
+        try {
+          const parsed = JSON.parse(syncFs.readFileSync(projectRefPath, 'utf8'));
+          savedProjectRef = parsed.browserProjectReference;
+        } catch {}
+      }
+
       console.log('\n==============================================================');
       console.log('📋 COMPONENT HEALTH & PRODUCTION READINESS AUDIT');
       console.log('==============================================================\n');
@@ -273,21 +314,25 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log('[REQUIRED — Local Media & Execution Foundation]');
       console.log(` - Node.js Runtime : READY ✅ (${process.version})`);
       console.log(` - Studio Storage  : READY ✅ (${cwd})`);
+      console.log(` - Disk Permissions: ${outputWritable ? 'WRITABLE ✅ (.studio/)' : 'READ-ONLY / BLOCKED ❌'}`);
       console.log(` - FFmpeg          : ${toolchain.ffmpeg.available ? 'READY ✅' : 'MISSING ❌'} (${toolchain.ffmpeg.path ?? 'N/A'}) - ${toolchain.ffmpeg.details ?? ''}`);
       console.log(` - FFprobe         : ${toolchain.ffprobe.available ? 'READY ✅' : 'MISSING ❌'} (${toolchain.ffprobe.path ?? 'N/A'}) - ${toolchain.ffprobe.details ?? ''}`);
 
       console.log('\n[OPTIONAL — External Workspace & Browser Support]');
       console.log(` - Headless Browser: ${toolchain.browser.available ? 'READY ✅' : 'NOT FOUND ⚠️'} (${toolchain.browser.path ?? 'N/A'})`);
-      console.log(` - Google Flow     : MANUAL WORKSPACE (Assisted browser bridge, zero credentials required)`);
+      console.log(` - Google Flow     : ${toolchain.browser.available ? 'MANUAL WORKSPACE / CDP READY' : 'BROWSER NEEDED'}`);
+      console.log(` - CDP Endpoint    : ${cdpActive ? 'ACTIVE ✅ (http://127.0.0.1:9222)' : 'IDLE ℹ️ (Use "studio flow login" or auto-launch)'}`);
+      console.log(` - Flow Profile    : ${profileExists ? 'INITIALIZED ✅ (.studio/browser-profiles/google-flow)' : 'NOT INITIALIZED ℹ️'}`);
+      console.log(` - Flow Workspace  : ${savedProjectRef ? `BOUND ✅ (${savedProjectRef})` : 'AUTO-PROVISIONED ON RUN ℹ️'}`);
 
       const costMode = process.env.VIDEO_COST_MODE || 'FREE_ONLY';
       const allowPaid = process.env.ALLOW_PAID_VIDEO_API === 'true';
       console.log('\n[LIVE-ONLY — External Providers (Opt-In)]');
       console.log(` - Video Cost Mode : ${costMode} (${costMode === 'PAID_ALLOWED' && allowPaid ? 'PAID ALLOWED ⚠️' : 'FREE ONLY — Paid Video APIs Blocked 🔒'})`);
-      console.log(` - Gemini API Key  : ${geminiConfigured ? 'CONFIGURED ✅' : 'NOT CONFIGURED ℹ️ (Required only for live pilot)'}`);
+      console.log(` - Gemini API Key  : ${geminiConfigured ? 'CONFIGURED ✅ (Masked: ' + (process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.slice(0, 4) + '...***' : 'SET') + ')' : 'NOT CONFIGURED ℹ️ (Required only for live pilot)'}`);
       console.log(` - Gemini Live Ping: ${isLive ? (geminiConfigured ? 'TESTED ✅' : 'NOT CONFIGURED ❌') : 'NOT TESTED ℹ️ (Use "studio doctor --live" or "studio gemini doctor --live")'}`);
 
-      const localCoreReady = toolchain.ffmpeg.available && toolchain.ffprobe.available;
+      const localCoreReady = toolchain.ffmpeg.available && toolchain.ffprobe.available && outputWritable;
       console.log('\n--------------------------------------------------------------');
       if (localCoreReady) {
         console.log('VERDICT: LOCAL MEDIA TOOLCHAIN READY FOR OFFLINE REHEARSAL 🎬');
@@ -4374,36 +4419,6 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       console.log(`Manual actions remaining: 0 (preview generation)`);
 
       return clipResult.status === 'READY' ? 0 : 1;
-    }
-
-    case 'video': {
-      const subCmd = args[1] || 'list-providers';
-
-      if (subCmd === 'models') {
-        // Show Veo model profiles
-        console.log('');
-        console.log('🎬 Veo Video Generation Models');
-        console.log('================================');
-        const apiKey = process.env.GEMINI_API_KEY;
-        const configured = Boolean(apiKey);
-
-        const profiles: Array<[string, string]> = Object.entries(VEO_MODEL_MAP);
-        for (const [profile, model] of profiles) {
-          const isDefault = profile === 'ECONOMY';
-          console.log(`  [${profile}]${isDefault ? ' (default)' : ''}`);
-          console.log(`    Model   : ${model}`);
-          console.log(`    Status  : ${configured ? '✅ Configured' : '⚠️  GEMINI_API_KEY not set'}`);
-          console.log('');
-        }
-        console.log('Provider : Google Gemini Veo (direct API)');
-        console.log('Fallback : Google Flow (assisted, GEMINI_API_KEY not required)');
-        console.log('');
-        console.log('Usage: studio clip "<prompt>" [--profile ECONOMY|BALANCED|QUALITY]');
-        return 0;
-      }
-      // Fall through to existing video handlers (list-providers, render, etc.)
-      // by reaching the end of this case without returning
-      return 0;
     }
 
     case 'help':
