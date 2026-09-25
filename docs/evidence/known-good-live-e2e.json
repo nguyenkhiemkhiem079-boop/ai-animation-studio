@@ -1,0 +1,48 @@
+{
+  "contractVersion": "1.0.0",
+  "runId": "run_1790328582248",
+  "projectId": "project_flow_real",
+  "repositoryHead": "2b2a255663207a78edaff8c72937b234f4261cd5",
+  "timestamp": "2026-09-25T09:29:53.978Z",
+  "browserProjectReference": "354ecfbb-8de7-4c80-adda-3c5df63e0c7e",
+  "providerClassification": "LIVE_EXTERNAL",
+  "generationSource": "GOOGLE_FLOW_REAL",
+  "instructionSha256": "4e6820138522794c416c73328f01e197b74b50839d9fc4395f12330fdb59c7ac",
+  "generationSubmissionCount": 1,
+  "submissionId": "flow_sub_1790328590437",
+  "manualActionsTaken": 0,
+  "shots": [
+    {
+      "shotId": "SHOT_SC01_SH01",
+      "flowAssetId": "asset_card_0",
+      "assetName": "Sunrise over misty mountains",
+      "mappingStrategy": "SUBMISSION_ORDER_VERIFIED_METADATA",
+      "submittedAt": "2026-09-25T09:29:50.437Z",
+      "downloadedAt": "2026-09-25T09:29:53.977Z",
+      "downloadPath": ".studio/production/project_flow_real/run_1790328582248/SHOT_SC01_SH01/clip.mp4",
+      "clipSha256": "c680000747f4a2f6626f1d91f4951411c81f57246e3552b51f3fc0793650916d",
+      "clipSizeBytes": 1509884,
+      "clipVideoCodec": "h264",
+      "clipAudioCodec": "aac",
+      "clipWidth": 1280,
+      "clipHeight": 720,
+      "clipFps": 24,
+      "clipDurationSeconds": 4.011,
+      "qaStatus": "PASS",
+      "qaScore": 100,
+      "qaReportId": "qa_flow_SHOT_SC01_SH01_1790328593977"
+    }
+  ],
+  "master": {
+    "masterPath": ".studio/production/project_flow_real/run_1790328582248/final-master.mp4",
+    "masterSha256": "a9833c03c4c19c2928c9c1b1642ba25f34d7f8d43bf22ab9718ea0f3b38ad92b",
+    "masterSizeBytes": 722805,
+    "masterVideoCodec": "h264",
+    "masterWidth": 1280,
+    "masterHeight": 720,
+    "masterFps": 24,
+    "masterDurationSeconds": 4.042,
+    "masterAudioStream": false,
+    "verificationStatus": "TECHNICAL_MEDIA_PASS"
+  }
+}

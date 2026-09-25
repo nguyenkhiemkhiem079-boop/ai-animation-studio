@@ -85,6 +85,8 @@ export interface FlowDownloadedShotEvidence {
   sizeBytes: number;
   durationSeconds: number;
   videoCodec?: string;
+  downloadResolution?: string;
+  generationSubmissionCount?: number;
   generationSource: 'GOOGLE_FLOW_REAL';
   providerTrust: 'LIVE_EXTERNAL';
   qaStatus: FlowQAResultStatus;
@@ -105,6 +107,7 @@ export interface FlowOperatorConfig {
   cdpPort?: number;
   cdpHost?: string;
   autoLaunchChrome?: boolean;
+  maxFlowCredits?: number;
 }
 
 export interface FlowBatchExecutionResult {
@@ -139,6 +142,7 @@ export class FlowBrowserOperator {
       cdpPort: config.cdpPort ?? ChromeFlowSessionBridge.DEFAULT_PORT,
       cdpHost: config.cdpHost ?? ChromeFlowSessionBridge.DEFAULT_HOST,
       autoLaunchChrome: config.autoLaunchChrome ?? true,
+      maxFlowCredits: config.maxFlowCredits ?? 50,
     };
 
     this.sessionBridge = new ChromeFlowSessionBridge({
@@ -376,6 +380,10 @@ export class FlowBrowserOperator {
         // Proceed with standard direct prompt submission
       }
 
+      // Snapshot baseline assets before submitting instruction (Phase 3 & 4 correlation)
+      const baselineAssets = await page.listGeneratedAssets().catch(() => []);
+      const baselineAssetIds = baselineAssets.map((a) => a.id);
+
       // 8. Submit Structured Batch Instruction (Zero-Touch)
       const submission = await page.submitInstruction(batchCompilation.batchInstructionText, {
         referencePaths: batchCompilation.referencePaths,
@@ -392,6 +400,8 @@ export class FlowBrowserOperator {
       const generatedMap = await page.waitForGeneration(batchCompilation.shotIds, {
         timeoutMs: this.config.generationTimeoutMs,
         pollIntervalMs: this.config.pollIntervalMs,
+        baselineAssetIds,
+        maxFlowCredits: this.config.maxFlowCredits,
       });
 
       checkpoint.state = 'FLOW_ASSET_READY';
@@ -468,6 +478,8 @@ export class FlowBrowserOperator {
           sizeBytes: downloadRes.sizeBytes,
           durationSeconds: durationSec,
           videoCodec: verifyRes.videoCodec,
+          downloadResolution: (downloadRes as any).resolution || 'ORIGINAL',
+          generationSubmissionCount: (submission as any).submissionCount ?? 1,
           generationSource: 'GOOGLE_FLOW_REAL',
           providerTrust: 'LIVE_EXTERNAL',
           qaStatus: qaReport.overallStatus,
@@ -486,6 +498,10 @@ export class FlowBrowserOperator {
               downloadedAt: new Date().toISOString(),
               assetName: assetDesc.name,
               mappingStrategy: assetDesc.mappingStrategy || 'EXACT_OUTPUT_NAME',
+              downloadResolution: (downloadRes as any).resolution || 'ORIGINAL',
+              generationSubmissionCount: (submission as any).submissionCount ?? 1,
+              baselineAssetCount: baselineAssetIds.length,
+              promptHash: batchCompilation.instructionSha256,
               generationSource: 'GOOGLE_FLOW_REAL',
               providerTrust: 'LIVE_EXTERNAL',
             },

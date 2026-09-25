@@ -14,6 +14,7 @@
 
 import * as path from 'node:path';
 import * as syncFs from 'node:fs';
+import * as crypto from 'node:crypto';
 import type { Page } from 'puppeteer-core';
 import {
   findEditablePromptSurface,
@@ -28,6 +29,130 @@ import {
 } from './flow-semantic-discovery.js';
 import { FlowContractProbe, FlowPageState } from './flow-contract-probe.js';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
+
+export const FLOW_PURCHASE_REJECTION_KEYWORDS = [
+  'mua thêm',
+  'nạp tiền',
+  'thanh toán',
+  'mua gói',
+  'nâng cấp gói',
+  'buy credits',
+  'purchase',
+  'payment',
+  'subscribe',
+  'upgrade',
+  'checkout',
+  'add billing',
+  'confirm payment',
+  'billing account',
+];
+
+export interface DownloadWaitOptions {
+  destDir: string;
+  preExistingFiles: Set<string>;
+  triggerTimestampMs: number;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  expectedExt?: string;
+  minSizeBytes?: number;
+}
+
+/**
+ * Robustly waits for a genuine NEW downloaded file to appear and stabilize on disk.
+ *
+ * Guarantees (Phase 2 Download File Identity Protection):
+ * 1. NEVER accepts a pre-existing stale file (files present before download trigger).
+ * 2. Rejects temporary or in-progress files (.crdownload, .tmp).
+ * 3. Enforces mtime strictly newer than triggerTimestampMs - 1500 (rejecting older files).
+ * 4. Ensures file size is non-empty and stable across successive polls (not mid-write).
+ * 5. Fails closed with [STALE_DOWNLOAD_REJECTED] if only stale files exist at timeout.
+ */
+export async function waitForNewDownloadedFile(options: DownloadWaitOptions): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 45000;
+  const pollIntervalMs = options.pollIntervalMs ?? 1000;
+  const expectedExt = (options.expectedExt ?? '.mp4').toLowerCase();
+  const minSizeBytes = options.minSizeBytes ?? 1024;
+  const startTime = Date.now();
+  let candidatePath: string | undefined;
+  let candidateLastSize = -1;
+
+  while (Date.now() - startTime < timeoutMs) {
+    if (!syncFs.existsSync(options.destDir)) {
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
+    }
+
+    const allEntries = syncFs.readdirSync(options.destDir);
+
+    // Filter candidate files:
+    // 1. MUST NOT be in preExistingFiles
+    // 2. MUST NOT be transient in-progress download files (.crdownload, .tmp)
+    // 3. MUST match expected extension
+    // 4. MUST have mtimeMs >= triggerTimestampMs - 1500 (rejecting older files)
+    const newFiles = allEntries.filter((f) => {
+      if (options.preExistingFiles.has(f)) return false;
+      const lower = f.toLowerCase();
+      if (lower.endsWith('.crdownload') || lower.endsWith('.tmp')) return false;
+      if (!lower.endsWith(expectedExt)) return false;
+
+      try {
+        const stat = syncFs.statSync(path.join(options.destDir, f));
+        if (stat.mtimeMs < options.triggerTimestampMs - 1500) {
+          return false;
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    if (newFiles.length > 0) {
+      // Sort newest first
+      const sorted = newFiles.sort((a, b) => {
+        try {
+          return (
+            syncFs.statSync(path.join(options.destDir, b)).mtimeMs -
+            syncFs.statSync(path.join(options.destDir, a)).mtimeMs
+          );
+        } catch {
+          return 0;
+        }
+      });
+
+      const currentCandidate = path.join(options.destDir, sorted[0]);
+      try {
+        const stat = syncFs.statSync(currentCandidate);
+        if (stat.size >= minSizeBytes) {
+          if (candidatePath === currentCandidate && stat.size === candidateLastSize) {
+            // File size is stable across consecutive checks: download complete!
+            return currentCandidate;
+          }
+          candidatePath = currentCandidate;
+          candidateLastSize = stat.size;
+        }
+      } catch {}
+    }
+
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+  }
+
+  // Timeout reached: audit folder contents
+  if (syncFs.existsSync(options.destDir)) {
+    const allFiles = syncFs.readdirSync(options.destDir).filter((f) => f.toLowerCase().endsWith(expectedExt));
+    const staleFiles = allFiles.filter((f) => options.preExistingFiles.has(f));
+    if (staleFiles.length > 0 && allFiles.length === staleFiles.length) {
+      throw new Error(
+        `[STALE_DOWNLOAD_REJECTED] Download timed out and only pre-existing stale file(s) [${staleFiles.join(
+          ', '
+        )}] were found in ${options.destDir}. Stale files rejected to prevent contamination.`
+      );
+    }
+  }
+
+  throw new Error(
+    `[DOWNLOAD_TIMEOUT] No new completed download file (${expectedExt}) appeared within ${timeoutMs}ms in ${options.destDir}.`
+  );
+}
 
 export interface FlowGeneratedAssetDescriptor {
   id: string;
@@ -105,13 +230,18 @@ export interface IFlowPage {
   /** Submit structured master production batch instruction */
   submitInstruction(
     instructionText: string,
-    options?: { referencePaths?: string[] }
-  ): Promise<{ submissionId: string; submittedAt: string }>;
+    options?: { referencePaths?: string[]; forceResubmit?: boolean }
+  ): Promise<{ submissionId: string; submittedAt: string; submissionCount?: number }>;
 
   /** Wait for generated assets matching requested shotIds */
   waitForGeneration(
     shotIds: string[],
-    options?: { timeoutMs?: number; pollIntervalMs?: number }
+    options?: {
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+      baselineAssetIds?: string[];
+      maxFlowCredits?: number;
+    }
   ): Promise<Map<string, FlowGeneratedAssetDescriptor>>;
 
   /** List all generated assets visible in the project */
@@ -121,7 +251,7 @@ export interface IFlowPage {
   downloadAsset(
     flowAssetId: string,
     destinationFilePath: string
-  ): Promise<{ physicalPath: string; sizeBytes: number }>;
+  ): Promise<{ physicalPath: string; sizeBytes: number; resolution?: string }>;
 
   /** Detect observed credits from the UI */
   detectCredits(): Promise<FlowPageCreditStatus>;
@@ -147,10 +277,21 @@ export class PuppeteerFlowPage implements IFlowPage {
   private readonly page: Page;
   private readonly defaultFlowUrl: string;
   private closed = false;
+  private submissionCount = 0;
+  private lastInstructionSha256 = '';
+  private approvalCount = 0;
+  private readonly maxApprovalsPerRun: number;
+  private readonly maxFlowCredits: number;
 
-  constructor(page: Page, defaultFlowUrl = 'https://flow.google.com') {
+  constructor(
+    page: Page,
+    defaultFlowUrl = 'https://flow.google.com',
+    options: { maxFlowCredits?: number; maxApprovalsPerRun?: number } = {}
+  ) {
     this.page = page;
     this.defaultFlowUrl = defaultFlowUrl;
+    this.maxFlowCredits = options.maxFlowCredits ?? 50;
+    this.maxApprovalsPerRun = options.maxApprovalsPerRun ?? 2;
   }
 
   public async enterFlowWorkspace(options: {
@@ -472,11 +613,21 @@ export class PuppeteerFlowPage implements IFlowPage {
 
   public async submitInstruction(
     instructionText: string,
-    options: { referencePaths?: string[] } = {}
-  ): Promise<{ submissionId: string; submittedAt: string }> {
+    options: { referencePaths?: string[]; forceResubmit?: boolean } = {}
+  ): Promise<{ submissionId: string; submittedAt: string; submissionCount: number }> {
     const auth = await this.detectAuthBlock();
     if (auth.isBlocked) {
       throw new Error(`[BLOCKED_AUTH] Cannot submit instruction while auth blocked: ${auth.details}`);
+    }
+
+    const instructionHash = crypto.createHash('sha256').update(instructionText.trim()).digest('hex');
+
+    // Double-submission protection (Phase 7):
+    // If submitInstruction was already called for this identical instruction, reject unless forceResubmit is set
+    if (this.submissionCount > 0 && this.lastInstructionSha256 === instructionHash && !options.forceResubmit) {
+      throw new Error(
+        `[DOUBLE_SUBMISSION_PREVENTED] Repeated submitInstruction called for identical prompt hash ${instructionHash.slice(0, 10)}. Submission count is already ${this.submissionCount}. Failing closed to prevent accidental double generation.`
+      );
     }
 
     // 1. Discover editable prompt surface with confidence check (with bounded retry for page settling)
@@ -600,26 +751,87 @@ export class PuppeteerFlowPage implements IFlowPage {
       if (stillHasInput) {
         await inputEl.focus();
         await this.page.keyboard.press('Enter');
+        clickDispatched = true;
       }
     }
 
     // Confirm generation initiated
     await new Promise((r) => setTimeout(r, 1500));
 
+    this.submissionCount++;
+    this.lastInstructionSha256 = instructionHash;
+    console.log(`[GENERATION_SUBMISSION_COUNT] ${this.submissionCount}`);
+
     const submissionId = `flow_sub_${Date.now()}`;
     return {
       submissionId,
       submittedAt: new Date().toISOString(),
+      submissionCount: this.submissionCount,
     };
   }
 
   /**
    * Detects and clicks the Flow Agent in-panel confirmation gate.
-   * When Flow Agent asks "Bạn có muốn tôi bắt đầu tạo... với chi phí là X tín dụng không?"
-   * this method finds and clicks the "Luôn phê duyệt" / "Phê duyệt" (Approve) option.
-   * Returns true if an approval was dispatched.
+   *
+   * Two-Layer Architecture (Phase 5 Cost Approval Safety):
+   * LAYER 1: AI Animation Studio Cost Guard
+   *   - Inspects gate text for monetary purchase / subscription / checkout operations.
+   *   - Rejects monetary purchase requests immediately (fails closed).
+   *   - Enforces credit budget ceiling (maxFlowCredits).
+   *   - Enforces approval loop ceiling (max 2 approvals per run) to prevent loops (Phase 8).
+   * LAYER 2: Google Flow permission interaction
+   *   - Finds and clicks "Luôn phê duyệt" (priority 1) or "Phê duyệt" (priority 2).
+   *   - Strictly ignores "Từ chối" or read-only/disabled rows.
    */
-  private async handleAgentConfirmationGate(): Promise<boolean> {
+  private async handleAgentConfirmationGate(maxFlowCredits?: number): Promise<boolean> {
+    const budgetCeiling = maxFlowCredits ?? this.maxFlowCredits;
+
+    // Check approval loop bounds (Phase 8 Approval Loop Protection)
+    if (this.approvalCount >= this.maxApprovalsPerRun) {
+      throw new Error(
+        `[FLOW_PERMISSION_LOOP] Flow permission gate encountered ${this.approvalCount + 1} times. Maximum allowed approvals (${this.maxApprovalsPerRun}) reached. Failing closed to protect credits.`
+      );
+    }
+
+    // Inspect recent chat bubble / permission gate text for Cost Guard verification
+    const gateInfo: any = await this.page.evaluate(() => {
+      const messages = Array.from(
+        document.querySelectorAll('flow-permission-message, flow-chat-bubble, .choice-container, .agent-bubble')
+      );
+      const recent = messages.slice(-4);
+      const text = recent.map((m) => m.textContent || '').join(' ').toLowerCase();
+      return { text };
+    }).catch(() => ({ text: '' }));
+
+    const gateText =
+      gateInfo && typeof gateInfo === 'object' && typeof gateInfo.text === 'string'
+        ? gateInfo.text
+        : typeof gateInfo === 'string'
+        ? gateInfo
+        : '';
+
+    // Layer 1 Check A: Reject monetary / billing / credit purchases (NEVER auto-purchase)
+    for (const kw of FLOW_PURCHASE_REJECTION_KEYWORDS) {
+      if (gateText && gateText.includes(kw)) {
+        throw new Error(
+          `[COST_GUARD_REJECTED_PURCHASE] Flow gate requested monetary purchase or billing action ("${kw}"). Automatic approval forbidden.`
+        );
+      }
+    }
+
+    // Layer 1 Check B: Check credit budget if specified in prompt
+    // e.g. "với chi phí là 1 tín dụng", "cost of 2 credits", "costs 1 credit"
+    const costMatch = gateText.match(/(?:chi phí là|cost(?:s)?\s*(?:of)?)\s*(\d+)\s*(?:tín dụng|credits?)/i);
+    if (costMatch) {
+      const requestedCost = parseInt(costMatch[1], 10);
+      if (requestedCost > budgetCeiling) {
+        throw new Error(
+          `[COST_GUARD_BUDGET_EXCEEDED] Flow gate requested ${requestedCost} credits, exceeding max budget of ${budgetCeiling}. Failing closed.`
+        );
+      }
+    }
+
+    // Layer 2: Dispatch approval click
     try {
       const approved = await this.page.evaluate(() => {
         // Strategy 1: Targeted radio option in Google Flow's flow-permission-message component
@@ -679,8 +891,21 @@ export class PuppeteerFlowPage implements IFlowPage {
         }
         return false;
       });
-      return Boolean(approved);
-    } catch {
+
+      if (approved) {
+        this.approvalCount++;
+        console.log(`[COST_GUARD] Flow permission gate approved (approval #${this.approvalCount}).`);
+        return true;
+      }
+      return false;
+    } catch (err: any) {
+      if (
+        err?.message?.includes('COST_GUARD_REJECTED_PURCHASE') ||
+        err?.message?.includes('COST_GUARD_BUDGET_EXCEEDED') ||
+        err?.message?.includes('FLOW_PERMISSION_LOOP')
+      ) {
+        throw err;
+      }
       return false;
     }
   }
@@ -690,7 +915,7 @@ export class PuppeteerFlowPage implements IFlowPage {
    */
   private async detectAgentConfirmationPending(): Promise<boolean> {
     try {
-      return await this.page.evaluate(() => {
+      const isPending = await this.page.evaluate(() => {
         // Check for active (non-readonly) option rows in permission messages
         const activeRows = Array.from(
           document.querySelectorAll('flow-permission-message .option-row, .choice-container .option-row, [role="radio"]')
@@ -711,6 +936,7 @@ export class PuppeteerFlowPage implements IFlowPage {
         const textToCheck = (lastBubble ? lastBubble.textContent || '' : document.body?.innerText?.slice(-800) || '').toLowerCase();
         return PENDING_SIGNALS.some((s) => textToCheck.includes(s));
       });
+      return typeof isPending === 'boolean' ? isPending : false;
     } catch {
       return false;
     }
@@ -718,12 +944,18 @@ export class PuppeteerFlowPage implements IFlowPage {
 
   public async waitForGeneration(
     shotIds: string[],
-    options: { timeoutMs?: number; pollIntervalMs?: number } = {}
+    options: {
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+      baselineAssetIds?: string[];
+      maxFlowCredits?: number;
+    } = {}
   ): Promise<Map<string, FlowGeneratedAssetDescriptor>> {
     const timeoutMs = options.timeoutMs ?? 300000; // 5 min default
     const pollIntervalMs = options.pollIntervalMs ?? 5000;
     const startTime = Date.now();
     const results = new Map<string, FlowGeneratedAssetDescriptor>();
+    const baselineSet = new Set(options.baselineAssetIds ?? []);
 
     while (Date.now() - startTime < timeoutMs) {
       // ── Phase 1: Handle Flow Agent confirmation gate (cost approval) ──────────
@@ -731,7 +963,7 @@ export class PuppeteerFlowPage implements IFlowPage {
       // with options: Luôn phê duyệt / Phê duyệt / Từ chối
       const gatePending = await this.detectAgentConfirmationPending();
       if (gatePending) {
-        const clicked = await this.handleAgentConfirmationGate();
+        const clicked = await this.handleAgentConfirmationGate(options.maxFlowCredits);
         if (clicked) {
           // Wait for agent to process approval and start generation
           await new Promise((r) => setTimeout(r, 4000));
@@ -745,26 +977,57 @@ export class PuppeteerFlowPage implements IFlowPage {
       for (const shotId of shotIds) {
         if (results.has(shotId)) continue;
 
-        // Strategy A: Exact output name contains shotId
-        const exactMatch = assets.find(
-          (a) => (a.name.includes(shotId) || a.matchedShotId === shotId || a.id.includes(shotId)) && a.status === 'READY'
+        // Strategy A: Exact output name contains shotId (prefer newly generated assets first)
+        const exactMatchNew = assets.find(
+          (a) =>
+            !baselineSet.has(a.id) &&
+            ((a.name && typeof a.name === 'string' && a.name.includes(shotId)) ||
+              (a.matchedShotId && a.matchedShotId === shotId) ||
+              (a.id && typeof a.id === 'string' && a.id.includes(shotId))) &&
+            a.status === 'READY'
         );
-        if (exactMatch) {
-          exactMatch.matchedShotId = shotId;
-          exactMatch.mappingStrategy = 'EXACT_OUTPUT_NAME';
-          results.set(shotId, exactMatch);
+        if (exactMatchNew) {
+          exactMatchNew.matchedShotId = shotId;
+          exactMatchNew.mappingStrategy = 'EXACT_OUTPUT_NAME';
+          results.set(shotId, exactMatchNew);
           continue;
         }
 
-        // Strategy B: If only 1 shot requested, map to the newest READY asset
+        const exactMatchAny = assets.find(
+          (a) =>
+            ((a.name && typeof a.name === 'string' && a.name.includes(shotId)) ||
+              (a.matchedShotId && a.matchedShotId === shotId) ||
+              (a.id && typeof a.id === 'string' && a.id.includes(shotId))) &&
+            a.status === 'READY'
+        );
+        if (exactMatchAny) {
+          exactMatchAny.matchedShotId = shotId;
+          exactMatchAny.mappingStrategy = 'EXACT_OUTPUT_NAME';
+          results.set(shotId, exactMatchAny);
+          continue;
+        }
+
+        // Strategy B: If only 1 shot requested, map to the newest READY asset that is NOT in baseline
         if (shotIds.length === 1) {
-          const readyAssets = assets.filter((a) => a.status === 'READY');
-          if (readyAssets.length > 0) {
-            const single = readyAssets[readyAssets.length - 1];
+          const newReadyAssets = assets.filter((a) => !baselineSet.has(a.id) && a.status === 'READY');
+          if (newReadyAssets.length > 0) {
+            const single = newReadyAssets[newReadyAssets.length - 1];
             single.matchedShotId = shotId;
             single.mappingStrategy = 'SUBMISSION_ORDER_VERIFIED_METADATA';
             results.set(shotId, single);
             continue;
+          }
+
+          // If no baseline was provided (e.g. legacy/mock run), map to newest ready asset
+          if (baselineSet.size === 0) {
+            const readyAssets = assets.filter((a) => a.status === 'READY');
+            if (readyAssets.length > 0) {
+              const single = readyAssets[readyAssets.length - 1];
+              single.matchedShotId = shotId;
+              single.mappingStrategy = 'SUBMISSION_ORDER_VERIFIED_METADATA';
+              results.set(shotId, single);
+              continue;
+            }
           }
         }
       }
@@ -784,6 +1047,14 @@ export class PuppeteerFlowPage implements IFlowPage {
     // If generation timed out or assets cannot be attributed confidently
     if (results.size < shotIds.length) {
       const allAssets = await this.listGeneratedAssets();
+      const newAssetsCount = allAssets.filter((a) => !baselineSet.has(a.id)).length;
+
+      if (baselineSet.size > 0 && newAssetsCount === 0) {
+        throw new Error(
+          `[ASSET_NOT_FOUND] Flow generation completed or timed out but no new video asset appeared beyond the ${baselineSet.size} baseline assets. Existing assets before run: ${baselineSet.size}, Assets after run: ${allAssets.length}. Pre-existing baseline cards rejected.`
+        );
+      }
+
       if (allAssets.length > 0 && results.size === 0) {
         throw new Error(
           `[RECONCILIATION_REQUIRED] Generated assets observed (${allAssets.length}) but could not be mapped to requested shots [${shotIds.join(', ')}] with high confidence.`
@@ -810,7 +1081,7 @@ export class PuppeteerFlowPage implements IFlowPage {
   public async downloadAsset(
     flowAssetId: string,
     destinationFilePath: string
-  ): Promise<{ physicalPath: string; sizeBytes: number }> {
+  ): Promise<{ physicalPath: string; sizeBytes: number; resolution?: string }> {
     const destDir = path.dirname(destinationFilePath);
     if (!syncFs.existsSync(destDir)) {
       syncFs.mkdirSync(destDir, { recursive: true });
@@ -834,7 +1105,12 @@ export class PuppeteerFlowPage implements IFlowPage {
       throw new Error(`[DOWNLOAD_AMBIGUOUS] Multiple download buttons found for asset ${flowAssetId}. Failing closed.`);
     }
 
+    // Phase 2: Stale Download Protection
+    // Snapshot directory BEFORE triggering download to guarantee no pre-existing file is accepted
+    const preExistingFiles = new Set(syncFs.readdirSync(destDir));
+    const triggerTimestamp = Date.now();
     let downloadSucceeded = false;
+    let selectedResolution = 'ORIGINAL';
 
     // Strategy 1: Click scoped download trigger if button exists
     const clicked = await this.page.evaluate((assetId: string) => {
@@ -895,27 +1171,25 @@ export class PuppeteerFlowPage implements IFlowPage {
     }, flowAssetId);
 
     if (clicked) {
-      // Wait for download to appear
-      const maxWait = 45000;
-      const start = Date.now();
-      let downloadedPath: string | undefined;
+      try {
+        const downloadedPath = await waitForNewDownloadedFile({
+          destDir,
+          preExistingFiles,
+          triggerTimestampMs: triggerTimestamp,
+          timeoutMs: 45000,
+        });
 
-      while (Date.now() - start < maxWait) {
-        const files = syncFs
-          .readdirSync(destDir)
-          .filter((f) => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.endsWith('.mp4'));
-        if (files.length > 0) {
-          downloadedPath = path.join(destDir, files[0]);
-          break;
+        if (downloadedPath && syncFs.existsSync(downloadedPath)) {
+          if (downloadedPath !== destinationFilePath) {
+            syncFs.renameSync(downloadedPath, destinationFilePath);
+          }
+          downloadSucceeded = true;
         }
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-
-      if (downloadedPath && syncFs.existsSync(downloadedPath)) {
-        if (downloadedPath !== destinationFilePath) {
-          syncFs.renameSync(downloadedPath, destinationFilePath);
+      } catch (err: any) {
+        if (err?.message?.includes('[STALE_DOWNLOAD_REJECTED]')) {
+          throw err;
         }
-        downloadSucceeded = true;
+        // Timeout falls through to Strategy 1b
       }
     }
 
@@ -983,39 +1257,47 @@ export class PuppeteerFlowPage implements IFlowPage {
         if (dlItemClicked) {
           await new Promise((r) => setTimeout(r, 1200));
 
-          // Click resolution item (720p / Original / 1080p)
-          await this.page.evaluate(() => {
+          // Phase 26: Deterministic Download Resolution Policy
+          // Priority: Original / Gốc > 1080p > 720p > first available
+          const resolutionChoice = await this.page.evaluate(() => {
             const allButtons = Array.from(
               document.querySelectorAll('.mat-mdc-menu-panel [role="menuitem"], .mat-mdc-menu-panel button')
-            );
-            const origBtn = allButtons.find((b) => {
-              const t = (b.textContent || '').toLowerCase();
-              return t.includes('720p') || t.includes('gốc') || t.includes('original') || t.includes('1080p');
-            }) as HTMLElement | undefined;
-            if (origBtn) origBtn.click();
-          });
+            ) as HTMLElement[];
+            const findBy = (fn: (t: string) => boolean) =>
+              allButtons.find((b) => fn((b.textContent || '').toLowerCase()));
 
-          // Wait for file to download
-          const maxWait = 45000;
-          const start = Date.now();
-          let downloadedPath: string | undefined;
-
-          while (Date.now() - start < maxWait) {
-            const files = syncFs
-              .readdirSync(destDir)
-              .filter((f) => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.endsWith('.mp4'));
-            if (files.length > 0) {
-              const sorted = files.sort((a, b) => {
-                return (
-                  syncFs.statSync(path.join(destDir, b)).mtimeMs -
-                  syncFs.statSync(path.join(destDir, a)).mtimeMs
-                );
-              });
-              downloadedPath = path.join(destDir, sorted[0]);
-              break;
+            const orig = findBy((t) => t.includes('gốc') || t.includes('original'));
+            if (orig) {
+              orig.click();
+              return 'ORIGINAL';
             }
-            await new Promise((r) => setTimeout(r, 1000));
+            const p1080 = findBy((t) => t.includes('1080p'));
+            if (p1080) {
+              p1080.click();
+              return '1080P';
+            }
+            const p720 = findBy((t) => t.includes('720p'));
+            if (p720) {
+              p720.click();
+              return '720P';
+            }
+            if (allButtons.length > 0) {
+              allButtons[0].click();
+              return (allButtons[0].textContent || 'UNKNOWN').trim();
+            }
+            return 'NOT_FOUND';
+          });
+          if (resolutionChoice && resolutionChoice !== 'NOT_FOUND') {
+            selectedResolution = resolutionChoice;
           }
+
+          // Wait for newly downloaded file using bounded, stale-rejecting watcher
+          const downloadedPath = await waitForNewDownloadedFile({
+            destDir,
+            preExistingFiles,
+            triggerTimestampMs: triggerTimestamp,
+            timeoutMs: 45000,
+          });
 
           if (downloadedPath && syncFs.existsSync(downloadedPath)) {
             if (downloadedPath !== destinationFilePath) {
@@ -1108,6 +1390,7 @@ export class PuppeteerFlowPage implements IFlowPage {
     return {
       physicalPath: destinationFilePath,
       sizeBytes: stats.size,
+      resolution: selectedResolution,
     };
   }
 
@@ -1307,10 +1590,12 @@ export class MockFlowPage implements IFlowPage {
     };
   }
 
+  private lastInstructionSha256 = '';
+
   public async submitInstruction(
     instructionText: string,
-    options?: { referencePaths?: string[] }
-  ): Promise<{ submissionId: string; submittedAt: string }> {
+    options?: { referencePaths?: string[]; forceResubmit?: boolean }
+  ): Promise<{ submissionId: string; submittedAt: string; submissionCount: number }> {
     if (this.simulatedAuthBlock.isBlocked) {
       throw new Error(`[BLOCKED_AUTH] Cannot submit instruction while auth blocked: ${this.simulatedAuthBlock.details}`);
     }
@@ -1322,6 +1607,14 @@ export class MockFlowPage implements IFlowPage {
     if (this.generateControlAmbiguous) {
       throw new Error('[GENERATE_CONTROL_AMBIGUOUS] Multiple candidate generate buttons found.');
     }
+
+    const instructionHash = crypto.createHash('sha256').update(instructionText.trim()).digest('hex');
+    if (this.submittedInstructions.length > 0 && this.lastInstructionSha256 === instructionHash && !options?.forceResubmit) {
+      throw new Error(
+        `[DOUBLE_SUBMISSION_PREVENTED] Repeated submitInstruction called for identical prompt hash ${instructionHash.slice(0, 10)}.`
+      );
+    }
+    this.lastInstructionSha256 = instructionHash;
 
     const submissionId = `mock_sub_${Date.now()}`;
     const submittedAt = new Date().toISOString();
@@ -1340,11 +1633,17 @@ export class MockFlowPage implements IFlowPage {
       });
     }
 
-    return { submissionId, submittedAt };
+    return { submissionId, submittedAt, submissionCount: this.submittedInstructions.length };
   }
 
   public async waitForGeneration(
-    shotIds: string[]
+    shotIds: string[],
+    options?: {
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+      baselineAssetIds?: string[];
+      maxFlowCredits?: number;
+    }
   ): Promise<Map<string, FlowGeneratedAssetDescriptor>> {
     if (this.simulatedFailure) {
       throw new Error(`Flow generation failed: ${this.simulatedFailure}`);

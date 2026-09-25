@@ -113,6 +113,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as syncFs from 'node:fs';
 import * as readline from 'node:readline';
+import { runHumanQaWizard } from './human-qa-wizard.js';
 
 function promptCliUser(promptText: string): Promise<string> {
   return new Promise((resolve) => {
@@ -3687,12 +3688,18 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       return 1;
     }
 
+    case 'human-qa':
     case 'qa': {
       const subCommand = args[1];
+
+      if (command === 'human-qa' || subCommand === 'human') {
+        return await runHumanQaWizard(args, storage, promptUser);
+      }
+
       const projectId = args[2];
 
       if (!projectId) {
-        console.error('Error: Project ID is required. Usage: studio qa <audit|repair> <projectId>');
+        console.error('Error: Project ID is required. Usage: studio qa <audit|repair|human> <projectId>');
         return 1;
       }
 
@@ -4504,6 +4511,8 @@ Commands:
   timeline assemble <projId> [sceneId]   Assemble multi-track timeline (video, audio, sfx, subs)
   timeline inspect <projId>              Inspect multi-track timeline tracks, clips, and transitions
   timeline subtitles <projId> [--format] Generate and display SRT or WebVTT subtitles
+  qa human [--live]                      Run guided 7-step Human QA acceptance wizard & write report
+  human-qa [--live]                      Alias for "qa human"
   qa audit <projId>                      Run Continuity QA audit for 180-rule, lighting, wardrobe, audio
   qa repair <projId>                     Apply automated repairs for detected continuity issues
   export html5 <projId>                  Package standalone interactive HTML5 player bundle
