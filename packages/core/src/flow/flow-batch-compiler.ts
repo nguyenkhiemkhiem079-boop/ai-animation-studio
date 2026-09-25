@@ -38,6 +38,36 @@ export class FlowBatchCompiler {
     const aspect = input.aspectRatio ?? '16:9';
     const style = input.globalStyle ?? 'Cinematic 3D animation, high production value, consistent lighting, photorealistic textures.';
 
+    // Single-shot fast path: direct imperative video generation prompt for Flow Agent
+    if (input.shots.length === 1) {
+      const shot = input.shots[0];
+      const duration = shot.frame.durationSeconds ?? 4;
+      const cameraMove = shot.camera.movement ?? 'static';
+      const shotSize = shot.camera.shotSize ?? 'medium';
+      const prompt =
+        (shot as any).promptPacket?.positivePrompt ??
+        (shot as any).prompt ??
+        shot.acting[0]?.actionPrompt ??
+        'Cinematic shot';
+
+      const batchInstructionText = `Generate video: ${prompt}. Camera: ${cameraMove}, Framing: ${shotSize}, Duration: ${duration}s, Aspect ratio: ${aspect}. Style: ${style}. [${shot.id}]`;
+      const instructionSha256 = crypto.createHash('sha256').update(batchInstructionText).digest('hex');
+
+      const referencePaths: string[] = [];
+      if (input.references) {
+        for (const ref of input.references) {
+          if (ref.localPath) referencePaths.push(ref.localPath);
+        }
+      }
+
+      return {
+        batchInstructionText,
+        shotIds: [shot.id],
+        referencePaths,
+        instructionSha256,
+      };
+    }
+
     lines.push(`============================================================`);
     lines.push(`MASTER PRODUCTION INSTRUCTION — GOOGLE FLOW AGENT`);
     lines.push(`============================================================`);

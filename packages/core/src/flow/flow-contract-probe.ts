@@ -257,7 +257,11 @@ export class FlowContractProbe {
       fs.writeFileSync(path.join(outDir, 'probe-report.json'), JSON.stringify(report, null, 2));
       fs.writeFileSync(path.join(outDir, 'control-map.json'), JSON.stringify(controlMap, null, 2));
 
-      if (report.browserProjectReference) {
+      if (
+        report.browserProjectReference &&
+        !report.browserProjectReference.startsWith('mock_') &&
+        !report.browserProjectReference.startsWith('proj_guard_')
+      ) {
         fs.writeFileSync(
           path.join(outDir, 'project-reference.json'),
           JSON.stringify(

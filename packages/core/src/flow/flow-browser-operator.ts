@@ -318,8 +318,13 @@ export class FlowBrowserOperator {
       checkpoint.state = 'FLOW_PROJECT_READY';
       this.saveCheckpoint(checkpointPath, checkpoint);
 
-      // Persist stable browser project reference
-      if (projRes.browserProjectReference) {
+      // Persist stable browser project reference (strictly real sessions, never mock flowPage or test doubles)
+      if (
+        projRes.browserProjectReference &&
+        !this.config.flowPage &&
+        !projRes.browserProjectReference.startsWith('mock_') &&
+        !projRes.browserProjectReference.startsWith('proj_guard_')
+      ) {
         const projRefDir = path.resolve(process.cwd(), '.studio', 'flow-contract');
         if (!fs.existsSync(projRefDir)) {
           fs.mkdirSync(projRefDir, { recursive: true });
