@@ -244,10 +244,59 @@ export class ChromeFlowSessionBridge {
         );
       }
 
-      // Auto-launch system Chrome with dedicated profile
+      // Strategy 1: Try system Chrome with dedicated profile
       this.launchSystemChrome({ port: cdpPort, userDataDir, url: flowUrl });
       isStudioOwned = true;
-      await ChromeFlowSessionBridge.waitForDebuggerEndpoint(cdpPort, cdpHost, options.timeoutMs ?? 20000);
+
+      // Wait up to 8 seconds for system Chrome to bind the port
+      const shortTimeout = Math.min(options.timeoutMs ?? 8000, 8000);
+      const startWait = Date.now();
+      while (Date.now() - startWait < shortTimeout) {
+        isRunning = await ChromeFlowSessionBridge.isCdpActive(cdpPort, cdpHost);
+        if (isRunning) break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+
+      // Strategy 2: System Chrome singleton problem — fall back to puppeteer.launch()
+      // This handles the Windows case where Chrome already owns the profile singleton.
+      if (!isRunning) {
+        const chromePath = this.config.chromeExecutablePath || ChromeFlowSessionBridge.findSystemChrome();
+        if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
+
+        const launchOpts: Parameters<typeof puppeteer.launch>[0] = {
+          userDataDir,
+          headless: false,
+          defaultViewport: null,
+          args: [
+            `--remote-debugging-port=${cdpPort}`,
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding',
+          ],
+        };
+
+        if (chromePath && fs.existsSync(chromePath)) {
+          launchOpts.executablePath = chromePath;
+        }
+
+        const launchedBrowser = await puppeteer.launch(launchOpts);
+        isStudioOwned = true;
+
+        // Navigate to Flow URL in first page
+        const pages = await launchedBrowser.pages();
+        const firstPage = pages[0] || await launchedBrowser.newPage();
+        await firstPage.goto(flowUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+        const flowPage = await this.findOrOpenFlowPage(launchedBrowser, flowUrl);
+
+        return {
+          browser: launchedBrowser,
+          page: flowPage,
+          isStudioOwned: true,
+          cdpEndpoint: `http://${cdpHost}:${cdpPort}`,
+          cdpPort,
+        };
+      }
     }
 
     const endpoint = `http://${cdpHost}:${cdpPort}`;
@@ -266,6 +315,7 @@ export class ChromeFlowSessionBridge {
       cdpPort,
     };
   }
+
 
   /**
    * Discovers existing Google Flow tab across open browser tabs or opens a new tab.
