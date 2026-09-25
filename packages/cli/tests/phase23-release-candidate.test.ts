@@ -43,7 +43,7 @@ describe('Phase 23 — Release Candidate Diagnostics & Operator Tools', () => {
     expect(loggedText).toContain('Google Flow');
     expect(loggedText).toContain('MANUAL WORKSPACE');
     expect(loggedText).toContain('[LIVE-ONLY — External Providers (Opt-In)]');
-    expect(loggedText).toContain('Gemini API Key');
+    expect(loggedText).toContain('GEMINI ENGINEERING API');
     expect(loggedText).toContain('NOT TESTED');
     // Crucial truthful assertion: does not claim 100% production verified
     expect(loggedText).not.toContain('100% healthy and ready for real production media rendering');

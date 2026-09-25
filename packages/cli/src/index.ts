@@ -329,7 +329,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       const allowPaid = process.env.ALLOW_PAID_VIDEO_API === 'true';
       console.log('\n[LIVE-ONLY — External Providers (Opt-In)]');
       console.log(` - Video Cost Mode : ${costMode} (${costMode === 'PAID_ALLOWED' && allowPaid ? 'PAID ALLOWED ⚠️' : 'FREE ONLY — Paid Video APIs Blocked 🔒'})`);
-      console.log(` - Gemini API Key  : ${geminiConfigured ? 'CONFIGURED ✅ (Masked: ' + (process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.slice(0, 4) + '...***' : 'SET') + ')' : 'NOT CONFIGURED ℹ️ (Required only for live pilot)'}`);
+      console.log(` - GEMINI ENGINEERING API: ${geminiConfigured ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
       console.log(` - Gemini Live Ping: ${isLive ? (geminiConfigured ? 'TESTED ✅' : 'NOT CONFIGURED ❌') : 'NOT TESTED ℹ️ (Use "studio doctor --live" or "studio gemini doctor --live")'}`);
 
       const localCoreReady = toolchain.ffmpeg.available && toolchain.ffprobe.available && outputWritable;
@@ -476,7 +476,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         console.log(`- Provider: ${gemini.metadata.name}`);
         console.log(`- Status: ${health.status}`);
         console.log(`- Configured: ${health.configured ? 'Yes ✅' : 'No ❌'}`);
-        console.log(`- API Key: ${gemini.getMaskedApiKey()}`);
+        console.log(`- GEMINI ENGINEERING API: ${health.configured ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
         console.log(`- Diagnostics: ${health.message}`);
         if (health.selectedModel) console.log(`- Active Model: ${health.selectedModel}`);
         if (health.latencyMs !== undefined) console.log(`- Latency: ${health.latencyMs}ms`);
