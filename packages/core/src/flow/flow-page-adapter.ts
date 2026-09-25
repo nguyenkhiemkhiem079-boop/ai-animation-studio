@@ -616,27 +616,54 @@ export class PuppeteerFlowPage implements IFlowPage {
   /**
    * Detects and clicks the Flow Agent in-panel confirmation gate.
    * When Flow Agent asks "Bạn có muốn tôi bắt đầu tạo... với chi phí là X tín dụng không?"
-   * this method finds and clicks the "Phê duyệt" / "Approve" button.
+   * this method finds and clicks the "Luôn phê duyệt" / "Phê duyệt" (Approve) option.
    * Returns true if an approval was dispatched.
    */
   private async handleAgentConfirmationGate(): Promise<boolean> {
     try {
       const approved = await this.page.evaluate(() => {
-        // Scan all visible leaf text nodes for approval keywords
-        const APPROVE_KEYWORDS = [
-          'phê duyệt',
-          'luôn phê duyệt',
-          'approve',
-          'always approve',
-        ];
+        // Strategy 1: Targeted radio option in Google Flow's flow-permission-message component
+        // Active rows do NOT have 'read-only' or 'disabled'.
+        const allOptionRows = Array.from(
+          document.querySelectorAll('flow-permission-message .option-row, .choice-container .option-row, [role="radio"]')
+        );
+        const activeRows = allOptionRows.filter(
+          (r) => !r.classList.contains('read-only') && !r.classList.contains('disabled')
+        );
+        const candidates = activeRows.length > 0 ? activeRows : allOptionRows;
 
+        // Priority 1a: "Luôn phê duyệt" (Always approve) - prevents repeated future gates
+        // Priority 1b: "Phê duyệt" (Approve)
+        const match =
+          candidates.find((r) => {
+            const a = (r.getAttribute('aria-label') || '').toLowerCase();
+            const t = (r.textContent || '').toLowerCase();
+            return a.includes('luôn phê duyệt') || t.includes('luôn phê duyệt') || a.includes('always approve') || t.includes('always approve');
+          }) ||
+          candidates.find((r) => {
+            const a = (r.getAttribute('aria-label') || '').toLowerCase();
+            const t = (r.textContent || '').toLowerCase();
+            const isDecline = a.includes('từ chối') || t.includes('từ chối') || a.includes('decline') || t.includes('decline');
+            return !isDecline && (a.includes('phê duyệt') || t.includes('phê duyệt') || a.includes('approve') || t.includes('approve'));
+          });
+
+        if (match) {
+          (match as HTMLElement).scrollIntoView({ behavior: 'instant', block: 'center' });
+          (match as HTMLElement).click();
+          return true;
+        }
+
+        // Strategy 2: Button / role="button" matching approval keywords
+        const APPROVE_KEYWORDS = ['luôn phê duyệt', 'phê duyệt', 'always approve', 'approve'];
         const clickables = Array.from(
           document.querySelectorAll('button, [role="button"], [role="option"], div[tabindex], span[tabindex]')
         );
 
         for (const el of clickables) {
           const text = (el.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
-          if (APPROVE_KEYWORDS.some((kw) => text === kw || text.startsWith(kw))) {
+          const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+          const isDecline = text.includes('từ chối') || aria.includes('từ chối') || text.includes('decline') || aria.includes('decline');
+          if (!isDecline && APPROVE_KEYWORDS.some((kw) => text.includes(kw) || aria.includes(kw))) {
             const rect = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
             const isVisible =
@@ -664,16 +691,25 @@ export class PuppeteerFlowPage implements IFlowPage {
   private async detectAgentConfirmationPending(): Promise<boolean> {
     try {
       return await this.page.evaluate(() => {
+        // Check for active (non-readonly) option rows in permission messages
+        const activeRows = Array.from(
+          document.querySelectorAll('flow-permission-message .option-row, .choice-container .option-row, [role="radio"]')
+        ).filter((r) => !r.classList.contains('read-only') && !r.classList.contains('disabled'));
+        if (activeRows.length > 0) return true;
+
+        // Fallback: check recent chat bubble text
         const PENDING_SIGNALS = [
           'phê duyệt',
           'luôn phê duyệt',
-          'tín dụng',
+          'tín dụng không',
+          'chi phí là',
           'approve',
           'always approve',
-          'credits',
         ];
-        const body = document.body?.innerText?.toLowerCase() || '';
-        return PENDING_SIGNALS.some((s) => body.includes(s));
+        const bubbles = Array.from(document.querySelectorAll('flow-chat-bubble, .agent-bubble, .agent-row'));
+        const lastBubble = bubbles[bubbles.length - 1];
+        const textToCheck = (lastBubble ? lastBubble.textContent || '' : document.body?.innerText?.slice(-800) || '').toLowerCase();
+        return PENDING_SIGNALS.some((s) => textToCheck.includes(s));
       });
     } catch {
       return false;
@@ -688,22 +724,18 @@ export class PuppeteerFlowPage implements IFlowPage {
     const pollIntervalMs = options.pollIntervalMs ?? 5000;
     const startTime = Date.now();
     const results = new Map<string, FlowGeneratedAssetDescriptor>();
-    let confirmationGateHandled = false;
 
     while (Date.now() - startTime < timeoutMs) {
       // ── Phase 1: Handle Flow Agent confirmation gate (cost approval) ──────────
-      // The agent may ask "Do you want me to create this video for 20 credits?"
-      // with buttons: Phê duyệt (Approve) / Luôn phê duyệt (Always approve) / Từ chối (Decline)
-      if (!confirmationGateHandled) {
-        const gatePending = await this.detectAgentConfirmationPending();
-        if (gatePending) {
-          const clicked = await this.handleAgentConfirmationGate();
-          if (clicked) {
-            confirmationGateHandled = true;
-            // Wait for agent to process approval and start generation
-            await new Promise((r) => setTimeout(r, 3000));
-            continue;
-          }
+      // The agent may ask "Do you want me to create this video for X credits?"
+      // with options: Luôn phê duyệt / Phê duyệt / Từ chối
+      const gatePending = await this.detectAgentConfirmationPending();
+      if (gatePending) {
+        const clicked = await this.handleAgentConfirmationGate();
+        if (clicked) {
+          // Wait for agent to process approval and start generation
+          await new Promise((r) => setTimeout(r, 4000));
+          continue;
         }
       }
 
