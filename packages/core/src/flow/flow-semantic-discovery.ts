@@ -296,12 +296,20 @@ export function scorePromptSurface(candidate: {
   const cText = (candidate.className || '').toLowerCase();
 
   // Disqualify search inputs
-  if (pText.includes('search') || aText.includes('search') || pText.includes('tìm kiếm') || aText.includes('tìm kiếm')) {
+  if (
+    pText.includes('search') ||
+    aText.includes('search') ||
+    pText.includes('tìm kiếm') ||
+    aText.includes('tìm kiếm') ||
+    cText.includes('search-input')
+  ) {
     return { score: 0, reasons: ['Search input disqualified'] };
   }
 
   // Disqualify project/document title or rename inputs (e.g. Google Drive/Docs/Flow title header)
   if (
+    cText.includes('editable-text-input') ||
+    cText.includes('project-name') ||
     aText.includes('văn bản có thể chỉnh sửa') ||
     aText.includes('tiêu đề') ||
     aText.includes('title') ||
