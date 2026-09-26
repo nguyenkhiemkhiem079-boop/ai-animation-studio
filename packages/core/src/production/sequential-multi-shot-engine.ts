@@ -47,7 +47,7 @@ export interface MultiShotSequenceResult {
 }
 
 export class SequentialMultiShotEngine {
-  private readonly propTracker: ScenePropStateTracker;
+  public readonly propTracker: ScenePropStateTracker;
   private readonly continuityQa: ContinuityQAEvaluator;
 
   constructor() {
