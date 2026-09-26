@@ -32,9 +32,28 @@ Thumbs.db
 .studio/
 scratch/
 tmp/
+.tmp*/
+
+# Browser Automation & Profiles
+flow_chrome_profile/
+chrome_profile/
+chrome_data/
+user_data/
+user-data/
+*.crdownload
+
+# Video & Media Binaries (must not be committed to Git)
+*.mp4
+*.mov
+*.webm
+*.avi
 
 # Environment Variables & Secrets
 .env
 .env.local
 .env.*.local
 *.env
+*.pem
+*.key
+credentials.json
+token.json
