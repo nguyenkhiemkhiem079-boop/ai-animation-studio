@@ -9,8 +9,8 @@
 | Field | Truth Status | Verification Details |
 | :--- | :--- | :--- |
 | **Starting HEAD** | `572260cf9440350698973438cea6b74513aef539` | 3 CI Failures on GitHub (Run `36217690099`) |
-| **Ending HEAD** | `3d2856d2a8ccc410874e3e31ac7bb797ff20943b` | Clean, 4 verified commits |
-| **GitHub Actions Run ID** | `36229170296` | [View Run on GitHub](https://github.com/nguyenkhiemkhiem079-boop/ai-animation-studio/actions/runs/36229170296) |
+| **Ending HEAD** | `9f988146847a98543a1e93e3930c581047779887` | Clean, 5 verified commits |
+| **GitHub Actions Run ID** | `36229604152` (and prior `36229170296`) | [View Run on GitHub](https://github.com/nguyenkhiemkhiem079-boop/ai-animation-studio/actions/runs/36229604152) |
 | **GitHub CI Status** | `completed` | Verified via GitHub REST API |
 | **GitHub CI Conclusion** | `success` | All jobs passed |
 | **Node 20.x CI Result** | `success` | Build & Test (20.x) PASSED |
