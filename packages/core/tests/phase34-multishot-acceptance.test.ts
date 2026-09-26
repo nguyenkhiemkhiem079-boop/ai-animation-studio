@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { FileSystemStorage } from '../src/storage/index.js';
 import { EndToEndMultiShotAcceptanceHarness } from '../src/production/multi-shot-acceptance-harness.js';
+import { getDeterministicMp4Buffer } from '../src/media/test-media-helper.js';
 
 describe('Phase 34 — End-to-End Multi-Shot Acceptance Harness', () => {
   const testDir = path.join(process.cwd(), '.tmp-phase34-test');
@@ -18,7 +19,7 @@ describe('Phase 34 — End-to-End Multi-Shot Acceptance Harness', () => {
     if (fs.existsSync(realVideoPath)) {
       realVideoBytes = fs.readFileSync(realVideoPath);
     } else {
-      realVideoBytes = Buffer.from('mock video bytes for testing');
+      realVideoBytes = getDeterministicMp4Buffer({ width: 320, height: 180, durationSeconds: 1.0 });
     }
   });
 

@@ -29,6 +29,7 @@ import {
 } from './flow-semantic-discovery.js';
 import { FlowContractProbe, FlowPageState } from './flow-contract-probe.js';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
+import { getDeterministicMp4Buffer } from '../media/test-media-helper.js';
 
 export const FLOW_PURCHASE_REJECTION_KEYWORDS = [
   'mua thêm',
@@ -1698,7 +1699,7 @@ export class MockFlowPage implements IFlowPage {
       syncFs.mkdirSync(destDir, { recursive: true });
     }
 
-    const bytes = this.mockMp4Bytes || Buffer.from('mock video bytes');
+    const bytes = this.mockMp4Bytes || getDeterministicMp4Buffer();
     syncFs.writeFileSync(destinationFilePath, bytes);
 
     return {

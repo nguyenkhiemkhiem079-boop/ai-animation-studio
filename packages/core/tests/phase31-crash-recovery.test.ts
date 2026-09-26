@@ -10,6 +10,7 @@ import { ProductionRun, ProductionRunStatus } from '../domain/production-run.js'
 import { FlowBrowserOperator } from '../src/flow/flow-browser-operator.js';
 import { MockFlowPage } from '../src/flow/flow-page-adapter.js';
 import { ShotContract } from '../domain/director.js';
+import { getDeterministicMp4Buffer } from '../src/media/test-media-helper.js';
 
 describe('Phase 31: Production Crash Recovery & Resume Hardening', () => {
   const scratchDir = path.resolve(process.cwd(), '.studio', 'scratch', 'test_crash_recovery');
@@ -114,7 +115,7 @@ describe('Phase 31: Production Crash Recovery & Resume Hardening', () => {
     );
     const mockMp4Bytes = syncFs.existsSync(knownClip)
       ? syncFs.readFileSync(knownClip)
-      : undefined;
+      : getDeterministicMp4Buffer();
 
     const mockPage = new MockFlowPage({ mockMp4Bytes });
 
