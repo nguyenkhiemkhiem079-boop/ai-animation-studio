@@ -150,7 +150,7 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
       const maxShots = isSingleShot ? 1 : (shotsIdx !== -1 && createArgs[shotsIdx + 1] ? parseInt(createArgs[shotsIdx + 1], 10) : undefined);
       const projIdx = createArgs.indexOf('--project');
       const projectId = projIdx !== -1 && createArgs[projIdx + 1] ? createArgs[projIdx + 1] : 'project_flow_zero';
-      const flagsWithValues = new Set(['--project', '--shots', '--max-shots']);
+      const flagsWithValues = new Set(['--project', '--shots', '--max-shots', '--run']);
       const nonFlagArgs: string[] = [];
       for (let i = 0; i < createArgs.length; i++) {
         const arg = createArgs[i];
@@ -208,10 +208,25 @@ export async function runCli(args: string[], context?: CliContext): Promise<numb
         return 0;
       }
 
-      console.log('Opening Google Flow...');
-      console.log('Verifying session authentication...\n');
+      const runIdx = createArgs.indexOf('--run');
+      let explicitRunId = runIdx !== -1 && createArgs[runIdx + 1] ? createArgs[runIdx + 1] : undefined;
+      const isResume = createArgs.includes('--resume');
+      if (isResume && !explicitRunId) {
+        const prodDir = path.resolve(process.cwd(), '.studio', 'production', projectId);
+        if (syncFs.existsSync(prodDir)) {
+          const runs = syncFs.readdirSync(prodDir).filter((d: string) => d.startsWith('run_')).sort().reverse();
+          if (runs.length > 0) {
+            explicitRunId = runs[0];
+          }
+        }
+      }
 
-      const result = await orchestrator.execute(positionalPrompt, { projectId, dryRun: false, maxShots });
+      const result = await orchestrator.execute(positionalPrompt, {
+        projectId,
+        runId: explicitRunId,
+        dryRun: false,
+        maxShots,
+      });
 
       if (result.status === 'BLOCKED_AUTH') {
         console.error('\n🚫 Google Authentication Required (BLOCKED_AUTH)');

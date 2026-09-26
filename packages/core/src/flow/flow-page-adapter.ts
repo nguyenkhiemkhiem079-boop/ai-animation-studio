@@ -251,7 +251,8 @@ export interface IFlowPage {
   /** Download a completed video asset to physical disk (scoped to container) */
   downloadAsset(
     flowAssetId: string,
-    destinationFilePath: string
+    destinationFilePath: string,
+    assetName?: string
   ): Promise<{ physicalPath: string; sizeBytes: number; resolution?: string }>;
 
   /** Detect observed credits from the UI */
@@ -994,18 +995,21 @@ export class PuppeteerFlowPage implements IFlowPage {
           continue;
         }
 
-        const exactMatchAny = assets.find(
-          (a) =>
-            ((a.name && typeof a.name === 'string' && a.name.includes(shotId)) ||
-              (a.matchedShotId && a.matchedShotId === shotId) ||
-              (a.id && typeof a.id === 'string' && a.id.includes(shotId))) &&
-            a.status === 'READY'
-        );
-        if (exactMatchAny) {
-          exactMatchAny.matchedShotId = shotId;
-          exactMatchAny.mappingStrategy = 'EXACT_OUTPUT_NAME';
-          results.set(shotId, exactMatchAny);
-          continue;
+        // Strategy A2: If no baseline was provided (e.g. offline/mock run), allow matching any ready asset
+        if (baselineSet.size === 0) {
+          const exactMatchAny = assets.find(
+            (a) =>
+              ((a.name && typeof a.name === 'string' && a.name.includes(shotId)) ||
+                (a.matchedShotId && a.matchedShotId === shotId) ||
+                (a.id && typeof a.id === 'string' && a.id.includes(shotId))) &&
+              a.status === 'READY'
+          );
+          if (exactMatchAny) {
+            exactMatchAny.matchedShotId = shotId;
+            exactMatchAny.mappingStrategy = 'EXACT_OUTPUT_NAME';
+            results.set(shotId, exactMatchAny);
+            continue;
+          }
         }
 
         // Strategy B: If only 1 shot requested, map to the newest READY asset that is NOT in baseline
@@ -1081,7 +1085,8 @@ export class PuppeteerFlowPage implements IFlowPage {
 
   public async downloadAsset(
     flowAssetId: string,
-    destinationFilePath: string
+    destinationFilePath: string,
+    assetName?: string
   ): Promise<{ physicalPath: string; sizeBytes: number; resolution?: string }> {
     const destDir = path.dirname(destinationFilePath);
     if (!syncFs.existsSync(destDir)) {
@@ -1100,7 +1105,7 @@ export class PuppeteerFlowPage implements IFlowPage {
     }
 
     // Scoped download discovery: must find download button INSIDE target container
-    const downloadDiscovery = await findDownloadAction(this.page, flowAssetId);
+    const downloadDiscovery = await findDownloadAction(this.page, flowAssetId, assetName);
 
     if (downloadDiscovery.status === 'AMBIGUOUS') {
       throw new Error(`[DOWNLOAD_AMBIGUOUS] Multiple download buttons found for asset ${flowAssetId}. Failing closed.`);
@@ -1114,7 +1119,7 @@ export class PuppeteerFlowPage implements IFlowPage {
     let selectedResolution = 'ORIGINAL';
 
     // Strategy 1: Click scoped download trigger if button exists
-    const clicked = await this.page.evaluate((assetId: string) => {
+    const clicked = await this.page.evaluate((assetId: string, nameHint?: string) => {
       let container = document.querySelector(`[data-asset-id="${assetId}"]`);
       if (!container) {
         container = document.querySelector(`[data-studio-asset-id="${assetId}"]`);
@@ -1122,21 +1127,35 @@ export class PuppeteerFlowPage implements IFlowPage {
       if (!container) {
         container = document.getElementById(assetId);
       }
+      if (!container && nameHint) {
+        const tiles = Array.from(
+          document.querySelectorAll('flow-grid-tile-container, flow-video-tile, [class*="video-card"], [class*="asset-card"], mat-card')
+        );
+        const cleanName = nameHint.replace(/…|\.\.\./g, '').trim().toLowerCase().slice(0, 30);
+        container =
+          tiles.find((t) => {
+            const text = (t.textContent || '').toLowerCase();
+            const aria = (t.getAttribute('aria-label') || '').toLowerCase();
+            return cleanName && (text.includes(cleanName) || aria.includes(cleanName));
+          }) || null;
+      }
       if (!container) {
         const idxMatch = assetId.match(/asset_card_(\d+)/);
         if (idxMatch) {
           const allCards = Array.from(
             document.querySelectorAll(
               '[data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
-              'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"], ' +
-              '[role="listitem"], [role="article"]'
+              'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"]'
             )
+          ).filter(
+            (c) =>
+              c.closest('flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], [class*="drawer"]') === null
           );
           container = allCards[parseInt(idxMatch[1], 10)] || null;
         }
       }
       if (!container) {
-        const cards = Array.from(document.querySelectorAll('[class*="asset-card"], [class*="video-card"], [role="listitem"]'));
+        const cards = Array.from(document.querySelectorAll('[class*="asset-card"], [class*="video-card"]'));
         container = cards.find((c) => (c.textContent || '').includes(assetId)) || null;
       }
       if (!container) return false;
@@ -1169,7 +1188,7 @@ export class PuppeteerFlowPage implements IFlowPage {
         return true;
       }
       return false;
-    }, flowAssetId);
+    }, flowAssetId, assetName);
 
     if (clicked) {
       try {
@@ -1196,11 +1215,23 @@ export class PuppeteerFlowPage implements IFlowPage {
 
     // Strategy 1b: Google Flow Tile Kebab Menu Download (flow-grid-tile-container / flow-video-tile)
     if (!downloadSucceeded) {
-      const tileMenuTriggered = await this.page.evaluate((assetId: string) => {
+      const tileMenuTriggered = await this.page.evaluate((assetId: string, nameHint?: string) => {
         // Find container
         let container = document.querySelector(`[data-asset-id="${assetId}"]`);
         if (!container) container = document.querySelector(`[data-studio-asset-id="${assetId}"]`);
         if (!container) container = document.getElementById(assetId);
+        if (!container && nameHint) {
+          const tiles = Array.from(
+            document.querySelectorAll('flow-grid-tile-container, flow-video-tile, [class*="video-card"], [class*="asset-card"], mat-card')
+          );
+          const cleanName = nameHint.replace(/…|\.\.\./g, '').trim().toLowerCase().slice(0, 30);
+          container =
+            tiles.find((t) => {
+              const text = (t.textContent || '').toLowerCase();
+              const aria = (t.getAttribute('aria-label') || '').toLowerCase();
+              return cleanName && (text.includes(cleanName) || aria.includes(cleanName));
+            }) || null;
+        }
         if (!container) {
           const idxMatch = assetId.match(/asset_card_(\d+)/);
           if (idxMatch) {
@@ -1208,6 +1239,9 @@ export class PuppeteerFlowPage implements IFlowPage {
               document.querySelectorAll(
                 'flow-grid-tile-container, flow-video-tile, [data-asset-id], [class*="asset-card"], [class*="video-card"], mat-card, .tile'
               )
+            ).filter(
+              (c) =>
+                c.closest('flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], [class*="drawer"]') === null
             );
             container = allCards[parseInt(idxMatch[1], 10)] || null;
           }
@@ -1236,7 +1270,7 @@ export class PuppeteerFlowPage implements IFlowPage {
         moreBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
         moreBtn.click();
         return true;
-      }, flowAssetId);
+      }, flowAssetId, assetName);
 
       if (tileMenuTriggered) {
         await new Promise((r) => setTimeout(r, 1200));
@@ -1692,7 +1726,8 @@ export class MockFlowPage implements IFlowPage {
 
   public async downloadAsset(
     flowAssetId: string,
-    destinationFilePath: string
+    destinationFilePath: string,
+    assetName?: string
   ): Promise<{ physicalPath: string; sizeBytes: number }> {
     const destDir = path.dirname(destinationFilePath);
     if (!syncFs.existsSync(destDir)) {

@@ -966,6 +966,15 @@ export async function findAssetContainers(page: Page): Promise<
         const bannerInner = card.querySelector('[class*="promotion-banner"]');
         if (bannerInner || cardCls.includes('promotion-banner') || cardElId.includes('promotion-banner')) return;
 
+        // Skip chat bubbles / agent message panels / composer / drawer — never video asset cards
+        if (
+          card.closest(
+            'flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], [class*="agent-bubble"], [class*="composer"], [class*="drawer"]'
+          ) !== null
+        ) {
+          return;
+        }
+
         // Skip videos sourced from Google's static marketing CDN
         const videoEl2 = card.tagName.toLowerCase() === 'video' ? (card as HTMLVideoElement) : card.querySelector('video');
         if (videoEl2) {
@@ -1137,42 +1146,62 @@ export async function findAssetContainers(page: Page): Promise<
  */
 export async function findDownloadAction(
   page: Page,
-  containerIdOrSelector: string
+  containerIdOrSelector: string,
+  nameHint?: string
 ): Promise<SemanticDiscoveryResult> {
   try {
-    const downloadStatus: any = await page.evaluate((targetSelector: string) => {
-      // Find matching container
-      let container = document.querySelector(`[data-asset-id="${targetSelector}"]`);
-      if (!container) {
-        container = document.querySelector(`[data-studio-asset-id="${targetSelector}"]`);
-      }
-      if (!container) {
-        container = document.getElementById(targetSelector);
-      }
-      if (!container) {
-        try {
-          container = document.querySelector(targetSelector);
-        } catch {
-          // ignore invalid selector syntax
+    const downloadStatus: any = await page.evaluate(
+      (targetSelector: string, assetName?: string) => {
+        // Find matching container
+        let container = document.querySelector(`[data-asset-id="${targetSelector}"]`);
+        if (!container) {
+          container = document.querySelector(`[data-studio-asset-id="${targetSelector}"]`);
         }
-      }
-      if (!container) {
-        // Fallback positional match for asset_card_N
-        const idxMatch = targetSelector.match(/asset_card_(\d+)/);
-        if (idxMatch) {
-          const allCards = Array.from(
+        if (!container) {
+          container = document.getElementById(targetSelector);
+        }
+        if (!container && assetName) {
+          const tiles = Array.from(
             document.querySelectorAll(
-              'flow-grid-tile-container, flow-video-tile, [data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
-              'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"], ' +
-              '[role="listitem"], [role="article"]'
+              'flow-grid-tile-container, flow-video-tile, [class*="video-card"], [class*="asset-card"], mat-card'
             )
           );
-          container = allCards[parseInt(idxMatch[1], 10)] || null;
+          const cleanName = assetName.replace(/…|\.\.\./g, '').trim().toLowerCase().slice(0, 30);
+          container =
+            tiles.find((t) => {
+              const text = (t.textContent || '').toLowerCase();
+              const aria = (t.getAttribute('aria-label') || '').toLowerCase();
+              return (cleanName && (text.includes(cleanName) || aria.includes(cleanName)));
+            }) || null;
         }
-      }
-      if (!container) {
-        return { error: 'Target container not found' };
-      }
+        if (!container) {
+          try {
+            container = document.querySelector(targetSelector);
+          } catch {
+            // ignore invalid selector syntax
+          }
+        }
+        if (!container) {
+          // Fallback positional match for asset_card_N
+          const idxMatch = targetSelector.match(/asset_card_(\d+)/);
+          if (idxMatch) {
+            const allCards = Array.from(
+              document.querySelectorAll(
+                'flow-grid-tile-container, flow-video-tile, [data-asset-id], [class*="asset-card"], [class*="video-card"], [class*="media-card"], ' +
+                'mat-card, [class*="node"], [class*="tile"], [class*="grid-item"], [class*="flow-card"]'
+              )
+            ).filter(
+              (c) =>
+                c.closest(
+                  'flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], [class*="drawer"]'
+                ) === null
+            );
+            container = allCards[parseInt(idxMatch[1], 10)] || null;
+          }
+        }
+        if (!container) {
+          return { error: 'Target container not found' };
+        }
 
       // Search download action WITHIN container only
       const candidateElements = Array.from(
@@ -1247,7 +1276,7 @@ export async function findDownloadAction(
         count: 0,
         details: 'No download action found in target asset container',
       };
-    }, containerIdOrSelector);
+    }, containerIdOrSelector, nameHint);
 
     if (downloadStatus.error) {
       return {

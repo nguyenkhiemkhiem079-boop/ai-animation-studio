@@ -73,6 +73,7 @@ export interface FlowOperatorCheckpoint {
   browserProjectReference?: string;
   creditsObserved?: number | null;
   observationTime?: string;
+  baselineAssetIds?: string[];
   updatedAt: string;
   details?: string;
 }
@@ -384,15 +385,19 @@ export class FlowBrowserOperator {
         // Proceed with standard direct prompt submission
       }
 
-      // Snapshot baseline assets before submitting instruction (Phase 3 & 4 correlation)
-      const baselineAssets = await page.listGeneratedAssets().catch(() => []);
-      const baselineAssetIds = baselineAssets.map((a) => a.id);
-
       // 8. Submit Structured Batch Instruction (Zero-Touch) with Crash Recovery
       const isAlreadySubmitted =
         Boolean(checkpoint.submissionId) &&
         Boolean(checkpoint.instructionSha256) &&
         checkpoint.instructionSha256 === batchCompilation.instructionSha256;
+
+      // Snapshot baseline assets before submitting instruction (Phase 3 & 4 correlation)
+      let baselineAssetIds: string[] = checkpoint.baselineAssetIds ?? [];
+      if (!isAlreadySubmitted && baselineAssetIds.length === 0) {
+        const baselineAssets = await page.listGeneratedAssets().catch(() => []);
+        baselineAssetIds = baselineAssets.map((a) => a.id);
+        checkpoint.baselineAssetIds = baselineAssetIds;
+      }
 
       let submission: { submissionId: string; submittedAt?: string; submissionCount?: number };
 
@@ -466,11 +471,11 @@ export class FlowBrowserOperator {
             };
           } else {
             // Corrupt or partial file, re-download
-            downloadRes = await page.downloadAsset(assetDesc.id, destinationFile);
+            downloadRes = await page.downloadAsset(assetDesc.id, destinationFile, assetDesc.name);
           }
         } else {
           // Download via scoped container button
-          downloadRes = await page.downloadAsset(assetDesc.id, destinationFile);
+          downloadRes = await page.downloadAsset(assetDesc.id, destinationFile, assetDesc.name);
         }
 
         // Verify physical file on disk
