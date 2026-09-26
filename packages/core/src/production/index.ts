@@ -5,3 +5,4 @@ export * from './benchmark-tracker.js';
 export * from './production-router.js';
 export * from './job-orchestrator.js';
 export * from './production-pipeline-step.js';
+export * from './sequential-multi-shot-engine.js';
