@@ -100,9 +100,22 @@ export class CreditAwarePlanner {
       };
     }
 
-    // 2. Keyword detection for local graphics / typography
-    const matchedLocalKeyword = this.LOCAL_KEYWORDS.find((kw) => promptText.includes(kw));
-    if (matchedLocalKeyword) {
+    // 2. Keyword detection for local graphics / typography (ignore negative constraints like "no logos", "no text")
+    const isNegativeConstraint = (kw: string) => {
+      const regex = new RegExp(`(?:no|without|never|zero|avoid)\\s+(?:[\\w,-]+\\s+)*${kw}s?`, 'i');
+      return regex.test(promptText);
+    };
+
+    const matchedLocalKeyword = this.LOCAL_KEYWORDS.find(
+      (kw) => promptText.includes(kw) && !isNegativeConstraint(kw)
+    );
+
+    const isExplicitGenerative =
+      shot.rendererIntent === 'generative_full_video' ||
+      shot.rendererIntent === 'generative_image_to_video' ||
+      shot.complexity === 'complex_generative_video';
+
+    if (matchedLocalKeyword && !isExplicitGenerative) {
       return {
         shotId: shot.id,
         classification: 'LOCAL_PREFERRED',
