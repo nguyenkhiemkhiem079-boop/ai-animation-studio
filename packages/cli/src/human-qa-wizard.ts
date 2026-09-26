@@ -115,6 +115,7 @@ export async function runHumanQaWizard(
 
     const probe = await operator.probe({ persistEvidence: true, enterProject: false });
 
+    reportState.browserProbe = 'PASS';
     reportState.zeroCreditProbe = probe.report.zeroCreditVerified ? 'PASS' : 'WARN';
     reportState.promptComposer = probe.report.promptControl?.status === 'FOUND' ? 'PASS' : 'NOT_FOUND_ON_HOME';
     reportState.generateDetection = probe.report.generateControl?.status === 'FOUND' ? 'PASS' : 'NOT_FOUND_ON_HOME';
@@ -123,6 +124,7 @@ export async function runHumanQaWizard(
     console.log(`  • Discovered items: ${probe.report.visibleSemanticControls?.length ?? 0}`);
     console.log(`  • Auth blocked    : ${probe.report.authBlockStatus?.isBlocked ? 'YES ❌' : 'NO ✅'}`);
   } catch (err: any) {
+    reportState.browserProbe = `WARN (${err?.message || String(err)})`;
     reportState.zeroCreditProbe = `WARN (${err?.message || String(err)})`;
     console.log(`  • Probe note: Browser session not currently open (${err?.message || String(err)})`);
     stepCPass = true; // non-fatal in offline preflight
