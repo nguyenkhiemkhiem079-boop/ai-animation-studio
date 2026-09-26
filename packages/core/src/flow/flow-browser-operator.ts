@@ -277,8 +277,10 @@ export class FlowBrowserOperator {
 
     try {
       // 5. Open Project & Check Auth Block
-      checkpoint.state = 'FLOW_SESSION_READY';
-      this.saveCheckpoint(checkpointPath, checkpoint);
+      if (!checkpoint.submissionId && ['INITIAL', 'UNKNOWN'].includes(checkpoint.state)) {
+        checkpoint.state = 'FLOW_SESSION_READY';
+        this.saveCheckpoint(checkpointPath, checkpoint);
+      }
 
       const authBlock = await page.detectAuthBlock();
       if (authBlock.isBlocked) {
@@ -319,8 +321,10 @@ export class FlowBrowserOperator {
       }
 
       checkpoint.browserProjectReference = projRes.browserProjectReference;
-      checkpoint.state = 'FLOW_PROJECT_READY';
-      this.saveCheckpoint(checkpointPath, checkpoint);
+      if (!checkpoint.submissionId && ['INITIAL', 'UNKNOWN', 'FLOW_SESSION_READY'].includes(checkpoint.state)) {
+        checkpoint.state = 'FLOW_PROJECT_READY';
+        this.saveCheckpoint(checkpointPath, checkpoint);
+      }
 
       // Persist stable browser project reference (strictly real sessions, never mock flowPage or test doubles)
       if (
@@ -387,10 +391,8 @@ export class FlowBrowserOperator {
       // 8. Submit Structured Batch Instruction (Zero-Touch) with Crash Recovery
       const isAlreadySubmitted =
         Boolean(checkpoint.submissionId) &&
-        checkpoint.instructionSha256 === batchCompilation.instructionSha256 &&
-        ['FLOW_PROMPT_SUBMITTED', 'FLOW_GENERATING', 'FLOW_ASSET_READY', 'FLOW_DOWNLOADING'].includes(
-          checkpoint.state
-        );
+        Boolean(checkpoint.instructionSha256) &&
+        checkpoint.instructionSha256 === batchCompilation.instructionSha256;
 
       let submission: { submissionId: string; submittedAt?: string; submissionCount?: number };
 
@@ -414,8 +416,10 @@ export class FlowBrowserOperator {
       }
 
       // 9. Monitor Generation
-      checkpoint.state = 'FLOW_GENERATING';
-      this.saveCheckpoint(checkpointPath, checkpoint);
+      if (['FLOW_PROMPT_SUBMITTED', 'FLOW_PROJECT_READY', 'INITIAL'].includes(checkpoint.state)) {
+        checkpoint.state = 'FLOW_GENERATING';
+        this.saveCheckpoint(checkpointPath, checkpoint);
+      }
 
       const generatedMap = await page.waitForGeneration(batchCompilation.shotIds, {
         timeoutMs: this.config.generationTimeoutMs,

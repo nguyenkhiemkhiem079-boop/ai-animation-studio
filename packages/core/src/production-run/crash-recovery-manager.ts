@@ -82,16 +82,19 @@ export class ProductionCrashRecoveryManager {
     } else if (status === 'MASTER_QA' || stage === 'master_render') {
       interruptionStage = 'TIMELINE_ASSEMBLED';
       recommendedAction = 'Resume at master QA and final delivery.';
-    } else if (status === 'ASSEMBLING' || stage === 'timeline_assembly') {
+    } else if (status === 'ASSEMBLING' || stage === 'timeline_assembly' || stage === 'media_verified') {
       interruptionStage = 'MEDIA_VERIFIED';
       recommendedAction = 'Assemble timeline from verified physical media clips.';
     } else if (status === 'APPROVAL_REQUIRED') {
       interruptionStage = 'APPROVAL_REQUIRED';
       requiresOperator = true;
       recommendedAction = 'Awaiting human operator approval challenge.';
-    } else if (status === 'VERIFYING_MEDIA' || status === 'VISUAL_QA') {
+    } else if (status === 'VERIFYING_MEDIA' || status === 'VISUAL_QA' || stage === 'downloaded') {
       interruptionStage = 'DOWNLOADED';
       recommendedAction = 'Execute technical and visual QA on downloaded assets.';
+    } else if (stage === 'flow_downloading' || stage === 'downloading') {
+      interruptionStage = 'DOWNLOADING';
+      recommendedAction = 'Resume downloading in-flight provider video asset.';
     } else if (status === 'WAITING_FOR_IMPORT' || status === 'NEEDS_USER_ACTION') {
       interruptionStage = 'PROVIDER_ASSET_DISCOVERED';
       recommendedAction = 'Import or download the discovered provider video asset.';
