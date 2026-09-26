@@ -966,10 +966,10 @@ export async function findAssetContainers(page: Page): Promise<
         const bannerInner = card.querySelector('[class*="promotion-banner"]');
         if (bannerInner || cardCls.includes('promotion-banner') || cardElId.includes('promotion-banner')) return;
 
-        // Skip chat bubbles / agent message panels / composer / drawer — never video asset cards
+        // Skip chat bubbles / agent message panels / composer — never video asset cards
         if (
           card.closest(
-            'flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], [class*="agent-bubble"], [class*="composer"], [class*="drawer"]'
+            'flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], [class*="agent-bubble"], [class*="composer"], flow-chat-panel, .chat-panel'
           ) !== null
         ) {
           return;
@@ -1193,7 +1193,7 @@ export async function findDownloadAction(
             ).filter(
               (c) =>
                 c.closest(
-                  'flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], [class*="drawer"]'
+                  'flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], flow-chat-panel, .chat-panel'
                 ) === null
             );
             container = allCards[parseInt(idxMatch[1], 10)] || null;

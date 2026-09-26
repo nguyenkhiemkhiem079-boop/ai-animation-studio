@@ -1149,7 +1149,7 @@ export class PuppeteerFlowPage implements IFlowPage {
             )
           ).filter(
             (c) =>
-              c.closest('flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], [class*="drawer"]') === null
+              c.closest('flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], flow-chat-panel, .chat-panel') === null
           );
           container = allCards[parseInt(idxMatch[1], 10)] || null;
         }
@@ -1241,7 +1241,7 @@ export class PuppeteerFlowPage implements IFlowPage {
               )
             ).filter(
               (c) =>
-                c.closest('flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], [class*="drawer"]') === null
+                c.closest('flow-chat-bubble, flow-agent-chat, flow-permission-message, [class*="chat-bubble"], flow-chat-panel, .chat-panel') === null
             );
             container = allCards[parseInt(idxMatch[1], 10)] || null;
           }
