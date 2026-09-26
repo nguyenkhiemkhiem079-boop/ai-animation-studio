@@ -484,7 +484,7 @@ export class ZeroTouchProductionOrchestrator {
       purpose: hasExplicitTitle ? 'transition' : 'establishing',
       complexity: hasExplicitTitle ? 'simple_transform' : 'complex_generative_video',
       rendererIntent: hasExplicitTitle ? 'deterministic_hyperframes' : 'generative_full_video',
-      frame: { durationSeconds: 3, aspectRatio: '16:9', targetFps: 24 },
+      frame: { durationSeconds: 4, aspectRatio: '16:9', targetFps: 24 },
       camera: { shotSize: 'wide', angle: 'eye_level', movement: 'push_in', focalLength: '24mm', semanticSkills: ['pushin'] },
       lighting: { keyLightDirection: lightingDirection as any, mood, colorTemperature: colorTemp, fogAtmosphere: fog },
       composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
@@ -496,7 +496,7 @@ export class ZeroTouchProductionOrchestrator {
       promptPacket: {
         positivePrompt: hasExplicitTitle
           ? `Title Card: ${cleanPrompt.slice(0, 60)}`
-          : `Wide establishing atmospheric shot setting the scene: ${cleanPrompt}`,
+          : cleanPrompt,
         negativePrompt: 'blurry, low quality, glitch, modern artifacts',
         systemDirectives: [],
       },

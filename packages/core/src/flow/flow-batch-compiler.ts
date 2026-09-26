@@ -41,7 +41,11 @@ export class FlowBatchCompiler {
     // Single-shot fast path: direct imperative video generation prompt for Flow Agent
     if (input.shots.length === 1) {
       const shot = input.shots[0];
-      const duration = shot.frame.durationSeconds ?? 4;
+      // Google Flow (Omni 1.1 Flash / Veo) supports durations: 4s, 6s, 8s, 10s.
+      const rawDuration = shot.frame.durationSeconds ?? 4;
+      const duration = [4, 6, 8, 10].includes(rawDuration)
+        ? rawDuration
+        : Math.max(4, Math.min(10, Math.round(rawDuration / 2) * 2));
       const cameraMove = shot.camera.movement ?? 'static';
       const shotSize = shot.camera.shotSize ?? 'medium';
       const prompt =
