@@ -11,6 +11,8 @@ import {
 } from '../domain/production-run.js';
 import { FlowContractProbe } from '../flow/flow-contract-probe.js';
 
+import { ArtifactVerifier } from '../media/artifact-verifier.js';
+
 export interface ModeAOptions {
   projectId: string;
   sceneId: string;
@@ -39,6 +41,37 @@ export interface ModeAResult {
   reasons: string[];
 }
 
+export type ModeBStatus =
+  | 'ZERO_CREDIT_PREFLIGHT'
+  | 'LIVE_NOT_AUTHORIZED'
+  | 'LIVE_BLOCKED_BUDGET'
+  | 'LIVE_BLOCKED_AUTH'
+  | 'LIVE_EXECUTED_VERIFIED'
+  | 'LIVE_EXECUTION_FAILED'
+  | 'LIVE_RECONCILIATION_REQUIRED';
+
+export type ModeBProvenance =
+  | 'LIVE_EXTERNAL'
+  | 'TEST_DOUBLE'
+  | 'FROZEN_HISTORICAL_LIVE_EVIDENCE'
+  | 'ZERO_CREDIT_PROBE';
+
+export interface ILiveFlowExecutor {
+  isTestDouble?: boolean;
+  executeShot(params: {
+    projectId: string;
+    runId: string;
+    shot: ShotContract;
+    prompt: string;
+  }): Promise<{
+    providerAssetId: string;
+    downloadedFilePath: string;
+    submissionTimestamp: string;
+    submissionCount: number;
+    downloadTriggerTimestamp: string;
+  }>;
+}
+
 export interface ModeBOptions {
   projectId: string;
   storage: IStorageProvider;
@@ -48,10 +81,12 @@ export interface ModeBOptions {
   page?: any;
   prompt?: string;
   knownGoodVideoBytes?: Buffer;
+  executor?: ILiveFlowExecutor;
 }
 
 export interface ModeBResult {
   mode: 'CONTROLLED_LIVE_VALIDATION';
+  status: ModeBStatus;
   preFlightCheck: {
     doctorPass: boolean;
     authPass: boolean;
@@ -70,7 +105,7 @@ export interface ModeBResult {
     downloadedFileHash: string;
     ffprobeMetadata?: any;
     finalImportedAssetId: string;
-    provenance: string;
+    provenance: ModeBProvenance;
   };
   reasons: string[];
 }
@@ -269,17 +304,27 @@ export class EndToEndMultiShotAcceptanceHarness {
    * Only issues live generation if explicitly authorized and budget permits.
    */
   public static async runModeB(options: ModeBOptions): Promise<ModeBResult> {
-    const reasons: string[] = [];
     const maxBudget = options.maxCreditBudget ?? 5;
     const projectedCredits = 1; // 1 credit for single controlled validation shot
 
-    // Step 1: Pre-flight Doctor & Budget check
-    const budgetApproved = projectedCredits <= maxBudget;
-    if (!budgetApproved) {
-      reasons.push(`Projected credits (${projectedCredits}) exceeds max budget (${maxBudget})`);
+    // Step 1: Pre-flight Doctor & Budget check (FAIL CLOSED IMMEDIATELY ON BUDGET DEFICIT)
+    if (projectedCredits > maxBudget) {
+      return {
+        mode: 'CONTROLLED_LIVE_VALIDATION',
+        status: 'LIVE_BLOCKED_BUDGET',
+        preFlightCheck: {
+          doctorPass: true,
+          authPass: true,
+          budgetApproved: false,
+          projectedCredits,
+          budgetRemaining: maxBudget,
+        },
+        liveExecuted: false,
+        reasons: [`Projected credits (${projectedCredits}) exceeds max credit budget (${maxBudget}). Execution blocked closed.`]
+      };
     }
 
-    // Auth check via FlowBrowserOperator probe if page provided
+    // Auth check via FlowContractProbe if page provided
     let authPass = true;
     let doctorPass = true;
 
@@ -287,70 +332,170 @@ export class EndToEndMultiShotAcceptanceHarness {
       try {
         const probeRes = await FlowContractProbe.probePage(options.page);
         authPass = probeRes.report.authenticated;
+        if (!authPass) {
+          return {
+            mode: 'CONTROLLED_LIVE_VALIDATION',
+            status: 'LIVE_BLOCKED_AUTH',
+            preFlightCheck: {
+              doctorPass,
+              authPass: false,
+              budgetApproved: true,
+              projectedCredits,
+              budgetRemaining: maxBudget,
+            },
+            liveExecuted: false,
+            reasons: ['Authentication probe failed or permission gate closed. Operator login required.']
+          };
+        }
       } catch (err: any) {
-        authPass = false;
-        doctorPass = false;
-        reasons.push(`Auth probe failed: ${err.message}`);
+        return {
+          mode: 'CONTROLLED_LIVE_VALIDATION',
+          status: 'LIVE_BLOCKED_AUTH',
+          preFlightCheck: {
+            doctorPass: false,
+            authPass: false,
+            budgetApproved: true,
+            projectedCredits,
+            budgetRemaining: maxBudget,
+          },
+          liveExecuted: false,
+          reasons: [`Auth probe failed: ${err.message}`]
+        };
       }
     }
 
-    // Step 2: Live Generation Decision
+    // Step 2: Live Generation Authorization Gate
     if (!options.liveAuthorized) {
       // Zero-credit first: Pre-flight probes pass, zero live prompts submitted
       return {
         mode: 'CONTROLLED_LIVE_VALIDATION',
+        status: 'ZERO_CREDIT_PREFLIGHT',
         preFlightCheck: {
           doctorPass,
           authPass,
-          budgetApproved,
+          budgetApproved: true,
           projectedCredits,
-          budgetRemaining: maxBudget
+          budgetRemaining: maxBudget,
         },
         liveExecuted: false,
         reasons: ['Live generation was not explicitly authorized (--live flag required). Zero-credit pre-flight passed.']
       };
     }
 
-    // Step 3: Single Controlled Live Execution Record
+    // Step 3: Require Real or Injected Live Executor (STRICT: NEVER FABRICATE LIVE SUCCESS)
+    if (!options.executor) {
+      return {
+        mode: 'CONTROLLED_LIVE_VALIDATION',
+        status: 'LIVE_EXECUTION_FAILED',
+        preFlightCheck: {
+          doctorPass,
+          authPass,
+          budgetApproved: true,
+          projectedCredits,
+          budgetRemaining: maxBudget,
+        },
+        liveExecuted: false,
+        reasons: ['[LIVE_FLOW_EXECUTOR_REQUIRED] Live generation authorized but no active browser executor was supplied. Failing closed without fabricating live results.']
+      };
+    }
+
     const shotId = 'SHOT_LIVE_01';
     const prompt = options.prompt || 'Cyberpunk command deck establishing cinematic 35mm';
-    const promptHash = crypto.createHash('sha256').update(prompt).digest('hex');
-    const submissionTimestamp = new Date().toISOString();
-    const submissionCount = 1; // Strictly 1 submission!
-
-    const videoBytes = options.knownGoodVideoBytes || Buffer.from('mock video bytes');
-    const downloadedFileHash = crypto.createHash('sha256').update(videoBytes).digest('hex');
-    const providerAssetId = `flow_asset_${Date.now()}`;
-    const finalImportedAssetId = `asset_canon_${Date.now()}`;
-
-    return {
-      mode: 'CONTROLLED_LIVE_VALIDATION',
-      preFlightCheck: {
-        doctorPass,
-        authPass,
-        budgetApproved,
-        projectedCredits,
-        budgetRemaining: maxBudget - projectedCredits
-      },
-      liveExecuted: true,
-      record: {
-        shotId,
-        promptHash,
-        submissionTimestamp,
-        submissionCount,
-        providerAssetId,
-        downloadTriggerTimestamp: new Date().toISOString(),
-        downloadedFileHash,
-        ffprobeMetadata: {
-          codec: 'h264',
-          duration: 3.5,
-          fps: 24,
-          resolution: '1920x1080'
-        },
-        finalImportedAssetId,
-        provenance: 'Google Flow Web Interface (LIVE_EXTERNAL, single-submission guarded)'
-      },
-      reasons
+    const dummyShotContract: any = {
+      id: shotId,
+      sceneId: 'SCENE_LIVE',
+      sequenceIndex: 1,
+      frame: { durationSeconds: 3.5 },
+      camera: { movement: 'push_in', shotSize: 'wide' },
+      acting: [{ characterId: 'CHAR_LIVE', actionPrompt: prompt }],
+      directorNotes: { coverage: 'wide', emotionalBeat: 'Focus', cinematicSkill: 'Classic' },
+      visualElements: [],
+      audioElements: [],
+      continuityRequirements: [],
+      sourceTraceability: { narrativeBeatId: 'BEAT_LIVE_01', sourceTextHash: 'hash_live' },
+      promptEngineering: { compiledPromptText: prompt },
     };
+
+    try {
+      const execRes = await options.executor.executeShot({
+        projectId: options.projectId,
+        runId: `live_run_${Date.now()}`,
+        shot: dummyShotContract,
+        prompt,
+      });
+
+      // Verify physical file on disk with ArtifactVerifier
+      const verif = ArtifactVerifier.verifyVideo(execRes.downloadedFilePath);
+      if (!verif.exists || !verif.nonEmpty || !verif.hasVideoStream || (verif.durationSeconds ?? 0) <= 0) {
+        return {
+          mode: 'CONTROLLED_LIVE_VALIDATION',
+          status: 'LIVE_EXECUTION_FAILED',
+          preFlightCheck: {
+            doctorPass,
+            authPass,
+            budgetApproved: true,
+            projectedCredits,
+            budgetRemaining: maxBudget,
+          },
+          liveExecuted: true,
+          reasons: [`[DOWNLOAD_VERIFICATION_FAILED] Physical video stream invalid: ${verif.error || 'Invalid video'}`]
+        };
+      }
+
+      // Compute actual SHA-256 of physical video on disk
+      const videoBytes = fs.readFileSync(execRes.downloadedFilePath);
+      const downloadedFileHash = crypto.createHash('sha256').update(videoBytes).digest('hex');
+      const promptHash = crypto.createHash('sha256').update(prompt).digest('hex');
+
+      const provenance: ModeBProvenance = options.executor.isTestDouble
+        ? 'TEST_DOUBLE'
+        : 'LIVE_EXTERNAL';
+
+      return {
+        mode: 'CONTROLLED_LIVE_VALIDATION',
+        status: 'LIVE_EXECUTED_VERIFIED',
+        preFlightCheck: {
+          doctorPass,
+          authPass,
+          budgetApproved: true,
+          projectedCredits,
+          budgetRemaining: maxBudget - projectedCredits,
+        },
+        liveExecuted: true,
+        record: {
+          shotId,
+          promptHash,
+          submissionTimestamp: execRes.submissionTimestamp,
+          submissionCount: execRes.submissionCount,
+          providerAssetId: execRes.providerAssetId,
+          downloadTriggerTimestamp: execRes.downloadTriggerTimestamp,
+          downloadedFileHash,
+          ffprobeMetadata: {
+            codec: verif.codec || 'h264',
+            duration: verif.durationSeconds || 3.5,
+            fps: 24,
+            width: verif.width || 1920,
+            height: verif.height || 1080,
+          },
+          finalImportedAssetId: `asset_canon_${Date.now()}`,
+          provenance,
+        },
+        reasons: [],
+      };
+    } catch (err: any) {
+      return {
+        mode: 'CONTROLLED_LIVE_VALIDATION',
+        status: 'LIVE_EXECUTION_FAILED',
+        preFlightCheck: {
+          doctorPass,
+          authPass,
+          budgetApproved: true,
+          projectedCredits,
+          budgetRemaining: maxBudget,
+        },
+        liveExecuted: true,
+        reasons: [`Live Flow execution threw: ${err.message}`],
+      };
+    }
   }
 }

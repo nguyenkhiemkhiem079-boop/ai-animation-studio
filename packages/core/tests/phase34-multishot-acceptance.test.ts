@@ -98,6 +98,7 @@ describe('Phase 34 — End-to-End Multi-Shot Acceptance Harness', () => {
       });
 
       expect(result.mode).toBe('CONTROLLED_LIVE_VALIDATION');
+      expect(result.status).toBe('ZERO_CREDIT_PREFLIGHT');
       expect(result.preFlightCheck.budgetApproved).toBe(true);
       expect(result.preFlightCheck.projectedCredits).toBe(1);
       expect(result.preFlightCheck.budgetRemaining).toBe(5);
@@ -105,36 +106,86 @@ describe('Phase 34 — End-to-End Multi-Shot Acceptance Harness', () => {
       expect(result.record).toBeUndefined();
     });
 
-    it('fails closed when projected credits exceed allowed budget', async () => {
+    it('fails closed immediately when projected credits exceed allowed budget without calling executor', async () => {
+      let executorCallCount = 0;
       const storage = new FileSystemStorage(testDir);
       const result = await EndToEndMultiShotAcceptanceHarness.runModeB({
         projectId: 'test_live_02',
         storage,
         maxCreditBudget: 0, // Zero budget allowed
-        liveAuthorized: true
+        liveAuthorized: true,
+        executor: {
+          isTestDouble: true,
+          executeShot: async () => {
+            executorCallCount++;
+            return {
+              providerAssetId: 'mock_asset',
+              downloadedFilePath: 'dummy.mp4',
+              submissionTimestamp: new Date().toISOString(),
+              submissionCount: 1,
+              downloadTriggerTimestamp: new Date().toISOString()
+            };
+          }
+        }
       });
 
+      expect(result.status).toBe('LIVE_BLOCKED_BUDGET');
       expect(result.preFlightCheck.budgetApproved).toBe(false);
-      expect(result.reasons.some(r => r.includes('exceeds max budget'))).toBe(true);
+      expect(result.liveExecuted).toBe(false);
+      expect(executorCallCount).toBe(0); // STRICT: Zero executor calls when budget exceeded!
+      expect(result.reasons.some(r => r.includes('exceeds max credit budget'))).toBe(true);
     });
 
-    it('records strictly one submission and full provenance when authorized for controlled live run', async () => {
+    it('fails closed when liveAuthorized is true but no active executor exists (zero fake live evidence)', async () => {
       const storage = new FileSystemStorage(testDir);
       const result = await EndToEndMultiShotAcceptanceHarness.runModeB({
         projectId: 'test_live_03',
         storage,
         maxCreditBudget: 5,
-        liveAuthorized: true,
-        prompt: 'Tactical command deck close up 35mm',
-        knownGoodVideoBytes: realVideoBytes
+        liveAuthorized: true
+        // executor omitted
       });
 
+      expect(result.status).toBe('LIVE_EXECUTION_FAILED');
+      expect(result.liveExecuted).toBe(false);
+      expect(result.record).toBeUndefined();
+      expect(result.reasons[0]).toContain('[LIVE_FLOW_EXECUTOR_REQUIRED]');
+    });
+
+    it('records strictly one submission and labels test double provenance as TEST_DOUBLE', async () => {
+      const storage = new FileSystemStorage(testDir);
+      const fixtureMp4Path = path.join(testDir, 'test_double_clip.mp4');
+      fs.writeFileSync(fixtureMp4Path, realVideoBytes);
+
+      let executionCount = 0;
+      const result = await EndToEndMultiShotAcceptanceHarness.runModeB({
+        projectId: 'test_live_04',
+        storage,
+        maxCreditBudget: 5,
+        liveAuthorized: true,
+        prompt: 'Tactical command deck close up 35mm',
+        executor: {
+          isTestDouble: true,
+          executeShot: async () => {
+            executionCount++;
+            return {
+              providerAssetId: 'flow_asset_test_01',
+              downloadedFilePath: fixtureMp4Path,
+              submissionTimestamp: new Date().toISOString(),
+              submissionCount: 1,
+              downloadTriggerTimestamp: new Date().toISOString()
+            };
+          }
+        }
+      });
+
+      expect(result.status).toBe('LIVE_EXECUTED_VERIFIED');
       expect(result.liveExecuted).toBe(true);
+      expect(executionCount).toBe(1); // EXACTLY 1!
       expect(result.record).toBeDefined();
-      expect(result.record?.submissionCount).toBe(1); // STRICT RULE 4
+      expect(result.record?.submissionCount).toBe(1);
       expect(result.record?.downloadedFileHash).toBeDefined();
-      expect(result.record?.promptHash).toBeDefined();
-      expect(result.record?.provenance).toContain('single-submission guarded');
+      expect(result.record?.provenance).toBe('TEST_DOUBLE'); // STRICT: NEVER fake LIVE_EXTERNAL!
       expect(result.preFlightCheck.budgetRemaining).toBe(4);
     });
   });
