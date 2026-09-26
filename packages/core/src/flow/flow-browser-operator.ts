@@ -384,14 +384,34 @@ export class FlowBrowserOperator {
       const baselineAssets = await page.listGeneratedAssets().catch(() => []);
       const baselineAssetIds = baselineAssets.map((a) => a.id);
 
-      // 8. Submit Structured Batch Instruction (Zero-Touch)
-      const submission = await page.submitInstruction(batchCompilation.batchInstructionText, {
-        referencePaths: batchCompilation.referencePaths,
-      });
+      // 8. Submit Structured Batch Instruction (Zero-Touch) with Crash Recovery
+      const isAlreadySubmitted =
+        Boolean(checkpoint.submissionId) &&
+        checkpoint.instructionSha256 === batchCompilation.instructionSha256 &&
+        ['FLOW_PROMPT_SUBMITTED', 'FLOW_GENERATING', 'FLOW_ASSET_READY', 'FLOW_DOWNLOADING'].includes(
+          checkpoint.state
+        );
 
-      checkpoint.submissionId = submission.submissionId;
-      checkpoint.state = 'FLOW_PROMPT_SUBMITTED';
-      this.saveCheckpoint(checkpointPath, checkpoint);
+      let submission: { submissionId: string; submittedAt?: string; submissionCount?: number };
+
+      if (isAlreadySubmitted) {
+        console.log(
+          `[CRASH_RECOVERY] Found existing in-flight Flow submission "${checkpoint.submissionId}". Re-attaching without second submission.`
+        );
+        submission = {
+          submissionId: checkpoint.submissionId!,
+          submittedAt: checkpoint.observationTime || new Date().toISOString(),
+          submissionCount: 1,
+        };
+      } else {
+        submission = await page.submitInstruction(batchCompilation.batchInstructionText, {
+          referencePaths: batchCompilation.referencePaths,
+        });
+
+        checkpoint.submissionId = submission.submissionId;
+        checkpoint.state = 'FLOW_PROMPT_SUBMITTED';
+        this.saveCheckpoint(checkpointPath, checkpoint);
+      }
 
       // 9. Monitor Generation
       checkpoint.state = 'FLOW_GENERATING';
@@ -422,8 +442,32 @@ export class FlowBrowserOperator {
         const shotDir = path.join(projectRunDir, shot.id);
         const destinationFile = path.join(shotDir, 'clip.mp4');
 
-        // Download via scoped container button
-        const downloadRes = await page.downloadAsset(assetDesc.id, destinationFile);
+        let downloadRes: { physicalPath: string; sizeBytes: number };
+
+        // Crash recovery: if already downloaded & physically verified, reuse!
+        if (fs.existsSync(destinationFile)) {
+          const existingVerif = ArtifactVerifier.verifyVideo(destinationFile);
+          if (
+            existingVerif.exists &&
+            existingVerif.nonEmpty &&
+            existingVerif.hasVideoStream &&
+            (existingVerif.durationSeconds ?? 0) > 0
+          ) {
+            console.log(
+              `[CRASH_RECOVERY] Found verified clip on disk for shot ${shot.id}, skipping redundant download.`
+            );
+            downloadRes = {
+              physicalPath: destinationFile,
+              sizeBytes: fs.statSync(destinationFile).size,
+            };
+          } else {
+            // Corrupt or partial file, re-download
+            downloadRes = await page.downloadAsset(assetDesc.id, destinationFile);
+          }
+        } else {
+          // Download via scoped container button
+          downloadRes = await page.downloadAsset(assetDesc.id, destinationFile);
+        }
 
         // Verify physical file on disk
         const videoVerif = ArtifactVerifier.verifyVideo(downloadRes.physicalPath);

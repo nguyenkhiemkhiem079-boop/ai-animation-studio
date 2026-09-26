@@ -233,67 +233,87 @@ export class ZeroTouchProductionOrchestrator {
       localRenderResults.push({ shotId: shot.id, physicalPath: clipPath, sha256 });
     }
 
-    // 4. Execute Flow Browser Operator for Flow-Required Shots
+    // 4. Execute Flow Browser Operator for Flow-Required Shots (with Idempotent Resume)
     let operatorResult: FlowBatchExecutionResult | undefined;
     if (flowShots.length > 0) {
-      operatorResult = await this.operator.execute({
-        projectId,
-        runId,
-        shots: flowShots,
-      });
-
-      // Handle unrecoverable operator states
-      if (operatorResult.finalState === 'BLOCKED_AUTH') {
-        return {
-          projectId,
-          runId,
-          dryRun: false,
-          plan,
-          operatorResult,
-          localRenderResults,
-          allPassed: false,
-          manualActionsTaken: 1, // Only acceptable manual step is one-time interactive login
-          status: 'BLOCKED_AUTH',
-          error: operatorResult.error,
-        };
-      }
-
-      if (operatorResult.finalState === 'WAITING_FOR_FLOW_CREDITS') {
-        return {
-          projectId,
-          runId,
-          dryRun: false,
-          plan,
-          operatorResult,
-          localRenderResults,
-          allPassed: false,
-          manualActionsTaken: 0,
-          status: 'WAITING_FOR_FLOW_CREDITS',
-          error: operatorResult.error,
-        };
-      }
-
-      if (operatorResult.finalState === 'RECONCILIATION_REQUIRED') {
-        return {
-          projectId,
-          runId,
-          dryRun: false,
-          plan,
-          operatorResult,
-          localRenderResults,
-          allPassed: false,
-          manualActionsTaken: 0,
-          status: 'RECONCILIATION_REQUIRED',
-          error: operatorResult.error,
-        };
-      }
-
-      for (const ev of operatorResult.evidence) {
-        const evVerify = ArtifactVerifier.verifyVideo(ev.physicalPath);
-        if (!evVerify.exists || !evVerify.nonEmpty || !evVerify.hasVideoStream) {
-          throw new Error(`[FLOW_MEDIA_INVALID] Flow shot "${ev.shotId}" failed physical video verification: ${evVerify.error}`);
+      const unverifiedFlowShots: ShotContract[] = [];
+      for (const shot of flowShots) {
+        const shotDir = path.join(projectRunDir, shot.id);
+        const clipPath = path.join(shotDir, 'clip.mp4');
+        if (fs.existsSync(clipPath)) {
+          const v = ArtifactVerifier.verifyVideo(clipPath);
+          if (v.exists && v.nonEmpty && v.hasVideoStream && (v.durationSeconds ?? 0) > 0) {
+            shotVideoMap.set(shot.id, clipPath);
+            continue;
+          }
         }
-        shotVideoMap.set(ev.shotId, ev.physicalPath);
+        unverifiedFlowShots.push(shot);
+      }
+
+      if (unverifiedFlowShots.length > 0) {
+        operatorResult = await this.operator.execute({
+          projectId,
+          runId,
+          shots: unverifiedFlowShots,
+        });
+
+        // Handle unrecoverable operator states
+        if (operatorResult.finalState === 'BLOCKED_AUTH') {
+          return {
+            projectId,
+            runId,
+            dryRun: false,
+            plan,
+            operatorResult,
+            localRenderResults,
+            allPassed: false,
+            manualActionsTaken: 1, // Only acceptable manual step is one-time interactive login
+            status: 'BLOCKED_AUTH',
+            error: operatorResult.error,
+          };
+        }
+
+        if (operatorResult.finalState === 'WAITING_FOR_FLOW_CREDITS') {
+          return {
+            projectId,
+            runId,
+            dryRun: false,
+            plan,
+            operatorResult,
+            localRenderResults,
+            allPassed: false,
+            manualActionsTaken: 0,
+            status: 'WAITING_FOR_FLOW_CREDITS',
+            error: operatorResult.error,
+          };
+        }
+
+        if (operatorResult.finalState === 'RECONCILIATION_REQUIRED') {
+          return {
+            projectId,
+            runId,
+            dryRun: false,
+            plan,
+            operatorResult,
+            localRenderResults,
+            allPassed: false,
+            manualActionsTaken: 0,
+            status: 'RECONCILIATION_REQUIRED',
+            error: operatorResult.error,
+          };
+        }
+
+        for (const ev of operatorResult.evidence) {
+          const evVerify = ArtifactVerifier.verifyVideo(ev.physicalPath);
+          if (!evVerify.exists || !evVerify.nonEmpty || !evVerify.hasVideoStream) {
+            throw new Error(`[FLOW_MEDIA_INVALID] Flow shot "${ev.shotId}" failed physical video verification: ${evVerify.error}`);
+          }
+          shotVideoMap.set(ev.shotId, ev.physicalPath);
+        }
+      } else {
+        console.log(
+          `[ORCHESTRATOR_RESUME] All ${flowShots.length} Flow shot(s) are already physically verified on disk. Skipping Flow execution.`
+        );
       }
     }
 
