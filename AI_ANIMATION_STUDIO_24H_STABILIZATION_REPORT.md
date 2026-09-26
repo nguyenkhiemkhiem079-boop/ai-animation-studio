@@ -2,8 +2,9 @@
 
 **Repository**: `nguyenkhiemkhiem079-boop/ai-animation-studio`  
 **Branch**: `main`  
-**Starting HEAD**: `2b2a255663207a78edaff8c72937b234f4261cd5`  
-**Final HEAD**: `fa9e217a97e2e1728266195f7a085947beeb8e13` (commit `fa9e217`)  
+**Starting HEAD**: `2b2a255663207a78edaff8c72937b234f4261cd5` (RUNTIME_VERIFIED_HEAD for live Google Flow run `run_1790328582248`)  
+**Code Hardening HEAD**: `d0610f9a03f3967d783be9521ed3e51ea6523580` (Stabilization protections & tests)  
+**Stabilization Mission Merged HEAD**: `17c7de97c289783923b17ff4d42313188058a63d`  
 **Mission Mandate**: Take the first proven live Google Flow end-to-end execution path and turn it into a stable, repeatable, human-testable product without speculative rewrites or credit burn.  
 **Final Status**: `STABILIZED_HUMAN_QA_READY`  
 
