@@ -196,9 +196,14 @@ export class EndToEndMultiShotAcceptanceHarness {
     });
 
     // 4. Assemble Final Master Video & Acceptance Bundle
-    const masterVideoPath = path.join(outputDir, 'final-master.mp4');
-    fs.writeFileSync(masterVideoPath, options.knownGoodVideoBytes);
-    const masterSha256 = crypto.createHash('sha256').update(options.knownGoodVideoBytes).digest('hex');
+    if (!seqResult.masterAssembled || !seqResult.masterVideoPath) {
+      reasons.push('Master video assembly failed: engine did not assemble master');
+    }
+
+    const masterVideoPath = seqResult.masterVideoPath || path.join(outputDir, 'final-master.mp4');
+    const masterSha256 = seqResult.masterSha256 || (fs.existsSync(masterVideoPath) ? crypto.createHash('sha256').update(fs.readFileSync(masterVideoPath)).digest('hex') : '0000000000000000000000000000000000000000000000000000000000000000');
+    const masterVerif = ArtifactVerifier.verifyVideo(masterVideoPath);
+    const masterStats = fs.existsSync(masterVideoPath) ? fs.statSync(masterVideoPath) : { size: 0 };
 
     const productionRun: ProductionRun = {
       schemaVersion: 1,
@@ -229,17 +234,17 @@ export class EndToEndMultiShotAcceptanceHarness {
       sequenceId: options.sceneId,
       masterVideoPath,
       masterSha256,
-      sizeBytes: options.knownGoodVideoBytes.length,
-      durationSeconds: 10.5,
-      width: 1920,
-      height: 1080,
-      videoCodec: 'h264',
+      sizeBytes: masterStats.size,
+      durationSeconds: masterVerif.durationSeconds ?? 3.0,
+      width: masterVerif.width ?? 320,
+      height: masterVerif.height ?? 180,
+      videoCodec: masterVerif.codec ?? 'h264',
       audioCodec: 'aac',
       fps: 24,
       verifiedAt: new Date().toISOString(),
       verificationStatus: 'OFFLINE_REHEARSAL_VERIFIED',
       checksSummary: {
-        ffprobeVerified: true,
+        ffprobeVerified: masterVerif.hasVideoStream,
         durationMatches: true,
         resolutionMatches: true,
         fpsMatches: true,
@@ -280,7 +285,7 @@ export class EndToEndMultiShotAcceptanceHarness {
 
     return {
       mode: 'OFFLINE_REHEARSAL',
-      success: reasons.length === 0 && bundleValidation.valid && seqResult.continuityAllPassed,
+      success: reasons.length === 0 && bundleValidation.valid && seqResult.continuityAllPassed && seqResult.masterAssembled,
       runId,
       sequenceResult: seqResult,
       shotResults: seqResult.shots.map(s => ({

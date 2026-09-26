@@ -1,10 +1,12 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { ShotContract } from '../domain/director.js';
 import { CharacterDNA, LocationDNA } from '../domain/universe.js';
 import { FrameExtractor } from '../qa/frame-extractor.js';
 import { ArtifactVerifier } from '../media/artifact-verifier.js';
+import { MediaToolchainDoctor } from '../media/toolchain-doctor.js';
 import { ScenePropStateTracker } from '../world/scene-prop-tracker.js';
 import { ContinuityQAEvaluator } from '../qa/continuity-qa-evaluator.js';
 import { ProductionInvalidationEngine } from '../production-orchestrator/production-invalidation.js';
@@ -129,7 +131,18 @@ export class SequentialMultiShotEngine {
       videoGenerator: (shot: ShotContract, terminalFramePath?: string) => Promise<{ videoPath: string; sha256: string }>;
     }
   ): Promise<MultiShotSequenceResult> {
-    const { runId, projectId, seriesId, sceneId, shots, outputDir, maxCreditBudget = 50, videoGenerator } = input;
+    const {
+      runId,
+      projectId,
+      seriesId,
+      sceneId,
+      shots,
+      characterDna,
+      locationDna,
+      outputDir,
+      maxCreditBudget = 50,
+      videoGenerator,
+    } = input;
 
     // 1. Budget Projection Check (Fail Closed)
     const budget = SequentialMultiShotEngine.projectBudget(shots, { maxCreditBudget });
@@ -141,16 +154,80 @@ export class SequentialMultiShotEngine {
 
     fs.mkdirSync(outputDir, { recursive: true });
     const executedShots: SequentialShotExecutionResult[] = [];
+    const boundShots: ShotContract[] = [];
     let previousTerminalFrame: { filePath: string; sha256: string } | undefined;
 
     // 2. Sequential Execution Loop (32A & 32B)
     for (let i = 0; i < shots.length; i++) {
-      let currentShot = shots[i];
+      let currentShot: ShotContract = {
+        ...shots[i],
+        acting: shots[i].acting ? shots[i].acting.map((a) => ({ ...a })) : [],
+        requiredAssetIds: [...(shots[i].requiredAssetIds || [])],
+      };
       const shotDir = path.join(outputDir, currentShot.id);
       fs.mkdirSync(shotDir, { recursive: true });
 
+      // Materially bind CharacterDNA and enforce series isolation (Phase 41)
+      if (characterDna && characterDna.length > 0) {
+        for (const act of currentShot.acting || []) {
+          const char = characterDna.find((c) => c.id === act.characterId);
+          if (!char) {
+            throw new Error(
+              `[CHARACTER_NOT_FOUND] Shot "${currentShot.id}" references character "${act.characterId}", but character is not registered in Universe CharacterDNA.`
+            );
+          }
+          if (char.seriesId !== seriesId) {
+            throw new Error(
+              `[CROSS_SERIES_CONTAMINATION] Character "${char.id}" belongs to series "${char.seriesId}", but current production is series "${seriesId}". Cross-series asset reuse is strictly prohibited.`
+            );
+          }
+          if (char.canonicalSheetAssetId) {
+            currentShot.requiredAssetIds = Array.from(
+              new Set([...currentShot.requiredAssetIds, char.canonicalSheetAssetId])
+            );
+          }
+          if (act.outfitId) {
+            const outfit = char.outfits.find((o) => o.id === act.outfitId);
+            if (outfit?.referenceAssetIds && outfit.referenceAssetIds.length > 0) {
+              currentShot.requiredAssetIds = Array.from(
+                new Set([...currentShot.requiredAssetIds, ...outfit.referenceAssetIds])
+              );
+            }
+          }
+          if (char.visualAnchorPrompt) {
+            const anchorTag = `[Character: ${char.name} (${char.visualAnchorPrompt})]`;
+            if (!act.actionPrompt?.includes(char.name)) {
+              act.actionPrompt = act.actionPrompt ? `${act.actionPrompt} ${anchorTag}`.trim() : anchorTag;
+            }
+          }
+        }
+      }
+
+      // Materially bind LocationDNA and enforce series isolation (Phase 41)
+      if (locationDna) {
+        if (locationDna.seriesId !== seriesId) {
+          throw new Error(
+            `[CROSS_SERIES_CONTAMINATION] Location "${locationDna.id}" belongs to series "${locationDna.seriesId}", but current production is series "${seriesId}". Cross-series asset reuse is strictly prohibited.`
+          );
+        }
+        currentShot.environmentLocationId = locationDna.id;
+        if (locationDna.canonicalAssetIds && locationDna.canonicalAssetIds.length > 0) {
+          currentShot.requiredAssetIds = Array.from(
+            new Set([...currentShot.requiredAssetIds, ...locationDna.canonicalAssetIds])
+          );
+        }
+        if (locationDna.atmospherePrompt && currentShot.acting && currentShot.acting.length > 0) {
+          const locTag = `[Location: ${locationDna.name} - ${locationDna.atmospherePrompt}]`;
+          const firstAct = currentShot.acting[0];
+          if (!firstAct.actionPrompt?.includes(locationDna.name)) {
+            firstAct.actionPrompt = firstAct.actionPrompt ? `${firstAct.actionPrompt} ${locTag}`.trim() : locTag;
+          }
+        }
+      }
+
       // Apply current scene props to shot contract (32C)
       currentShot = this.propTracker.applyPropsToShotContract(currentShot, seriesId, projectId, sceneId);
+      boundShots.push(currentShot);
 
       // If downstream shot has terminal frame conditioning dependency, attach previous terminal frame
       const terminalFrameDependency = previousTerminalFrame?.filePath;
@@ -174,11 +251,11 @@ export class SequentialMultiShotEngine {
       // Record snapshot of active props for evidence
       const activeProps = this.propTracker.getActiveProps(seriesId, projectId, sceneId);
 
-      // Check continuity against previous shot
+      // Check continuity against previous bound shot (Phase 41 Continuity QA)
       let continuityScore = 100;
       let passedContinuity = true;
-      if (executedShots.length > 0) {
-        const prevShot = shots[i - 1];
+      if (boundShots.length > 1) {
+        const prevShot = boundShots[boundShots.length - 2];
         const report = ContinuityQAEvaluator.evaluate({
           projectId,
           sceneId,
@@ -203,6 +280,76 @@ export class SequentialMultiShotEngine {
 
     const continuityAllPassed = executedShots.every((s) => s.passedContinuity);
 
+    // 3. Assemble and render Final Multi-Shot Master Video (Phase 40)
+    const masterVideoPath = path.join(outputDir, 'final-master.mp4');
+    let masterAssembled = false;
+    let masterSha256: string | undefined;
+
+    if (executedShots.length > 0) {
+      // 3A. Verify all shot video files exist before assembly
+      for (const shotRes of executedShots) {
+        if (!fs.existsSync(shotRes.clipPath)) {
+          throw new Error(
+            `[MASTER_ASSEMBLY_FAILED] Required shot clip "${shotRes.shotId}" not found on disk at "${shotRes.clipPath}"`
+          );
+        }
+      }
+
+      // 3B. Concat physical MP4 clips into final master using FFmpeg
+      const concatPlanPath = path.join(outputDir, `.concat_${runId}.txt`);
+      const concatLines = executedShots.map((s) => `file '${path.resolve(s.clipPath).replace(/\\/g, '/')}'`);
+      fs.writeFileSync(concatPlanPath, concatLines.join('\n'), 'utf-8');
+
+      const ffmpegPath = MediaToolchainDoctor.getFfmpegPath();
+      try {
+        execFileSync(
+          ffmpegPath,
+          [
+            '-y',
+            '-f',
+            'concat',
+            '-safe',
+            '0',
+            '-i',
+            concatPlanPath,
+            '-c:v',
+            'libx264',
+            '-pix_fmt',
+            'yuv420p',
+            '-movflags',
+            '+faststart',
+            masterVideoPath,
+          ],
+          { stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+      } finally {
+        if (fs.existsSync(concatPlanPath)) {
+          try {
+            fs.unlinkSync(concatPlanPath);
+          } catch {
+            // ignore cleanup
+          }
+        }
+      }
+
+      // 3C. Physically verify assembled master video with FFprobe
+      const masterVerif = ArtifactVerifier.verifyVideo(masterVideoPath);
+      if (
+        masterVerif.exists &&
+        masterVerif.nonEmpty &&
+        masterVerif.hasVideoStream &&
+        (masterVerif.durationSeconds ?? 0) > 0
+      ) {
+        const masterBytes = fs.readFileSync(masterVideoPath);
+        masterSha256 = crypto.createHash('sha256').update(masterBytes).digest('hex');
+        masterAssembled = true;
+      } else {
+        throw new Error(
+          `[MASTER_VERIFICATION_FAILED] Assembled master video failed physical stream check: ${masterVerif.error}`
+        );
+      }
+    }
+
     return {
       runId,
       projectId,
@@ -211,7 +358,9 @@ export class SequentialMultiShotEngine {
       shots: executedShots,
       budgetProjection: budget,
       continuityAllPassed,
-      masterAssembled: false,
+      masterAssembled,
+      masterVideoPath: masterAssembled ? masterVideoPath : undefined,
+      masterSha256,
     };
   }
 
