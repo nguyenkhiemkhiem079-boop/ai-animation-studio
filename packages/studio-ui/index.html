@@ -708,8 +708,84 @@
               </div>
               <div class="item-detail">Master MP4: <code>.studio/production/.../master.mp4</code></div>
               <div class="item-detail">Acceptance Bundle: <code>acceptance-manifest.json</code> (SHA-256 Checksum Verified)</div>
-              <div class="item-detail">Truth Rule: MASTER_PRODUCTION_VERIFIED requires genuine live run</div>
+        <!-- Human QA & Physical Media Acceptance Workbench -->
+        <div class="human-qa-workbench-card" id="human-qa-workbench" style="margin-top: 24px; padding: 20px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h3 style="margin: 0;">🧑‍⚖️ Human QA Acceptance Workbench</h3>
+            <span class="badge" id="human-qa-state-badge" style="background: rgba(148, 163, 184, 0.2); color: #94a3b8; font-weight: 600;">NOT_REVIEWED</span>
+          </div>
+          <p style="font-size: 13px; color: #94a3b8; margin-top: 0;">
+            Explicit operator verification of downloaded provider clips and final master media. Machine automation never marks these items PASS.
+          </p>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+            <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+              <strong style="font-size: 13px;">Latest Live Provider Clip:</strong>
+              <div style="font-size: 12px; margin-top: 4px; color: #cbd5e1;">Path: <code>SHOT_SC01_SH01/clip.mp4</code> (1.5 MB, H.264, AAC)</div>
+              <div style="font-size: 12px; color: #cbd5e1;">Provenance: <code>GOOGLE_FLOW_REAL</code> (LIVE_EXTERNAL)</div>
+              <div style="margin-top: 8px;">
+                <label for="qa-clip-valid" style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">1. Provider Clip Visually Valid:</label>
+                <select id="qa-clip-valid" class="studio-select-sm" style="width: 100%;">
+                  <option value="NOT_REVIEWED" selected>NOT REVIEWED</option>
+                  <option value="PASS">PASS (Visually Valid)</option>
+                  <option value="FAIL">FAIL (Defective / Black / Glitched)</option>
+                </select>
+              </div>
             </div>
+
+            <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+              <strong style="font-size: 13px;">Rendered Final Master:</strong>
+              <div style="font-size: 12px; margin-top: 4px; color: #cbd5e1;">Path: <code>final-master.mp4</code> (722 KB, 1280x720, 24fps)</div>
+              <div style="font-size: 12px; color: #cbd5e1;">SHA-256: <code>a9833c03c4c1...</code></div>
+              <div style="margin-top: 8px;">
+                <label for="qa-master-valid" style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">2. Final Master Visually Valid:</label>
+                <select id="qa-master-valid" class="studio-select-sm" style="width: 100%;">
+                  <option value="NOT_REVIEWED" selected>NOT REVIEWED</option>
+                  <option value="PASS">PASS (Master Valid)</option>
+                  <option value="FAIL">FAIL (Master Defective)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+            <div>
+              <label for="qa-audio-valid" style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">3. Audio Quality Acceptable:</label>
+              <select id="qa-audio-valid" class="studio-select-sm" style="width: 100%;">
+                <option value="NOT_REVIEWED" selected>NOT REVIEWED</option>
+                <option value="PASS">PASS (Clean & Aligned)</option>
+                <option value="FAIL">FAIL (Distorted / Empty)</option>
+              </select>
+            </div>
+
+            <div>
+              <label for="qa-prompt-valid" style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">4. Prompt Correspondence:</label>
+              <select id="qa-prompt-valid" class="studio-select-sm" style="width: 100%;">
+                <option value="NOT_REVIEWED" selected>NOT REVIEWED</option>
+                <option value="PASS">PASS (Matches Prompt)</option>
+                <option value="FAIL">FAIL (Mismatched Action)</option>
+              </select>
+            </div>
+
+            <div>
+              <label for="qa-ui-valid" style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">5. Studio UI Usability:</label>
+              <select id="qa-ui-valid" class="studio-select-sm" style="width: 100%;">
+                <option value="NOT_REVIEWED" selected>NOT REVIEWED</option>
+                <option value="PASS">PASS (Responsive & Intuitive)</option>
+                <option value="FAIL">FAIL (Unusable / Broken)</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label for="qa-notes" style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">Operator Audit Notes:</label>
+            <textarea id="qa-notes" rows="2" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; color: #fff; padding: 8px; font-size: 13px;" placeholder="Record subjective visual inspection notes, artifacts, or feedback..."></textarea>
+          </div>
+
+          <div style="display: flex; gap: 12px; align-items: center;">
+            <button class="btn btn-primary" id="btn-save-human-qa">💾 Record Human Acceptance Judgment</button>
+            <button class="btn btn-secondary" id="btn-export-human-qa">📄 Export JSON Artifact</button>
+            <span id="human-qa-feedback" style="font-size: 12px; color: #22c55e;"></span>
           </div>
         </div>
       </div>

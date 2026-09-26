@@ -5,3 +5,4 @@ export * from './semantic-qa-evaluator.js';
 export * from './frame-extractor.js';
 export * from './visual-semantic-qa-evaluator.js';
 export * from './visual-qa-pipeline-step.js';
+export * from './human-qa-workbench.js';

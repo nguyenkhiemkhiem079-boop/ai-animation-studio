@@ -239,13 +239,196 @@ btnToggleCaptions?.addEventListener('click', () => {
   }
 });
 
-// 5. Timeline Scrubbing
-timeRulerEl?.addEventListener('click', (e) => {
-  const rect = timeRulerEl.getBoundingClientRect();
-  const clickX = e.clientX - rect.left;
-  const newTime = Math.max(0, Math.min(state.totalDuration, clickX / 100));
+// 5. Interactive Timeline Scrubbing (Drag-to-Scrub & Keyboard Controls)
+const timelineLanesScroll = document.getElementById('timeline-lanes-scroll');
+let isScrubbing = false;
+
+function handleTimelineScrub(e) {
+  const target = timeRulerEl || timelineLanesScroll;
+  if (!target) return;
+  const rect = target.getBoundingClientRect();
+  const scrollOffset = timelineLanesScroll ? timelineLanesScroll.scrollLeft : 0;
+  const clickX = e.clientX - rect.left + scrollOffset;
+  const pixelsPerSec = 100;
+  const newTime = Math.max(0, Math.min(state.totalDuration, clickX / pixelsPerSec));
   state.currentTime = newTime;
   updatePlaybackUI();
+}
+
+timeRulerEl?.addEventListener('mousedown', (e) => {
+  isScrubbing = true;
+  pause();
+  handleTimelineScrub(e);
+});
+
+timelineLanesScroll?.addEventListener('mousedown', (e) => {
+  if (e.target === timelineLanesScroll || e.target.closest('#timeline-playhead') || e.target.classList.contains('track-lane')) {
+    isScrubbing = true;
+    pause();
+    handleTimelineScrub(e);
+  }
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (isScrubbing) {
+    handleTimelineScrub(e);
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (isScrubbing) {
+    isScrubbing = false;
+  }
+});
+
+// Keyboard Transport & Scrub Controls
+window.addEventListener('keydown', (e) => {
+  const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+  if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+    return;
+  }
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    togglePlay();
+  } else if (e.code === 'ArrowLeft') {
+    e.preventDefault();
+    pause();
+    state.currentTime = Math.max(0, state.currentTime - 1 / state.fps);
+    updatePlaybackUI();
+  } else if (e.code === 'ArrowRight') {
+    e.preventDefault();
+    pause();
+    state.currentTime = Math.min(state.totalDuration, state.currentTime + 1 / state.fps);
+    updatePlaybackUI();
+  } else if (e.code === 'Home') {
+    e.preventDefault();
+    pause();
+    state.currentTime = 0;
+    updatePlaybackUI();
+  } else if (e.code === 'End') {
+    e.preventDefault();
+    pause();
+    state.currentTime = state.totalDuration;
+    updatePlaybackUI();
+  }
+});
+
+// 5b. Human QA Workbench Logic
+const qaClipValid = document.getElementById('qa-clip-valid');
+const qaMasterValid = document.getElementById('qa-master-valid');
+const qaAudioValid = document.getElementById('qa-audio-valid');
+const qaPromptValid = document.getElementById('qa-prompt-valid');
+const qaUiValid = document.getElementById('qa-ui-valid');
+const qaNotes = document.getElementById('qa-notes');
+const qaStateBadge = document.getElementById('human-qa-state-badge');
+const btnSaveHumanQa = document.getElementById('btn-save-human-qa');
+const btnExportHumanQa = document.getElementById('btn-export-human-qa');
+const qaFeedback = document.getElementById('human-qa-feedback');
+
+function computeHumanQaState() {
+  const judgments = [
+    qaClipValid?.value || 'NOT_REVIEWED',
+    qaMasterValid?.value || 'NOT_REVIEWED',
+    qaAudioValid?.value || 'NOT_REVIEWED',
+    qaPromptValid?.value || 'NOT_REVIEWED',
+    qaUiValid?.value || 'NOT_REVIEWED',
+  ];
+
+  if (judgments.every((v) => v === 'NOT_REVIEWED')) return 'NOT_REVIEWED';
+  if (judgments.some((v) => v === 'FAIL')) return 'HUMAN_REJECTED';
+  if (judgments.every((v) => v === 'PASS')) return 'HUMAN_ACCEPTED';
+  return 'PARTIAL_REVIEW';
+}
+
+function updateHumanQaBadge(status) {
+  if (!qaStateBadge) return;
+  qaStateBadge.textContent = status;
+  if (status === 'HUMAN_ACCEPTED') {
+    qaStateBadge.style.background = 'rgba(34, 197, 94, 0.2)';
+    qaStateBadge.style.color = '#22c55e';
+  } else if (status === 'HUMAN_REJECTED') {
+    qaStateBadge.style.background = 'rgba(239, 68, 68, 0.2)';
+    qaStateBadge.style.color = '#ef4444';
+  } else if (status === 'PARTIAL_REVIEW') {
+    qaStateBadge.style.background = 'rgba(234, 179, 8, 0.2)';
+    qaStateBadge.style.color = '#eab308';
+  } else {
+    qaStateBadge.style.background = 'rgba(148, 163, 184, 0.2)';
+    qaStateBadge.style.color = '#94a3b8';
+  }
+}
+
+[qaClipValid, qaMasterValid, qaAudioValid, qaPromptValid, qaUiValid].forEach((el) => {
+  el?.addEventListener('change', () => {
+    const s = computeHumanQaState();
+    updateHumanQaBadge(s);
+  });
+});
+
+btnSaveHumanQa?.addEventListener('click', () => {
+  const finalState = computeHumanQaState();
+  updateHumanQaBadge(finalState);
+  const record = {
+    schemaVersion: '1.0.0',
+    reviewer: 'human_operator',
+    timestamp: new Date().toISOString(),
+    runId: 'run_1790328582248',
+    sourceEvidenceHash: 'c680000747f4a2f6626f1d91f4951411c81f57246e3552b51f3fc0793650916d',
+    mediaHashes: {
+      clipSha256: 'c680000747f4a2f6626f1d91f4951411c81f57246e3552b51f3fc0793650916d',
+      masterSha256: 'a9833c03c4c19c2928c9c1b1642ba25f34d7f8d43bf22ab9718ea0f3b38ad92b',
+    },
+    judgments: {
+      clipVisuallyValid: qaClipValid?.value || 'NOT_REVIEWED',
+      masterVisuallyValid: qaMasterValid?.value || 'NOT_REVIEWED',
+      audioAcceptable: qaAudioValid?.value || 'NOT_REVIEWED',
+      promptCorrespondence: qaPromptValid?.value || 'NOT_REVIEWED',
+      uiWorkflowAcceptable: qaUiValid?.value || 'NOT_REVIEWED',
+    },
+    notes: qaNotes?.value || '',
+    finalState,
+  };
+  try {
+    localStorage.setItem('studio_human_acceptance_run_1790328582248', JSON.stringify(record));
+  } catch {}
+  if (qaFeedback) {
+    qaFeedback.textContent = `Recorded: ${finalState}`;
+    setTimeout(() => {
+      if (qaFeedback) qaFeedback.textContent = '';
+    }, 3000);
+  }
+});
+
+btnExportHumanQa?.addEventListener('click', () => {
+  const finalState = computeHumanQaState();
+  const record = {
+    schemaVersion: '1.0.0',
+    reviewer: 'human_operator',
+    timestamp: new Date().toISOString(),
+    runId: 'run_1790328582248',
+    sourceEvidenceHash: 'c680000747f4a2f6626f1d91f4951411c81f57246e3552b51f3fc0793650916d',
+    mediaHashes: {
+      clipSha256: 'c680000747f4a2f6626f1d91f4951411c81f57246e3552b51f3fc0793650916d',
+      masterSha256: 'a9833c03c4c19c2928c9c1b1642ba25f34d7f8d43bf22ab9718ea0f3b38ad92b',
+    },
+    judgments: {
+      clipVisuallyValid: qaClipValid?.value || 'NOT_REVIEWED',
+      masterVisuallyValid: qaMasterValid?.value || 'NOT_REVIEWED',
+      audioAcceptable: qaAudioValid?.value || 'NOT_REVIEWED',
+      promptCorrespondence: qaPromptValid?.value || 'NOT_REVIEWED',
+      uiWorkflowAcceptable: qaUiValid?.value || 'NOT_REVIEWED',
+    },
+    notes: qaNotes?.value || '',
+    finalState,
+  };
+  const blob = new Blob([JSON.stringify(record, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `human-acceptance-${record.runId}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 });
 
 // 6. Character Turnaround 6-View Inspector
