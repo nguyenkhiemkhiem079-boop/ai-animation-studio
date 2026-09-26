@@ -261,6 +261,9 @@
                 <div class="ruler-tick" style="left: 600px;"><span>00:06</span></div>
                 <div class="ruler-tick" style="left: 700px;"><span>00:07</span></div>
                 <div class="ruler-tick" style="left: 800px;"><span>00:08</span></div>
+                <div class="ruler-tick" style="left: 900px;"><span>00:09</span></div>
+                <div class="ruler-tick" style="left: 1000px;"><span>00:10</span></div>
+                <div class="ruler-tick" style="left: 1100px;"><span>00:11</span></div>
               </div>
 
               <!-- Track V1: Video Clips -->
@@ -280,6 +283,14 @@
                     <span class="clip-meta">4.00s • Orbit • 50mm</span>
                   </div>
                   <div class="clip-transition-badge dissolve">DISSOLVE 0.5s</div>
+                </div>
+                <div class="timeline-clip clip-video generative" id="clip-shot-3" style="left: 750px; width: 300px; opacity: 0.85; border-left: 2px dashed #60a5fa;">
+                  <div class="clip-badge">🎬 FLOW ($0.50)</div>
+                  <div class="clip-content">
+                    <span class="clip-title">SHOT_03: Kaito Eyes Close-Up</span>
+                    <span class="clip-meta">3.00s • Static • 85mm</span>
+                  </div>
+                  <div class="clip-transition-badge">CUT</div>
                 </div>
               </div>
 
@@ -401,59 +412,94 @@
     <section class="studio-panel" id="panel-director" aria-labelledby="tab-btn-director">
       <div class="director-workspace">
         <div class="director-toolbar">
-          <h2>Scene 1: Tactical Command Deck</h2>
+          <div>
+            <h2 style="margin: 0 0 4px 0;">Scene 1: Tactical Command Deck</h2>
+            <div class="scene-progress-summary" id="scene-progress-summary" style="font-size: 13px; color: #94a3b8;">
+              <span class="progress-item"><strong>3</strong> Total Shots</span> • 
+              <span class="progress-item" style="color: #22c55e;"><strong id="count-approved">1</strong> Approved</span> • 
+              <span class="progress-item" style="color: #eab308;"><strong id="count-awaiting">1</strong> Awaiting Review</span> • 
+              <span class="progress-item" style="color: #60a5fa;"><strong id="count-waiting-dep">1</strong> Waiting Dependency</span> • 
+              <span class="progress-item" style="color: #ef4444;"><strong id="count-failed">0</strong> Failed</span>
+            </div>
+          </div>
           <div class="director-actions">
             <button class="btn btn-secondary btn-sm" id="btn-add-shot">+ Add Shot Contract</button>
-            <button class="btn btn-primary btn-sm" id="btn-re-evaluate-qa">Re-Audit Director QA</button>
+            <button class="btn btn-primary btn-sm" id="btn-re-evaluate-qa">Re-Audit Continuity QA</button>
           </div>
         </div>
 
-        <div class="shot-cards-grid" id="shot-cards-grid">
-          <!-- Shot Card 1 -->
-          <div class="shot-card deterministic-border" data-shot-id="SHOT_01">
-            <div class="shot-card-header">
-              <span class="shot-id-badge">SHOT 01</span>
-              <span class="shot-route-badge deterministic">⚡ HYPERFRAMES ($0.00)</span>
-            </div>
-            <div class="shot-preview-thumbnail bg-deck">
-              <div class="shot-camera-pill">35mm • Wide • Push-In</div>
+        <div class="shot-cards-grid" id="shot-cards-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-top: 20px;">
+          <!-- Shot Card 1: Establishing -->
+          <div class="shot-card deterministic-border" data-shot-id="SHOT_01" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(34, 197, 94, 0.4); border-radius: 12px; padding: 16px;">
+            <div class="shot-card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <span class="shot-id-badge" style="font-weight: 700; color: #fff;">SHOT 01 (Establishing)</span>
+              <span class="status-pill status-success" style="font-size: 11px;">APPROVED ✅</span>
             </div>
             <div class="shot-details">
-              <h4>Tactical Console Establishing</h4>
-              <p>Commander Kaito gazes at the glowing sensor screen.</p>
-              <div class="shot-tags">
-                <span class="tag">Rule of Thirds</span>
-                <span class="tag">Cool 4500K</span>
-                <span class="tag">Noir Suspense</span>
+              <p style="font-size: 13px; color: #cbd5e1; margin-top: 0;">Wide view of Command Deck. Commander Kaito monitors breach sensors.</p>
+              <div style="font-size: 12px; color: #94a3b8; line-height: 1.6;">
+                <div><strong>Camera:</strong> 35mm • Wide • Push-In (24 FPS)</div>
+                <div><strong>Provider:</strong> Google Flow (LIVE_EXTERNAL)</div>
+                <div><strong>Terminal Frame:</strong> <code>SHOT_01_terminal.jpg</code> (Extracted)</div>
+                <div><strong>Scene Props:</strong> Blast Door: closed, Lamp: off</div>
+                <div><strong>Continuity QA:</strong> 100/100 (Pass)</div>
               </div>
             </div>
-            <div class="shot-card-footer">
-              <span class="duration-text">Duration: 3.5s (84 frames)</span>
-              <button class="btn-icon-sm" title="Lock Shot Parameters">🔒</button>
+            <div class="shot-card-footer" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 12px; color: #94a3b8;">Duration: 3.5s (84 frames)</span>
+              <div style="display: flex; gap: 6px;">
+                <button class="btn btn-secondary btn-sm btn-inspect-shot" data-shot="SHOT_01" title="Inspect Media Evidence">Inspect</button>
+                <button class="btn btn-secondary btn-sm btn-retake-shot" data-shot="SHOT_01" title="Request Surgical Retake">Retake</button>
+              </div>
             </div>
           </div>
 
-          <!-- Shot Card 2 -->
-          <div class="shot-card generative-border" data-shot-id="SHOT_02">
-            <div class="shot-card-header">
-              <span class="shot-id-badge">SHOT 02</span>
-              <span class="shot-route-badge generative">🎬 VEO 2 ($0.50)</span>
-            </div>
-            <div class="shot-preview-thumbnail bg-elena">
-              <div class="shot-camera-pill">50mm • Medium • Orbit</div>
+          <!-- Shot Card 2: Medium Action -->
+          <div class="shot-card generative-border" data-shot-id="SHOT_02" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(234, 179, 8, 0.4); border-radius: 12px; padding: 16px;">
+            <div class="shot-card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <span class="shot-id-badge" style="font-weight: 700; color: #fff;">SHOT 02 (Medium Action)</span>
+              <span class="status-pill status-warning" style="font-size: 11px;">AWAITING REVIEW ⏳</span>
             </div>
             <div class="shot-details">
-              <h4>Elena Tactical Reaction</h4>
-              <p>Elena checks sidearm, determined expression.</p>
-              <div class="shot-tags">
-                <span class="tag">Chained Frame</span>
-                <span class="tag">Warm Rim 3200K</span>
-                <span class="tag">Dynamic Action</span>
+              <p style="font-size: 13px; color: #cbd5e1; margin-top: 0;">Elena unholsters sidearm, confirms breach alert, triggers console.</p>
+              <div style="font-size: 12px; color: #94a3b8; line-height: 1.6;">
+                <div><strong>Camera:</strong> 50mm • Medium • Orbit (24 FPS)</div>
+                <div><strong>Dependency:</strong> Shot 1 Terminal Frame Bound ✅</div>
+                <div><strong>Scene Props:</strong> Blast Door: open (Mutated), Lamp: on</div>
+                <div><strong>Continuity QA:</strong> 95/100 (Pass)</div>
+                <div><strong>Projected Cost:</strong> 1 Flow Credit</div>
               </div>
             </div>
-            <div class="shot-card-footer">
-              <span class="duration-text">Duration: 4.0s (96 frames)</span>
-              <button class="btn-icon-sm" title="Lock Shot Parameters">🔒</button>
+            <div class="shot-card-footer" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 12px; color: #94a3b8;">Duration: 4.0s (96 frames)</span>
+              <div style="display: flex; gap: 6px;">
+                <button class="btn btn-primary btn-sm btn-approve-shot" data-shot="SHOT_02">Approve</button>
+                <button class="btn btn-secondary btn-sm btn-retake-shot" data-shot="SHOT_02">Retake</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Shot Card 3: Close-Up Reaction -->
+          <div class="shot-card waiting-border" data-shot-id="SHOT_03" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(96, 165, 250, 0.3); border-radius: 12px; padding: 16px;">
+            <div class="shot-card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <span class="shot-id-badge" style="font-weight: 700; color: #fff;">SHOT 03 (Close-Up Reaction)</span>
+              <span class="status-pill status-info" style="font-size: 11px;">WAITING DEPENDENCY 🔒</span>
+            </div>
+            <div class="shot-details">
+              <p style="font-size: 13px; color: #cbd5e1; margin-top: 0;">Tight close-up on Kaito's eyes reflecting emergency sirens.</p>
+              <div style="font-size: 12px; color: #94a3b8; line-height: 1.6;">
+                <div><strong>Camera:</strong> 85mm • Close-Up • Static (24 FPS)</div>
+                <div><strong>Dependency:</strong> Awaiting Shot 2 Terminal Frame Verification</div>
+                <div><strong>Scene Props:</strong> Inherits Blast Door: open, Lamp: on</div>
+                <div><strong>Continuity QA:</strong> Pending upstream approval</div>
+                <div><strong>Projected Cost:</strong> 1 Flow Credit</div>
+              </div>
+            </div>
+            <div class="shot-card-footer" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 12px; color: #94a3b8;">Duration: 4.0s (96 frames)</span>
+              <div style="display: flex; gap: 6px;">
+                <button class="btn btn-secondary btn-sm" disabled style="opacity: 0.5;">Awaiting Dependency</button>
+              </div>
             </div>
           </div>
         </div>
