@@ -255,6 +255,7 @@ export class ZeroTouchProductionOrchestrator {
           projectId,
           runId,
           shots: unverifiedFlowShots,
+          aspectRatio: unverifiedFlowShots[0]?.frame?.aspectRatio ?? '16:9',
         });
 
         // Handle unrecoverable operator states
@@ -471,7 +472,23 @@ export class ZeroTouchProductionOrchestrator {
       }
     }
 
-    // 3. Detect Title or Chapter intent
+    // 3. Detect Aspect Ratio
+    let targetAspect: '16:9' | '9:16' = '16:9';
+    if (lower.includes('9:16') || lower.includes('vertical') || lower.includes('portrait') || lower.includes('tiktok') || lower.includes('reels') || lower.includes('shorts')) {
+      targetAspect = '9:16';
+    }
+
+    // 4. Detect Duration
+    let targetDuration = 4;
+    if (lower.includes('10-second') || lower.includes('10 second') || lower.includes('10s') || lower.includes('10 sec')) {
+      targetDuration = 10;
+    } else if (lower.includes('8-second') || lower.includes('8 second') || lower.includes('8s')) {
+      targetDuration = 8;
+    } else if (lower.includes('6-second') || lower.includes('6 second') || lower.includes('6s')) {
+      targetDuration = 6;
+    }
+
+    // 5. Detect Title or Chapter intent
     const hasExplicitTitle = lower.includes('title') || lower.includes('chapter');
 
     const shots: ShotContract[] = [];
@@ -484,7 +501,7 @@ export class ZeroTouchProductionOrchestrator {
       purpose: hasExplicitTitle ? 'transition' : 'establishing',
       complexity: hasExplicitTitle ? 'simple_transform' : 'complex_generative_video',
       rendererIntent: hasExplicitTitle ? 'deterministic_hyperframes' : 'generative_full_video',
-      frame: { durationSeconds: 4, aspectRatio: '16:9', targetFps: 24 },
+      frame: { durationSeconds: targetDuration, aspectRatio: targetAspect, targetFps: 24 },
       camera: { shotSize: 'wide', angle: 'eye_level', movement: 'push_in', focalLength: '24mm', semanticSkills: ['pushin'] },
       lighting: { keyLightDirection: lightingDirection as any, mood, colorTemperature: colorTemp, fogAtmosphere: fog },
       composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
@@ -510,7 +527,7 @@ export class ZeroTouchProductionOrchestrator {
       purpose: 'character_intro',
       complexity: 'complex_generative_video',
       rendererIntent: 'generative_full_video',
-      frame: { durationSeconds: 4, aspectRatio: '16:9', targetFps: 24 },
+      frame: { durationSeconds: Math.min(targetDuration, 4), aspectRatio: targetAspect, targetFps: 24 },
       camera: { shotSize: 'medium', angle: 'eye_level', movement: 'pan_left', focalLength: '50mm', semanticSkills: [] },
       lighting: { keyLightDirection: lightingDirection as any, mood, colorTemperature: colorTemp, fogAtmosphere: fog },
       composition: { rule: 'rule_of_thirds', subjectPlacement: 'left_third', depthLayers: { foreground: [], midground: [], background: [] } },
@@ -542,7 +559,7 @@ export class ZeroTouchProductionOrchestrator {
       purpose: 'action',
       complexity: 'complex_generative_video',
       rendererIntent: 'generative_full_video',
-      frame: { durationSeconds: 4, aspectRatio: '16:9', targetFps: 24 },
+      frame: { durationSeconds: Math.min(targetDuration, 4), aspectRatio: targetAspect, targetFps: 24 },
       camera: { shotSize: 'close_up', angle: 'low_angle', movement: 'push_in', focalLength: '85mm', semanticSkills: [] },
       lighting: { keyLightDirection: 'left', mood, colorTemperature: colorTemp, fogAtmosphere: false },
       composition: { rule: 'rule_of_thirds', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
@@ -574,7 +591,7 @@ export class ZeroTouchProductionOrchestrator {
       purpose: 'resolution',
       complexity: 'complex_generative_video',
       rendererIntent: 'generative_full_video',
-      frame: { durationSeconds: 3.5, aspectRatio: '16:9', targetFps: 24 },
+      frame: { durationSeconds: Math.min(targetDuration, 4), aspectRatio: targetAspect, targetFps: 24 },
       camera: { shotSize: 'wide', angle: 'high_angle', movement: 'pull_out', focalLength: '35mm', semanticSkills: [] },
       lighting: { keyLightDirection: 'back', mood, colorTemperature: colorTemp, fogAtmosphere: fog },
       composition: { rule: 'symmetrical', subjectPlacement: 'center', depthLayers: { foreground: [], midground: [], background: [] } },
@@ -682,6 +699,23 @@ export class ZeroTouchProductionOrchestrator {
 
     const totalDuration = clips.reduce((acc, c) => acc + c.duration, 0);
 
+    // For single-shot productions, preserve the original shot directly to avoid lossy re-encoding and keep native audio
+    if (shots.length === 1) {
+      const singlePath = shotVideoMap.get(shots[0].id);
+      if (singlePath && fs.existsSync(singlePath)) {
+        fs.copyFileSync(singlePath, masterOutputPath);
+        const verification = ArtifactVerifier.verify(masterOutputPath, {
+          expectedType: 'video',
+          requireValidMedia: true,
+        });
+        return verification;
+      }
+    }
+
+    const isVertical = shots.some((s) => s.frame?.aspectRatio === '9:16');
+    const width = isVertical ? 720 : 1920;
+    const height = isVertical ? 1280 : 1080;
+
     const sequence: TimelineSequence = {
       sequenceId: `seq_${projectId}`,
       projectId,
@@ -703,7 +737,7 @@ export class ZeroTouchProductionOrchestrator {
       subtitles: [],
       totalDuration,
       fps: 24,
-      resolution: { width: 1920, height: 1080 },
+      resolution: { width, height },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

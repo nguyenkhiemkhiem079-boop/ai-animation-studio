@@ -914,6 +914,16 @@ export async function findAssetContainers(page: Page): Promise<
         )
       );
       selectorCards.forEach((c) => {
+        const cls = (typeof c.className === 'string' ? c.className : '').toLowerCase();
+        const tag = c.tagName.toLowerCase();
+        if (
+          tag === 'cdk-virtual-scroll-viewport' ||
+          cls.includes('tiles-container') ||
+          cls.includes('virtual-item-container') ||
+          cls.includes('tile-row')
+        ) {
+          return;
+        }
         if (!seenElements.has(c)) {
           seenElements.add(c);
           candidateCards.push(c);

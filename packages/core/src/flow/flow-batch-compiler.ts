@@ -35,7 +35,7 @@ export class FlowBatchCompiler {
    */
   public static compile(input: FlowBatchCompilerInput): FlowBatchCompilerResult {
     const lines: string[] = [];
-    const aspect = input.aspectRatio ?? '16:9';
+    const aspect = input.aspectRatio ?? input.shots[0]?.frame?.aspectRatio ?? '16:9';
     const style = input.globalStyle ?? 'Cinematic 3D animation, high production value, consistent lighting, photorealistic textures.';
 
     // Single-shot fast path: direct imperative video generation prompt for Flow Agent
