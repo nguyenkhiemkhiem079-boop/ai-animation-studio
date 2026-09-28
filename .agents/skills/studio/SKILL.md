@@ -31,6 +31,13 @@ The **Studio Router** is the primary navigation hub for Antigravity agents worki
 | **"Prepare Google Flow generation", "Flow handoff", "Import video"** | `flow-operator-workflow` | `reference-binding`, `cinematography` |
 | **"Audit secrets and FFmpeg security", "Check leaked API key"** | `release-security` | `repo-audit`, `architecture-review` |
 | **"Can we release?", "Are we ready to release?", "Release gate"** | `release-validation` | `production-trust-evidence`, `release-security` |
+| **"Video montage", "FFmpeg cut", "Trim video", "L-cut/J-cut"** | `video-edit` (external), `production-route` | `video-toolkit`, `video-understand` |
+| **"Sound design", "Sound effects", "Foley", "Audio stems"** | `sound-effects` (external), `cinematography` | `music-to-video`, `hyperframes-media` |
+| **"Score sync", "BGM beat match", "Music to video"** | `music-to-video` (external), `cinematography` | `sound-effects`, `hyperframes-media` |
+| **"Visual style", "Color palette", "Lighting presets", "Art direction"** | `visual-style` (external), `environment-resolve` | `hyperframes-creative` |
+| **"2D Character rig", "Pose library", "SVG animation"** | `pose-library-design` (external), `character-consistency` | `svg-character-animation`, `character-animation-qa`, `canvas-procedural-animation` |
+| **"Generative AI video prompt", "Seedance 2.5", "ComfyUI graph"** | `ai-video-gen` (external), `production-route` | `seedance-2-5`, `comfyui`, `reference-binding` |
+| **"Convert Remotion to HyperFrames", "Motion graphics sting"** | `remotion-to-hyperframes` (external), `motion-graphics` (external) | `hyperframes-production`, `hyperframes-cli` |
 
 ---
 

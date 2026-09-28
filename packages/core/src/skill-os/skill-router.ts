@@ -285,6 +285,94 @@ export class SkillRouter {
       ],
       targetSkillIds: ["continuity-qa", "visual-qa", "director-qa"],
       reasoning: "Request relates to quality assurance, visual inspection, or continuity audits."
+    },
+    {
+      id: "video-edit-rule",
+      category: "production",
+      keywords: [
+        "video edit",
+        "edit video",
+        "montage",
+        "trim video",
+        "concat",
+        "ffmpeg cut",
+        "l-cut",
+        "j-cut",
+        "split-screen",
+        "video toolkit",
+        "video understand",
+        "scene detection"
+      ],
+      targetSkillIds: ["production-route"],
+      targetExternalSkillIds: ["video-edit", "video-toolkit", "video-understand"],
+      reasoning: "Request involves video montage, cuts, trimming, format conversion, or offline scene understanding."
+    },
+    {
+      id: "audio-sound-rule",
+      category: "cinematic",
+      keywords: [
+        "sound effect",
+        "sound effects",
+        "sfx",
+        "foley",
+        "audio stem",
+        "music to video",
+        "beat sync",
+        "bgm",
+        "audio track",
+        "music synchronizer"
+      ],
+      targetSkillIds: ["cinematography"],
+      targetExternalSkillIds: ["sound-effects", "music-to-video", "hyperframes-media"],
+      reasoning: "Request relates to sound effects, audio design, background music, or beat synchronization."
+    },
+    {
+      id: "visual-style-rule",
+      category: "world",
+      keywords: [
+        "visual style",
+        "style guide",
+        "color palette",
+        "lighting preset",
+        "art direction",
+        "design system",
+        "visual-style.md"
+      ],
+      targetSkillIds: ["environment-resolve"],
+      targetExternalSkillIds: ["visual-style", "hyperframes-creative"],
+      reasoning: "Request involves visual style design systems, color grading palettes, or lighting presets."
+    },
+    {
+      id: "character-rig-animation-rule",
+      category: "character",
+      keywords: [
+        "pose library",
+        "svg animation",
+        "svg character",
+        "character rig",
+        "canvas animation",
+        "procedural animation",
+        "character qa"
+      ],
+      targetSkillIds: ["character-consistency", "identity-qa"],
+      targetExternalSkillIds: ["pose-library-design", "svg-character-animation", "character-animation-qa", "canvas-procedural-animation"],
+      reasoning: "Request involves 2D character rigging, pose libraries, SVG/canvas animations, or character animation QA."
+    },
+    {
+      id: "generative-ai-video-rule",
+      category: "production",
+      keywords: [
+        "seedance",
+        "kling",
+        "comfyui",
+        "ai video gen",
+        "generative prompt",
+        "camera trajectory prompt",
+        "seedance 2.5"
+      ],
+      targetSkillIds: ["production-route", "reference-binding"],
+      targetExternalSkillIds: ["ai-video-gen", "seedance-2-5", "comfyui"],
+      reasoning: "Request specifies multi-gateway generative AI video generation, prompt engineering, or ComfyUI workflows."
     }
   ];
 

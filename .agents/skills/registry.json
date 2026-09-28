@@ -398,6 +398,196 @@
       "entryPoint": "hyperframes-animation/SKILL.md",
       "updateMethod": "npx hyperframes skills update",
       "description": "Animation syntax, easing, camera movements, and layer transforms in HyperFrames."
+    },
+    {
+      "id": "hyperframes-creative",
+      "name": "HyperFrames Creative Direction",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "hyperframes-creative/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "Non-animation creative direction, frame presets, palettes, typography, narration, and beat planning for HyperFrames."
+    },
+    {
+      "id": "hyperframes-media",
+      "name": "HyperFrames Media & Audio",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "hyperframes-media/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "Media handling, voiceover TTS, background music, sound effects, transcription, and captions."
+    },
+    {
+      "id": "hyperframes-cli",
+      "name": "HyperFrames CLI",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "hyperframes-cli/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "CLI dev loop: lint, check, snapshot, preview, render, publish, and doctor."
+    },
+    {
+      "id": "hyperframes-registry",
+      "name": "HyperFrames Registry",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "hyperframes-registry/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "Registry blocks and modular component management for HyperFrames."
+    },
+    {
+      "id": "remotion-to-hyperframes",
+      "name": "Remotion to HyperFrames Migration",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "remotion-to-hyperframes/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "Migration and conversion patterns from React Remotion compositions to HyperFrames HTML/CSS/JS compositions."
+    },
+    {
+      "id": "motion-graphics",
+      "name": "Motion Graphics Patterns",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "motion-graphics/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "Short design-led motion graphic patterns including kinetic typography, stat reveals, logo stings, and lower-thirds."
+    },
+    {
+      "id": "music-to-video",
+      "name": "Music to Video Synchronizer",
+      "source": "heygen-com/hyperframes",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "music-to-video/SKILL.md",
+      "updateMethod": "npx hyperframes skills update",
+      "description": "Beat-synced video assembly and musical timing choreography driven by audio analysis."
+    },
+    {
+      "id": "video-edit",
+      "name": "Video Montage & Editing",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "video-edit/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Local FFmpeg video editing: trimming, concatenating, speed ramps, overlays, split-screen, and transitions."
+    },
+    {
+      "id": "video-toolkit",
+      "name": "Video Media Toolkit",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "video-toolkit/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Media format normalization, ffprobe stream inspection, resolution/aspect ratio conversion, and audio stem extraction."
+    },
+    {
+      "id": "video-understand",
+      "name": "Video Understanding & Transcription",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "video-understand/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Offline video inspection, scene detection, keyframe extraction, and local speech-to-text transcription."
+    },
+    {
+      "id": "sound-effects",
+      "name": "Sound Effects & Audio Design",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "sound-effects/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Sound effects generation, audio textures, foley, risers, impacts, and ambient layers."
+    },
+    {
+      "id": "visual-style",
+      "name": "Visual Style & Design System",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "visual-style/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Portable visual design systems (visual-style.md), color palettes, lighting presets, and art direction."
+    },
+    {
+      "id": "character-animation-qa",
+      "name": "Character Animation QA",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "character-animation-qa/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Character animation review via schema checks, Playwright previews, frame sampling, and artifact detection."
+    },
+    {
+      "id": "pose-library-design",
+      "name": "Pose Library Design",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "pose-library-design/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Reusable 2D character pose libraries, action cycles, and expression states for data-driven animation."
+    },
+    {
+      "id": "svg-character-animation",
+      "name": "SVG Character Animation",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "svg-character-animation/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "SVG character rig animation with GSAP, deterministic timelines, and HyperFrames browser previews."
+    },
+    {
+      "id": "canvas-procedural-animation",
+      "name": "Canvas Procedural Animation",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "canvas-procedural-animation/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Procedural character-supporting motion: particles, weather, squash/stretch, walk cycles, and canvas overlays."
+    },
+    {
+      "id": "ai-video-gen",
+      "name": "AI Video Generation Directives",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "ai-video-gen/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Prompt engineering rules and camera direction for generative video models across gateways."
+    },
+    {
+      "id": "seedance-2-5",
+      "name": "Seedance 2.5 Directives",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "seedance-2-5/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "Seedance 2.5 cinematic video generation, multi-shot breakdowns, named locks for continuity across cuts, and multimodal reference binding."
+    },
+    {
+      "id": "comfyui",
+      "name": "ComfyUI Pipeline Directives",
+      "source": "calesthio/OpenMontage",
+      "type": "EXTERNAL",
+      "status": "EXTERNAL",
+      "entryPoint": "comfyui/SKILL.md",
+      "updateMethod": "git pull from calesthio/OpenMontage",
+      "description": "ComfyUI node workflows, graph execution, API format export, partner node generation, and model setup."
     }
   ]
 }

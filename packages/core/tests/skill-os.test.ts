@@ -18,7 +18,7 @@ describe('Antigravity Skill OS', () => {
 
       expect(manifest.version).toBe('1.1.0');
       expect(manifest.skills.length).toBe(33);
-      expect(manifest.externalSkills.length).toBe(3);
+      expect(manifest.externalSkills.length).toBe(22);
 
       const validation = await registry.validate(skillsDir);
       if (!validation.valid) {
@@ -59,11 +59,20 @@ describe('Antigravity Skill OS', () => {
       expect(external.map((e) => e.id)).toContain('hyperframes');
       expect(external.map((e) => e.id)).toContain('hyperframes-core');
       expect(external.map((e) => e.id)).toContain('hyperframes-animation');
+      expect(external.map((e) => e.id)).toContain('video-edit');
+      expect(external.map((e) => e.id)).toContain('sound-effects');
+      expect(external.map((e) => e.id)).toContain('visual-style');
+      expect(external.map((e) => e.id)).toContain('seedance-2-5');
 
       const hfSkill = registry.getSkill('hyperframes');
       expect(hfSkill).toBeDefined();
       expect((hfSkill as any).source).toBe('heygen-com/hyperframes');
       expect((hfSkill as any).type).toBe('EXTERNAL');
+
+      const omSkill = registry.getSkill('video-edit');
+      expect(omSkill).toBeDefined();
+      expect((omSkill as any).source).toBe('calesthio/OpenMontage');
+      expect((omSkill as any).type).toBe('EXTERNAL');
     });
 
     it('should filter skills by category', async () => {
@@ -350,6 +359,70 @@ describe('Antigravity Skill OS', () => {
       expect(recommendedIds).toContain('hyperframes-production');
       expect(externalIds).toContain('hyperframes');
       expect(externalIds).toContain('hyperframes-animation');
+    });
+
+    it('routes "edit video with montage cuts and ffmpeg" to production-route and external video-edit', async () => {
+      const registry = await SkillRegistry.fromFile(registryJsonPath);
+      const router = new SkillRouter(registry);
+
+      const match = router.route('edit video with montage cuts and ffmpeg');
+      const recommendedIds = match.recommendedSkills.map((s) => s.id);
+      const externalIds = match.externalSkills.map((e) => e.id);
+
+      expect(recommendedIds).toContain('production-route');
+      expect(externalIds).toContain('video-edit');
+      expect(externalIds).toContain('video-toolkit');
+    });
+
+    it('routes "generate sound effects and sync music to video" to cinematography and audio skills', async () => {
+      const registry = await SkillRegistry.fromFile(registryJsonPath);
+      const router = new SkillRouter(registry);
+
+      const match = router.route('generate sound effects and sync music to video');
+      const recommendedIds = match.recommendedSkills.map((s) => s.id);
+      const externalIds = match.externalSkills.map((e) => e.id);
+
+      expect(recommendedIds).toContain('cinematography');
+      expect(externalIds).toContain('sound-effects');
+      expect(externalIds).toContain('music-to-video');
+    });
+
+    it('routes "create visual style design system and color palette" to environment-resolve and visual-style', async () => {
+      const registry = await SkillRegistry.fromFile(registryJsonPath);
+      const router = new SkillRouter(registry);
+
+      const match = router.route('create visual style design system and color palette');
+      const recommendedIds = match.recommendedSkills.map((s) => s.id);
+      const externalIds = match.externalSkills.map((e) => e.id);
+
+      expect(recommendedIds).toContain('environment-resolve');
+      expect(externalIds).toContain('visual-style');
+    });
+
+    it('routes "character pose library and svg animation" to character-consistency and pose-library-design', async () => {
+      const registry = await SkillRegistry.fromFile(registryJsonPath);
+      const router = new SkillRouter(registry);
+
+      const match = router.route('character pose library and svg animation');
+      const recommendedIds = match.recommendedSkills.map((s) => s.id);
+      const externalIds = match.externalSkills.map((e) => e.id);
+
+      expect(recommendedIds).toContain('character-consistency');
+      expect(externalIds).toContain('pose-library-design');
+      expect(externalIds).toContain('svg-character-animation');
+    });
+
+    it('routes "generate video prompt with seedance 2.5 and comfyui" to production-route and seedance-2-5', async () => {
+      const registry = await SkillRegistry.fromFile(registryJsonPath);
+      const router = new SkillRouter(registry);
+
+      const match = router.route('generate video prompt with seedance 2.5 and comfyui');
+      const recommendedIds = match.recommendedSkills.map((s) => s.id);
+      const externalIds = match.externalSkills.map((e) => e.id);
+
+      expect(recommendedIds).toContain('production-route');
+      expect(externalIds).toContain('seedance-2-5');
+      expect(externalIds).toContain('comfyui');
     });
   });
 
